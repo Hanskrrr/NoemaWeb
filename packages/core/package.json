@@ -1,0 +1,13 @@
+{
+  "name": "@noema/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure domain logic: ids, anchors, search text, context assembly, the API contract. No I/O.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "zod": "^3.25.0"
+  }
+}

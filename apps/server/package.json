@@ -1,0 +1,15 @@
+{
+  "name": "@noema/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local server: owns the notebook store, model calls and streams. Listens on 127.0.0.1 only.",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/main.ts",
+    "dev": "node --disable-warning=ExperimentalWarning --watch src/main.ts"
+  },
+  "dependencies": {
+    "@noema/core": "workspace:*",
+    "zod": "^3.25.0"
+  }
+}

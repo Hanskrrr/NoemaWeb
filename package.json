@@ -1,0 +1,28 @@
+{
+  "name": "noemaweb",
+  "private": true,
+  "type": "module",
+  "description": "Noema: a learning notebook where side questions never get lost.",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.ts",
+    "build": "pnpm --filter @noema/web build",
+    "start": "node --disable-warning=ExperimentalWarning apps/server/src/main.ts",
+    "typecheck": "tsc -p packages/core && tsc -p apps/server && tsc -p apps/web && tsc -p .",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-reporter=spec \"packages/*/test/**/*.test.ts\" \"apps/server/test/**/*.test.ts\" \"apps/web/test/**/*.test.ts\"",
+    "e2e": "playwright test -c e2e/playwright.config.ts",
+    "lint": "biome lint .",
+    "format": "biome check --write .",
+    "format:check": "biome check .",
+    "check": "pnpm typecheck && pnpm lint && pnpm test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.2.0",
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.0"
+  }
+}

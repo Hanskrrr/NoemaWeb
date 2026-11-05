@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import { after, before, test } from 'node:test';
 import { httpError, mapUsage, OpenAICompatibleProvider, SseParser } from '../src/llm/openai-compatible.ts';
-import { ProviderError, type StreamEvent } from '../src/llm/provider.ts';
+import type { ProviderError, StreamEvent } from '../src/llm/provider.ts';
 
 // A stand-in for api.deepseek.com. Each test sets `behave` to script one response.
 type Behave = (req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>, hit: number) => void;
@@ -45,7 +45,8 @@ function provider(overrides: Partial<ConstructorParameters<typeof OpenAICompatib
 async function collect(p: OpenAICompatibleProvider, signal = new AbortController().signal) {
   const events: StreamEvent[] = [];
   try {
-    for await (const ev of p.stream({ messages: [{ role: 'user', content: 'hi' }], maxTokens: 100, signal })) events.push(ev);
+    for await (const ev of p.stream({ messages: [{ role: 'user', content: 'hi' }], maxTokens: 100, signal }))
+      events.push(ev);
     return { events, error: null as ProviderError | null };
   } catch (e) {
     return { events, error: e as ProviderError };
@@ -215,12 +216,15 @@ test('the SSE parser handles split chunks, CRLF and multi-line data', () => {
 });
 
 test('OpenAI-style cached token counts are mapped too', () => {
-  assert.deepEqual(mapUsage({ prompt_tokens: 100, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 64 } }), {
-    promptTokens: 100,
-    completionTokens: 5,
-    cacheHitTokens: 64,
-    cacheMissTokens: 36,
-  });
+  assert.deepEqual(
+    mapUsage({ prompt_tokens: 100, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 64 } }),
+    {
+      promptTokens: 100,
+      completionTokens: 5,
+      cacheHitTokens: 64,
+      cacheMissTokens: 36,
+    },
+  );
 });
 
 test('error bodies become readable messages and the right kinds', () => {

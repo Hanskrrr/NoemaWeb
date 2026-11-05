@@ -90,7 +90,8 @@ export class Router {
         params,
         body: async (schema) => {
           const type = req.headers['content-type'] ?? '';
-          if (!type.includes('application/json')) throw new HttpError(415, 'unsupported_media_type', 'send application/json');
+          if (!type.includes('application/json'))
+            throw new HttpError(415, 'unsupported_media_type', 'send application/json');
           const raw = await readBody(req);
           let json: unknown;
           try {

@@ -36,7 +36,9 @@ export function selectionToSource(root: Element, source: string): { start: numbe
     }
     const value = span.textContent ?? '';
     const from = span.contains(range.startContainer) ? localOffset(span, range.startContainer, range.startOffset) : 0;
-    const to = span.contains(range.endContainer) ? localOffset(span, range.endContainer, range.endOffset) : value.length;
+    const to = span.contains(range.endContainer)
+      ? localOffset(span, range.endContainer, range.endOffset)
+      : value.length;
     const mapped = leafToSource(value, source.slice(s, e), s, from, to);
     if (!mapped) continue; // the selection only touches this span's edge
     start = Math.min(start, mapped.start);

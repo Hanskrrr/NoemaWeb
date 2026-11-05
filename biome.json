@@ -1,7 +1,15 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.2.0/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.4/schema.json",
   "files": {
-    "includes": ["**", "!**/node_modules", "!**/dist", "!**/data", "!**/test-results", "!**/playwright-report", "!e2e/.data"]
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/data",
+      "!**/test-results",
+      "!**/playwright-report",
+      "!e2e/.data"
+    ]
   },
   "formatter": {
     "indentStyle": "space",
@@ -12,11 +20,6 @@
     "formatter": {
       "quoteStyle": "single",
       "semicolons": "always"
-    }
-  },
-  "linter": {
-    "rules": {
-      "recommended": true
     }
   }
 }

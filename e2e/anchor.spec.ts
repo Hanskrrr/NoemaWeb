@@ -31,16 +31,19 @@ test('a double-clicked word becomes an anchor on the exact raw characters', asyn
 });
 
 test('a selection inside rendered math snaps to the whole formula', async ({ page }) => {
-  await lastAnswer(page).locator('.math-inline .katex-html').first().evaluate((el) => {
-    const text = document.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode();
-    if (!text) throw new Error('no math text');
-    const r = document.createRange();
-    r.setStart(text, 0);
-    r.setEnd(text, 1);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(r);
-  });
+  await lastAnswer(page)
+    .locator('.math-inline .katex-html')
+    .first()
+    .evaluate((el) => {
+      const text = document.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode();
+      if (!text) throw new Error('no math text');
+      const r = document.createRange();
+      r.setStart(text, 0);
+      r.setEnd(text, 1);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(r);
+    });
   await page.getByTestId('pin').click();
   await expect(page.getByTestId('pinned').last()).toHaveAttribute('data-exact', '$e^{i\\pi} + 1 = 0$');
 });

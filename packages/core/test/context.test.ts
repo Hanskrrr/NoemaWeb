@@ -27,7 +27,12 @@ test('stable prefix first: system, About me, history, then the question', () => 
 
 test('when the budget is tight the oldest history goes first, with no gaps', () => {
   const long = 'x'.repeat(300); // about 94 tokens each
-  const history = [h('u1', 'user', long), h('a1', 'assistant', long), h('u2', 'user', long), h('a2', 'assistant', long)];
+  const history = [
+    h('u1', 'user', long),
+    h('a1', 'assistant', long),
+    h('u2', 'user', long),
+    h('a2', 'assistant', long),
+  ];
   const { messages, manifest } = assembleContext({
     system: 'S',
     history,
@@ -62,7 +67,13 @@ test('history never starts with an orphaned assistant turn', () => {
 
 test('a question bigger than the budget is a named error, not a silent cut', () => {
   assert.throws(
-    () => assembleContext({ system: 'S', history: [], question: { id: 'q', content: 'z'.repeat(10_000) }, budgetTokens: 100 }),
+    () =>
+      assembleContext({
+        system: 'S',
+        history: [],
+        question: { id: 'q', content: 'z'.repeat(10_000) },
+        budgetTokens: 100,
+      }),
     (e: unknown) => e instanceof ContextBudgetError && e.kind === 'context_too_large',
   );
 });

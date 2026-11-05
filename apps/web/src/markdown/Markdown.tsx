@@ -17,7 +17,13 @@ function renderMath(value: string, display: boolean): string {
   const key = `${display ? 'D' : 'I'}${value}`;
   let html = mathCache.get(key);
   if (html === undefined) {
-    html = katex.renderToString(value, { displayMode: display, throwOnError: false, trust: false, strict: 'ignore', output: 'htmlAndMathml' });
+    html = katex.renderToString(value, {
+      displayMode: display,
+      throwOnError: false,
+      trust: false,
+      strict: 'ignore',
+      output: 'htmlAndMathml',
+    });
     if (mathCache.size > 500) mathCache.clear();
     mathCache.set(key, html);
   }
@@ -146,7 +152,8 @@ function render(node: Nodes, source: string, index: number): ReactNode {
       return null;
     default:
       if ('children' in node) return <span key={key}>{children(node as Parents, source)}</span>;
-      if ('value' in node && typeof node.value === 'string') return r ? leafSpan(key, r.start, r.end, node.value) : node.value;
+      if ('value' in node && typeof node.value === 'string')
+        return r ? leafSpan(key, r.start, r.end, node.value) : node.value;
       return null;
   }
 }

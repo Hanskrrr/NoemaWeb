@@ -6,7 +6,8 @@ import type { ChatMessage, ErrorKind } from '@noema/core';
 
 export interface StreamRequest {
   messages: ChatMessage[];
-  maxTokens: number;
+  /** Omitted: the provider's default. */
+  maxTokens?: number | undefined;
   signal: AbortSignal;
 }
 
@@ -38,7 +39,11 @@ export class ProviderError extends Error {
   readonly status: number | undefined;
   readonly retryAfterMs: number | undefined;
 
-  constructor(kind: ErrorKind, message: string, options: { status?: number; retryAfterMs?: number; cause?: unknown } = {}) {
+  constructor(
+    kind: ErrorKind,
+    message: string,
+    options: { status?: number; retryAfterMs?: number; cause?: unknown } = {},
+  ) {
     super(message, { cause: options.cause });
     this.kind = kind;
     this.status = options.status;

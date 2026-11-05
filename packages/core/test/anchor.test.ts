@@ -62,7 +62,9 @@ test('random spans in mixed scripts always resolve exactly on the same text', ()
   };
   const pool = ['a', 'b', ' ', '学', '习', '😀', '$', '\\', '\n', 'é'];
   for (let round = 0; round < 300; round++) {
-    const text = Array.from({ length: 5 + Math.floor(rand() * 60) }, () => pool[Math.floor(rand() * pool.length)]).join('');
+    const text = Array.from({ length: 5 + Math.floor(rand() * 60) }, () => pool[Math.floor(rand() * pool.length)]).join(
+      '',
+    );
     const s = Math.floor(rand() * (text.length - 1));
     const e = s + 1 + Math.floor(rand() * (text.length - s - 1));
     const a = createAnchor('r', text, s, e);

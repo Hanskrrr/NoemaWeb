@@ -5,7 +5,7 @@
 //   [[slow]]          stream slowly (for reload and stop tests)
 
 import type { ErrorKind } from '@noema/core';
-import { ProviderError, type ModelProvider, type StreamEvent, type StreamRequest, sleep } from './provider.ts';
+import { type ModelProvider, ProviderError, type StreamEvent, type StreamRequest, sleep } from './provider.ts';
 
 export function fakeAnswer(question: string): string {
   const q = question.replace(/\[\[[^\]]*\]\]/g, '').trim();
@@ -64,7 +64,12 @@ export class FakeProvider implements ModelProvider {
     const promptChars = req.messages.reduce((n, m) => n + m.content.length, 0);
     yield {
       type: 'usage',
-      usage: { promptTokens: Math.ceil(promptChars / 3), completionTokens: parts.length, cacheHitTokens: 0, cacheMissTokens: Math.ceil(promptChars / 3) },
+      usage: {
+        promptTokens: Math.ceil(promptChars / 3),
+        completionTokens: parts.length,
+        cacheHitTokens: 0,
+        cacheMissTokens: Math.ceil(promptChars / 3),
+      },
     };
     yield { type: 'finish', reason: 'stop' };
   }

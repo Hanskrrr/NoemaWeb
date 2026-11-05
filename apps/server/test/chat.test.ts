@@ -4,8 +4,8 @@ import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { after, before, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { type AskResponse, type Message, ulid } from '@noema/core';
 import { fakeAnswer } from '../src/llm/fake.ts';
 import { Db } from '../src/store/db.ts';
@@ -223,7 +223,7 @@ test('after a crash (SIGKILL), the next boot marks the cut-off answer interrupte
       });
       child.on('exit', (code) => reject(new Error(`server exited early (${code}): ${out}`)));
     });
-    const remote: TestServer = { base, repo: undefined as never, db: undefined as never, close: async () => {} };
+    const remote = { base };
     const { threadId } = await newThread(remote);
     const r = await api<AskResponse>(remote, 'POST', `/api/threads/${threadId}/messages`, {
       id: ulid(),

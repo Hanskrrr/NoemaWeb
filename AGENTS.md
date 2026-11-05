@@ -36,6 +36,7 @@ Anything outside the fence goes into `ideas.md`, not into code.
 - Errors that reach the learner have a kind from `ErrorKind` and a plain sentence from `describeError`. No stack traces in the UI.
 - Never render model output as raw HTML. KaTeX (with `trust: false`) is the only injected HTML.
 - Never log message content or API keys.
+- The API key lives in `data/settings.json` (mode 0600) or `.env`. Never write it to the database, an export, a log or a response to the browser.
 - The server binds to loopback only and checks Host, Origin and the `x-noema-client` header. Keep it that way.
 
 ## Tests

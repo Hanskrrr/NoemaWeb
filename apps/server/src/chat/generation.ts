@@ -12,7 +12,8 @@ import {
   type MessageStatus,
 } from '@noema/core';
 import type { Config } from '../config.ts';
-import { ProviderError, type ModelProvider, type Usage } from '../llm/provider.ts';
+import { ProviderError, type Usage } from '../llm/provider.ts';
+import type { ModelSource } from '../llm/settings.ts';
 import type { Logger } from '../log.ts';
 import type { Repo } from '../store/repo.ts';
 import { SYSTEM_PROMPT } from './prompt.ts';
@@ -48,18 +49,18 @@ export interface StartArgs {
 export class Generations {
   private readonly live = new Map<string, Live>();
   private readonly repo: Repo;
-  private readonly provider: ModelProvider;
+  private readonly models: ModelSource;
   private readonly config: Pick<Config, 'contextBudgetTokens' | 'maxOutputTokens'>;
   private readonly log: Logger;
 
   constructor(deps: {
     repo: Repo;
-    provider: ModelProvider;
+    models: ModelSource;
     config: Pick<Config, 'contextBudgetTokens' | 'maxOutputTokens'>;
     log: Logger;
   }) {
     this.repo = deps.repo;
-    this.provider = deps.provider;
+    this.models = deps.models;
     this.config = deps.config;
     this.log = deps.log;
   }
@@ -156,7 +157,9 @@ export class Generations {
 
     let final: { status: 'done' | 'failed' | 'stopped' | 'interrupted'; error: MessageError | null };
     try {
-      if (!this.provider.configured) throw new ProviderError('not_configured', 'the model provider is not configured');
+      // The provider in effect when the question was asked answers it, even if settings change meanwhile.
+      const provider = this.models.current();
+      if (!provider.configured) throw new ProviderError('not_configured', 'the model provider is not configured');
       const notebook = this.repo.getNotebook(args.notebookId);
       const { messages, manifest } = assembleContext({
         system: SYSTEM_PROMPT,
@@ -167,13 +170,13 @@ export class Generations {
       });
       callId = this.repo.startModelCall({
         revisionId: entry.revisionId,
-        provider: this.provider.name,
-        model: this.provider.model,
+        provider: provider.name,
+        model: provider.model,
         manifest,
       });
-      const stream = this.provider.stream({
+      const stream = provider.stream({
         messages,
-        maxTokens: this.config.maxOutputTokens,
+        maxTokens: this.config.maxOutputTokens ?? undefined,
         signal: entry.controller.signal,
       });
       for await (const ev of stream) {
@@ -183,7 +186,7 @@ export class Generations {
         else if (ev.type === 'text') {
           if (entry.status === 'pending') {
             firstTokenAt = new Date().toISOString();
-            this.repo.markStreaming(entry.revisionId, this.provider.model);
+            this.repo.markStreaming(entry.revisionId, provider.model);
             this.setStatus(entry, 'streaming', null);
           }
           entry.content += ev.text;

@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
@@ -10,12 +10,15 @@ const Env = z.object({
   NOEMA_PORT: z.coerce.number().int().min(0).max(65535).default(8787),
   NOEMA_DB_PATH: z.string().default(join(REPO_ROOT, 'data', 'noema.db')),
   NOEMA_BACKUP_DIR: z.string().optional(),
-  NOEMA_PROVIDER: z.enum(['fake', 'openai-compatible']).default('fake'),
+  NOEMA_SETTINGS_PATH: z.string().optional(),
+  // `fake` is for automated tests only: fixed answers, no network, no cost.
+  NOEMA_PROVIDER: z.enum(['fake', 'openai-compatible']).default('openai-compatible'),
   NOEMA_LLM_BASE_URL: z.string().url().default('https://api.deepseek.com'),
   NOEMA_LLM_API_KEY: z.string().default(''),
-  NOEMA_LLM_MODEL: z.string().min(1).default('deepseek-chat'),
+  NOEMA_LLM_MODEL: z.string().min(1).default('deepseek-flash'),
   NOEMA_CONTEXT_BUDGET: z.coerce.number().int().positive().default(48_000),
-  NOEMA_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(4096),
+  // Unset: the provider's own default. Thinking models spend part of it on reasoning.
+  NOEMA_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().optional(),
   NOEMA_WEB_DIST: z.string().optional(),
   NOEMA_FAKE_DELAY_MS: z.coerce.number().int().nonnegative().default(15),
   NOEMA_LOG: z.enum(['debug', 'info', 'warn', 'error', 'silent']).default('info'),
@@ -26,10 +29,12 @@ export interface Config {
   port: number;
   dbPath: string;
   backupDir: string | null;
+  /** Model settings saved from the app, including the API key. Null keeps them in memory only. */
+  settingsPath: string | null;
   provider: 'fake' | 'openai-compatible';
   llm: { baseUrl: string; apiKey: string; model: string };
   contextBudgetTokens: number;
-  maxOutputTokens: number;
+  maxOutputTokens: number | null;
   webDist: string | null;
   fakeDelayMs: number;
   log: 'debug' | 'info' | 'warn' | 'error' | 'silent';
@@ -60,10 +65,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port: e.NOEMA_PORT,
     dbPath,
     backupDir: dbPath === ':memory:' ? null : (e.NOEMA_BACKUP_DIR ?? join(REPO_ROOT, 'data', 'backups')),
+    settingsPath: dbPath === ':memory:' ? null : (e.NOEMA_SETTINGS_PATH ?? join(dirname(dbPath), 'settings.json')),
     provider: e.NOEMA_PROVIDER,
     llm: { baseUrl: e.NOEMA_LLM_BASE_URL, apiKey: e.NOEMA_LLM_API_KEY, model: e.NOEMA_LLM_MODEL },
     contextBudgetTokens: e.NOEMA_CONTEXT_BUDGET,
-    maxOutputTokens: e.NOEMA_MAX_OUTPUT_TOKENS,
+    maxOutputTokens: e.NOEMA_MAX_OUTPUT_TOKENS ?? null,
     webDist: e.NOEMA_WEB_DIST ?? join(REPO_ROOT, 'apps', 'web', 'dist'),
     fakeDelayMs: e.NOEMA_FAKE_DELAY_MS,
     log: e.NOEMA_LOG,

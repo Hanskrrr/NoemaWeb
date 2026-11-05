@@ -11,7 +11,10 @@ export interface Logger {
   error(msg: string, fields?: Record<string, unknown>): void;
 }
 
-export function createLogger(level: Level = 'info', write: (line: string) => void = (l) => process.stdout.write(l)): Logger {
+export function createLogger(
+  level: Level = 'info',
+  write: (line: string) => void = (l) => process.stdout.write(l),
+): Logger {
   const min = LEVELS[level];
   const emit = (lvl: Exclude<Level, 'silent'>, msg: string, fields?: Record<string, unknown>) => {
     if (LEVELS[lvl] < min) return;

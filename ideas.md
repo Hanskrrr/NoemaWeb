@@ -13,6 +13,8 @@ Things worth doing that are outside the v0.1 scope fence or not yet scheduled. A
 
 ## Engineering, not yet scheduled
 
+- Show the model's reasoning while it thinks. DeepSeek's models think by default and stream it as `reasoning_content`, which Noema ignores for now, so the learner sees "Thinking…" until the answer starts.
+
 - Lazy-load KaTeX and its fonts; the web bundle is about 600 KB minified, mostly React and KaTeX.
 - GFM tables and strikethrough in the renderer (`micromark-extension-gfm` plus `mdast-util-gfm`), keeping offsets.
 - Property tests for anchors with fast-check, once the dependency is installed.

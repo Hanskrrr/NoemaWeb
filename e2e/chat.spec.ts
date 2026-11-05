@@ -18,11 +18,11 @@ test('reloading mid-answer picks up where it was, with no duplicated text', asyn
   await page.goto('/');
   await ask(page, 'Take your time [[slow]]');
   await expect(lastAnswer(page)).toHaveAttribute('data-status', 'streaming');
-  await expect.poll(async () => (await lastAnswer(page).innerText()).length).toBeGreaterThan(20);
+  await expect.poll(async () => (await lastAnswer(page).textContent())?.length ?? 0).toBeGreaterThan(20);
   await page.reload();
   const answer = lastAnswer(page);
   await expect(answer).toHaveAttribute('data-status', 'done', { timeout: 30_000 });
-  const text = await answer.innerText();
+  const text = (await answer.textContent()) ?? '';
   expect(text.split('You asked:').length - 1).toBe(1);
   const stored = (await threadDetail(request, threadId)).messages.find((m) => m.role === 'assistant');
   expect(stored?.status).toBe('done');
@@ -30,13 +30,19 @@ test('reloading mid-answer picks up where it was, with no duplicated text', asyn
 });
 
 test('stop keeps the partial answer', async ({ page, request }) => {
-  await freshThread(request);
+  const threadId = await freshThread(request);
   await page.goto('/');
   await ask(page, 'A long answer please [[slow]]');
   await expect(lastAnswer(page)).toHaveAttribute('data-status', 'streaming');
+  // Let some text arrive first: how much has streamed when Stop lands depends on the machine.
+  await expect.poll(async () => (await lastAnswer(page).textContent())?.length ?? 0).toBeGreaterThan(30);
   await page.getByTestId('stop-composer').click();
   await expect(lastAnswer(page)).toHaveAttribute('data-status', 'stopped');
   await expect(lastAnswer(page)).toContainText('You asked');
+  const stored = (await threadDetail(request, threadId)).messages.find((m) => m.role === 'assistant');
+  expect(stored?.status).toBe('stopped');
+  expect(stored?.content.startsWith('You asked')).toBe(true);
+  expect(stored?.content).not.toContain('const answer = 42;'); // it really stopped early
   await expect(page.getByTestId('send')).toBeVisible();
 });
 

@@ -10,7 +10,14 @@
 // - Every failure leaves as a ProviderError with a kind the UI can explain.
 
 import { isRetryable } from '@noema/core';
-import { ProviderError, type ModelProvider, type StreamEvent, type StreamRequest, sleep, type Usage } from './provider.ts';
+import {
+  type ModelProvider,
+  ProviderError,
+  type StreamEvent,
+  type StreamRequest,
+  sleep,
+  type Usage,
+} from './provider.ts';
 
 export interface OpenAICompatibleOptions {
   baseUrl: string;
@@ -79,8 +86,14 @@ interface ChunkJson {
 export function mapUsage(u: NonNullable<ChunkJson['usage']>): Usage {
   const hit = u.prompt_cache_hit_tokens ?? u.prompt_tokens_details?.cached_tokens;
   const miss =
-    u.prompt_cache_miss_tokens ?? (hit !== undefined && u.prompt_tokens !== undefined ? u.prompt_tokens - hit : undefined);
-  return { promptTokens: u.prompt_tokens, completionTokens: u.completion_tokens, cacheHitTokens: hit, cacheMissTokens: miss };
+    u.prompt_cache_miss_tokens ??
+    (hit !== undefined && u.prompt_tokens !== undefined ? u.prompt_tokens - hit : undefined);
+  return {
+    promptTokens: u.prompt_tokens,
+    completionTokens: u.completion_tokens,
+    cacheHitTokens: hit,
+    cacheMissTokens: miss,
+  };
 }
 
 function parseRetryAfter(value: string | null): number | undefined {
@@ -118,6 +131,7 @@ export function httpError(status: number, body: string, retryAfter: string | nul
 export class OpenAICompatibleProvider implements ModelProvider {
   readonly name = 'openai-compatible';
   readonly model: string;
+  private readonly baseUrl: string;
   private readonly url: string;
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
@@ -130,7 +144,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
   constructor(o: OpenAICompatibleOptions) {
     this.model = o.model;
-    this.url = `${o.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+    this.baseUrl = o.baseUrl.replace(/\/+$/, '');
+    this.url = `${this.baseUrl}/chat/completions`;
     this.apiKey = o.apiKey;
     this.fetchImpl = o.fetch ?? globalThis.fetch;
     this.maxAttempts = o.maxAttempts ?? 3;
@@ -145,8 +160,57 @@ export class OpenAICompatibleProvider implements ModelProvider {
     return this.apiKey.length > 0;
   }
 
+  /**
+   * Prove the key and model work before they are saved. Lists the provider's
+   * models (free on most providers); if the model is not listed, or the
+   * provider has no model list, asks for a few tokens instead.
+   * Throws a ProviderError; returns the model ids the provider listed.
+   */
+  async check(signal: AbortSignal = new AbortController().signal): Promise<{ models: string[] }> {
+    if (!this.configured) throw new ProviderError('not_configured', 'no API key');
+    const models = await this.listModels(signal);
+    if (models?.includes(this.model)) return { models };
+    let finished = false;
+    for await (const ev of this.stream({
+      messages: [{ role: 'user', content: 'Reply with OK.' }],
+      maxTokens: 16,
+      signal,
+    })) {
+      if (ev.type === 'finish') finished = true;
+    }
+    if (!finished) throw new ProviderError('network', 'the test answer did not finish');
+    return { models: models ?? [] };
+  }
+
+  /** Model ids from GET /models, or null when the provider does not offer that endpoint. */
+  private async listModels(signal: AbortSignal): Promise<string[] | null> {
+    const timeout = AbortSignal.timeout(this.headersTimeoutMs);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.baseUrl}/models`, {
+        headers: { authorization: `Bearer ${this.apiKey}`, accept: 'application/json' },
+        signal: AbortSignal.any([signal, timeout]),
+      });
+    } catch (e) {
+      if (signal.aborted) throw new ProviderError('aborted', 'stopped', { cause: e });
+      if (timeout.aborted) throw new ProviderError('timeout', `no response within ${this.headersTimeoutMs} ms`);
+      const msg = e instanceof Error ? (e.cause instanceof Error ? e.cause.message : e.message) : String(e);
+      throw new ProviderError('network', msg, { cause: e });
+    }
+    if (res.status === 404 || res.status === 405 || res.status === 501) return null;
+    const body = await res.text().catch(() => '');
+    if (!res.ok) throw httpError(res.status, body.slice(0, 4000), res.headers.get('retry-after'));
+    try {
+      const json = JSON.parse(body) as { data?: Array<{ id?: unknown }> };
+      const ids = (json.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === 'string');
+      return ids.length > 0 ? ids : null;
+    } catch {
+      return null;
+    }
+  }
+
   async *stream(req: StreamRequest): AsyncIterable<StreamEvent> {
-    if (!this.configured) throw new ProviderError('not_configured', 'NOEMA_LLM_API_KEY is empty');
+    if (!this.configured) throw new ProviderError('not_configured', 'no API key');
     for (let attempt = 1; ; attempt++) {
       yield { type: 'attempt', n: attempt };
       let sentText = false;
@@ -196,7 +260,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
       if (e instanceof ProviderError) return e;
       if (req.signal.aborted) return new ProviderError('aborted', 'stopped', { cause: e });
       if (timedOut === 'start') return new ProviderError('timeout', `no response within ${this.headersTimeoutMs} ms`);
-      if (timedOut === 'idle') return new ProviderError('timeout', `the stream went quiet for ${this.idleTimeoutMs} ms`);
+      if (timedOut === 'idle')
+        return new ProviderError('timeout', `the stream went quiet for ${this.idleTimeoutMs} ms`);
       const msg = e instanceof Error ? (e.cause instanceof Error ? e.cause.message : e.message) : String(e);
       return new ProviderError('network', msg, { cause: e });
     };
@@ -216,7 +281,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
             messages: req.messages,
             stream: true,
             stream_options: { include_usage: true },
-            max_tokens: req.maxTokens,
+            ...(req.maxTokens ? { max_tokens: req.maxTokens } : {}),
           }),
           signal: ctrl.signal,
         });
@@ -280,7 +345,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
       } finally {
         reader.cancel().catch(() => {});
       }
-      if (!done && finishReason === null) throw new ProviderError('network', 'the stream ended before the answer finished');
+      if (!done && finishReason === null)
+        throw new ProviderError('network', 'the stream ended before the answer finished');
       yield { type: 'finish', reason: finishReason };
     } finally {
       clearTimeout(timer);

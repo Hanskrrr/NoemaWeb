@@ -119,8 +119,43 @@ export const Health = z.object({
   version: z.string(),
   provider: z.string(),
   model: z.string().nullable(),
+  /** False until an API key is saved: the app shows the connect screen. */
+  configured: z.boolean(),
 });
 export type Health = z.infer<typeof Health>;
+
+// Model settings. The API key goes to the server once and never comes back:
+// the view only says whether a key is saved and shows its last characters.
+export const ModelSettingsView = z.object({
+  provider: z.enum(['openai-compatible', 'fake']),
+  baseUrl: z.string(),
+  model: z.string(),
+  hasKey: z.boolean(),
+  keyHint: z.string().nullable(),
+  /** saved: entered in the app. environment: from .env or the defaults. */
+  source: z.enum(['saved', 'environment']),
+  configured: z.boolean(),
+});
+export type ModelSettingsView = z.infer<typeof ModelSettingsView>;
+
+export const UpdateModelSettingsRequest = z.object({
+  baseUrl: z
+    .string()
+    .trim()
+    .url()
+    .refine((u) => /^https?:\/\//i.test(u), 'must start with http:// or https://'),
+  model: z.string().trim().min(1).max(200),
+  /** Omit to keep the key that is already saved. */
+  apiKey: z.string().trim().min(1).max(1000).optional(),
+});
+export type UpdateModelSettingsRequest = z.infer<typeof UpdateModelSettingsRequest>;
+
+export const ModelSettingsResponse = z.object({
+  settings: ModelSettingsView,
+  /** Model ids the provider listed when the key was checked; may be empty. */
+  available: z.array(z.string()),
+});
+export type ModelSettingsResponse = z.infer<typeof ModelSettingsResponse>;
 
 // Server-sent events on GET /api/messages/:id/events.
 // Every connection starts with a snapshot of everything so far, then deltas,

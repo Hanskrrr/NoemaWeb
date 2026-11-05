@@ -5,8 +5,10 @@ import { createServer, type Server } from 'node:http';
 import {
   AskRequest,
   CreateThreadRequest,
+  describeError,
   isLive,
   type Message,
+  UpdateModelSettingsRequest,
   UpdateNotebookRequest,
 } from '@noema/core';
 import { Generations } from './chat/generation.ts';
@@ -15,7 +17,8 @@ import { checkRequest, SECURITY_HEADERS } from './http/guard.ts';
 import { HttpError, Router, sendError, sendJson } from './http/router.ts';
 import { SseStream } from './http/sse.ts';
 import { serveStatic } from './http/static.ts';
-import type { ModelProvider } from './llm/provider.ts';
+import { ProviderError } from './llm/provider.ts';
+import type { ModelSettings } from './llm/settings.ts';
 import type { Logger } from './log.ts';
 import { ConflictError, type Repo } from './store/repo.ts';
 
@@ -23,7 +26,7 @@ export const VERSION = '0.1.0-m0';
 
 export interface AppDeps {
   repo: Repo;
-  provider: ModelProvider;
+  models: ModelSettings;
   config: Pick<Config, 'contextBudgetTokens' | 'maxOutputTokens' | 'webDist'>;
   log: Logger;
 }
@@ -36,8 +39,8 @@ export interface App {
 }
 
 export function createApp(deps: AppDeps): App {
-  const { repo, provider, log } = deps;
-  const generations = new Generations({ repo, provider, config: deps.config, log });
+  const { repo, models, log } = deps;
+  const generations = new Generations({ repo, models, config: deps.config, log });
   const router = new Router();
 
   const notFound = (what: string) => new HttpError(404, 'not_found', `${what} not found`);
@@ -49,12 +52,38 @@ export function createApp(deps: AppDeps): App {
   };
 
   router.on('GET', '/api/health', ({ res }) => {
+    const view = models.view();
     sendJson(res, 200, {
       ok: true,
       version: VERSION,
-      provider: provider.configured ? provider.name : `${provider.name} (not configured)`,
-      model: provider.configured ? provider.model : null,
+      provider: view.provider,
+      model: view.configured ? view.model : null,
+      configured: view.configured,
     });
+  });
+
+  router.on('GET', '/api/settings/model', ({ res }) => {
+    sendJson(res, 200, models.view());
+  });
+
+  // Saving checks the key with the provider first; a key that does not work is not saved.
+  router.on('PUT', '/api/settings/model', async (ctx) => {
+    const body = await ctx.body(UpdateModelSettingsRequest);
+    try {
+      const { view, available } = await models.update(body);
+      repo.logEvent('settings.model_saved', null, { host: new URL(view.baseUrl).host, model: view.model });
+      sendJson(ctx.res, 200, { settings: view, available });
+    } catch (err) {
+      if (!(err instanceof ProviderError)) throw err;
+      const detail = err.kind === 'bad_request' || err.kind === 'network' ? ` (${err.message})` : '';
+      throw new HttpError(422, err.kind, describeError(err.kind) + detail);
+    }
+  });
+
+  router.on('DELETE', '/api/settings/model', ({ res }) => {
+    const view = models.forget();
+    repo.logEvent('settings.model_removed', null);
+    sendJson(res, 200, { settings: view, available: [] });
   });
 
   router.on('GET', '/api/notebooks', ({ res }) => {
@@ -162,7 +191,11 @@ export function createApp(deps: AppDeps): App {
         const dist = deps.config.webDist;
         const isRead = req.method === 'GET' || req.method === 'HEAD';
         if (!(dist && isRead && serveStatic(dist, url.pathname, res))) {
-          throw new HttpError(404, 'not_found', 'page not found. In development open the Vite URL; otherwise run pnpm build');
+          throw new HttpError(
+            404,
+            'not_found',
+            'page not found. In development open the Vite URL; otherwise run pnpm build',
+          );
         }
       }
     } catch (err) {
@@ -176,7 +209,12 @@ export function createApp(deps: AppDeps): App {
       }
     } finally {
       if (url.pathname.startsWith('/api/') && !url.pathname.endsWith('/events')) {
-        log.debug('request', { method: req.method, path: url.pathname, status: res.statusCode, ms: Date.now() - started });
+        log.debug('request', {
+          method: req.method,
+          path: url.pathname,
+          status: res.statusCode,
+          ms: Date.now() - started,
+        });
       }
     }
   });

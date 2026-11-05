@@ -140,7 +140,9 @@ export class Repo {
 
   listThreads(notebookId: string): Thread[] {
     return (
-      this.db.sql.prepare('SELECT * FROM thread WHERE notebook_id = ? ORDER BY updated_at DESC').all(notebookId) as Row[]
+      this.db.sql
+        .prepare('SELECT * FROM thread WHERE notebook_id = ? ORDER BY updated_at DESC')
+        .all(notebookId) as Row[]
     ).map(toThread);
   }
 
@@ -182,7 +184,7 @@ export class Repo {
 
   findAsk(userMessageId: string): AskPair | null {
     const user = this.getMessage(userMessageId);
-    if (!user || user.role !== 'user') return null;
+    if (user?.role !== 'user') return null;
     const row = this.db.sql
       .prepare(`${MESSAGE_SELECT} WHERE m.reply_to = ? AND m.role = 'assistant' ORDER BY m.seq LIMIT 1`)
       .get(userMessageId) as Row | undefined;
@@ -264,7 +266,9 @@ export class Repo {
 
   markStreaming(revisionId: string, model: string): void {
     this.db.sql
-      .prepare("UPDATE message_revision SET status = 'streaming', model = ?, updated_at = ? WHERE id = ? AND status = 'pending'")
+      .prepare(
+        "UPDATE message_revision SET status = 'streaming', model = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+      )
       .run(model, now(), revisionId);
   }
 
@@ -293,7 +297,9 @@ export class Repo {
         .run(content, status, error?.kind ?? null, error?.message ?? null, now(), revisionId);
       if (Number(result.changes) === 0) return false;
       const msg = this.db.sql
-        .prepare('SELECT m.id, m.thread_id FROM message m JOIN message_revision r ON r.message_id = m.id WHERE r.id = ?')
+        .prepare(
+          'SELECT m.id, m.thread_id FROM message m JOIN message_revision r ON r.message_id = m.id WHERE r.id = ?',
+        )
         .get(revisionId) as { id: string; thread_id: string };
       if (content) this.index('message', msg.id, msg.thread_id, content);
       this.logEvent(`answer.${status}`, msg.id, error ? { kind: error.kind } : {});
@@ -311,7 +317,9 @@ export class Repo {
         .prepare("SELECT r.id FROM message_revision r WHERE r.status IN ('pending', 'streaming')")
         .all() as Array<{ id: string }>;
       for (const { id } of live) {
-        const row = this.db.sql.prepare('SELECT content FROM message_revision WHERE id = ?').get(id) as { content: string };
+        const row = this.db.sql.prepare('SELECT content FROM message_revision WHERE id = ?').get(id) as {
+          content: string;
+        };
         this.finishRevision(id, row.content, 'interrupted', null);
       }
       return live.length;
@@ -359,7 +367,9 @@ export class Repo {
   }
 
   modelCallsFor(revisionId: string): Row[] {
-    return this.db.sql.prepare('SELECT * FROM model_call WHERE revision_id = ? ORDER BY started_at').all(revisionId) as Row[];
+    return this.db.sql
+      .prepare('SELECT * FROM model_call WHERE revision_id = ? ORDER BY started_at')
+      .all(revisionId) as Row[];
   }
 
   // Search ------------------------------------------------------------------

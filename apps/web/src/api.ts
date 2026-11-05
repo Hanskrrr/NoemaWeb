@@ -10,6 +10,8 @@ import {
   type Message,
   type MessageError,
   type MessageStatus,
+  ModelSettingsResponse,
+  ModelSettingsView,
   Notebook,
   NotebookList,
   SearchResponse,
@@ -20,6 +22,7 @@ import {
   Thread,
   ThreadDetail,
   ThreadList,
+  type UpdateModelSettingsRequest,
 } from '@noema/core';
 import type { z } from 'zod';
 
@@ -34,7 +37,12 @@ export class ApiFailure extends Error {
   }
 }
 
-async function call<S extends z.ZodTypeAny>(schema: S, method: string, path: string, body?: unknown): Promise<z.output<S>> {
+async function call<S extends z.ZodTypeAny>(
+  schema: S,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<z.output<S>> {
   let res: Response;
   try {
     res = await fetch(path, {
@@ -73,6 +81,10 @@ export const api = {
     call(AskResponse, 'POST', `/api/threads/${threadId}/messages`, { id, content }),
   stop: (messageId: string) => call(StopResponse, 'POST', `/api/messages/${messageId}/stop`, {}),
   search: (q: string) => call(SearchResponse, 'GET', `/api/search?q=${encodeURIComponent(q)}`),
+  modelSettings: () => call(ModelSettingsView, 'GET', '/api/settings/model'),
+  saveModelSettings: (body: UpdateModelSettingsRequest) =>
+    call(ModelSettingsResponse, 'PUT', '/api/settings/model', body),
+  forgetModelSettings: () => call(ModelSettingsResponse, 'DELETE', '/api/settings/model'),
 };
 
 export interface StreamHandlers {

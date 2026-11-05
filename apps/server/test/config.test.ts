@@ -6,7 +6,10 @@ test('defaults: loopback, fake model, data under the repository root', () => {
   const c = loadConfig({});
   assert.equal(c.host, '127.0.0.1');
   assert.equal(c.port, 8787);
-  assert.equal(c.provider, 'fake');
+  assert.equal(c.provider, 'openai-compatible');
+  assert.equal(c.llm.model, 'deepseek-flash');
+  assert.equal(c.maxOutputTokens, null);
+  assert.ok(c.settingsPath?.startsWith(REPO_ROOT));
   assert.ok(c.dbPath.startsWith(REPO_ROOT));
   assert.ok(c.backupDir?.startsWith(REPO_ROOT));
 });
@@ -28,6 +31,8 @@ test('bad values are reported by name', () => {
   );
 });
 
-test('an in-memory store has no backups', () => {
-  assert.equal(loadConfig({ NOEMA_DB_PATH: ':memory:', NOEMA_BACKUP_DIR: '/tmp/x' }).backupDir, null);
+test('an in-memory store has no backups and keeps model settings in memory', () => {
+  const c = loadConfig({ NOEMA_DB_PATH: ':memory:', NOEMA_BACKUP_DIR: '/tmp/x', NOEMA_SETTINGS_PATH: '/tmp/y' });
+  assert.equal(c.backupDir, null);
+  assert.equal(c.settingsPath, null);
 });

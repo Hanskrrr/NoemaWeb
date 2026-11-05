@@ -96,7 +96,12 @@ test('search finds Chinese words of one or two characters, and English prefixes'
   const nb = repo.ensureDefaultNotebook();
   const { thread } = repo.createThread(nb.id, ulid(), '');
   const { pair } = repo.createAsk(thread.id, ulid(), '梯度下降为什么有效？');
-  repo.finishRevision(pair.assistant.revisionId, '因为沿着负梯度方向，损失函数下降最快。Gradient descent works.', 'done', null);
+  repo.finishRevision(
+    pair.assistant.revisionId,
+    '因为沿着负梯度方向，损失函数下降最快。Gradient descent works.',
+    'done',
+    null,
+  );
   const ids = (q: string) => repo.search(q).map((h) => h.messageId);
   assert.ok(ids('梯度').includes(pair.user.id));
   assert.ok(ids('梯度').includes(pair.assistant.id));
@@ -129,6 +134,7 @@ test('export contains every table', () => {
   const { db, repo } = fresh();
   repo.ensureDefaultNotebook();
   const out = repo.exportAll();
-  for (const key of ['notebooks', 'threads', 'messages', 'revisions', 'modelCalls', 'events']) assert.ok(key in out, key);
+  for (const key of ['notebooks', 'threads', 'messages', 'revisions', 'modelCalls', 'events'])
+    assert.ok(key in out, key);
   db.close();
 });

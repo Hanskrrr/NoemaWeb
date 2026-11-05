@@ -4,50 +4,43 @@ A learning notebook for studying hard material with an AI. Ask in a normal chat;
 
 This repository is the working prototype (v0.1). The product thinking (PARADIGM, interviews, the prototype brief) lives in the `NoemaLearningNote` workspace, not here.
 
-**Status: M0 done, most of M1 done.** One notebook, one thread, streaming answers that survive reloads and crashes, stop, named errors, search and export APIs, and the anchor spike (select a passage in a rendered answer and get exact raw offsets). Branches, sources and the Notebook view come next. See [the latest handoff](docs/handoffs/2026-11-04-m0.md).
+**Status: M0 done, most of M1 done.** One notebook, one thread, streaming answers that survive reloads and crashes, stop, named errors, search and export APIs, and the anchor spike (select a passage in a rendered answer and get exact raw offsets). Branches, sources and the Notebook view come next. See [the latest handoff](docs/handoffs/2026-11-05-connect-a-model.md).
 
 ## Run it
 
-You need Node 22.18 or newer (24 LTS is fine) and pnpm 10 (`corepack enable` gives you the pinned version).
+You need Node 22.18 or newer (24 LTS is fine) and pnpm 10 (`npm install -g pnpm@10`; from Node 25 on, corepack is no longer bundled).
 
 ```sh
 pnpm install
-cp .env.example .env      # optional: the default is the offline fake model
 pnpm dev                  # server on :8787, web on http://127.0.0.1:5173
 ```
 
-To use a real model, set these in `.env` (DeepSeek works from Hong Kong; any OpenAI-compatible endpoint works):
-
-```sh
-NOEMA_PROVIDER=openai-compatible
-NOEMA_LLM_BASE_URL=https://api.deepseek.com
-NOEMA_LLM_API_KEY=sk-...
-NOEMA_LLM_MODEL=deepseek-chat
-```
+Open http://127.0.0.1:5173. The first screen asks for a model: paste your API key (DeepSeek is preset; any OpenAI-compatible provider works) and press **Save and connect**. Noema checks the key with the provider before saving it. Change it later from the model name in the top-right corner.
 
 Without Vite: `pnpm build && pnpm start`, then open http://127.0.0.1:8787.
 
 ## Commands
 
-| Command | What it does |
-| --- | --- |
-| `pnpm dev` | Server (restarts on change) and Vite (hot reload) together |
-| `pnpm test` | Unit and integration tests (`node --test`): core, server over real HTTP and SQLite, Markdown offsets |
-| `pnpm e2e` | Builds the web app, starts the server with the fake model, drives Chromium with Playwright |
-| `pnpm typecheck` | `tsc` for every package, the scripts and the e2e specs |
-| `pnpm lint` / `pnpm format` | Biome |
-| `pnpm check` | typecheck, lint, test |
+| Command                     | What it does                                                                                         |
+| --------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `pnpm dev`                  | Server (restarts on change) and Vite (hot reload) together                                           |
+| `pnpm test`                 | Unit and integration tests (`node --test`): core, server over real HTTP and SQLite, Markdown offsets |
+| `pnpm e2e`                  | Builds the web app, starts test servers (a fake model and a stand-in provider), drives Chromium      |
+| `pnpm typecheck`            | `tsc` for every package, the scripts and the e2e specs                                               |
+| `pnpm lint` / `pnpm format` | Biome                                                                                                |
+| `pnpm check`                | typecheck, lint, test                                                                                |
 
 ## Your data
 
 - Everything is in one SQLite file, `data/noema.db` (git-ignored). The server opens it in WAL mode.
 - A consistent copy goes to `data/backups/` once a day; the newest seven are kept.
 - `GET /api/export` downloads everything as JSON.
+- Your API key is in `data/settings.json`, readable only by your user account. It is never stored in the database, so exports and backups never contain it, and the server never sends it back to the browser.
 - The server listens on 127.0.0.1 only and refuses requests addressed to any other host or sent from other sites. There is no login, so do not put it on a network.
 
-## The fake model
+## Tests never call a real model
 
-`NOEMA_PROVIDER=fake` answers every question with the same Markdown (text, math, a list, Chinese, code), so tests can check exact text. Markers in a question change what it does: `[[slow]]` streams slowly, `[[fail:rate_limit]]` (or any error kind) fails before the first token, `[[error-midway]]` drops the connection halfway.
+`pnpm test` and `pnpm e2e` use a fake model (`NOEMA_PROVIDER=fake`) with fixed answers, and a stand-in provider for the key check, so they are free and deterministic. Markers in a question change what the fake does: `[[slow]]` streams slowly, `[[fail:rate_limit]]` (or any error kind) fails before the first token, `[[error-midway]]` drops the connection halfway. The fake never appears in the app.
 
 ## Layout
 

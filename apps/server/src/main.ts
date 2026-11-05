@@ -4,8 +4,7 @@ import { join, resolve } from 'node:path';
 import { createApp, VERSION } from './app.ts';
 import { ConfigError, loadConfig, REPO_ROOT } from './config.ts';
 import { FakeProvider } from './llm/fake.ts';
-import { OpenAICompatibleProvider } from './llm/openai-compatible.ts';
-import type { ModelProvider } from './llm/provider.ts';
+import { ModelSettings } from './llm/settings.ts';
 import { createLogger } from './log.ts';
 import { Db, dailyBackup } from './store/db.ts';
 import { Repo } from './store/repo.ts';
@@ -51,13 +50,15 @@ if (config.backupDir) {
   backupTimer.unref();
 }
 
-const provider: ModelProvider =
-  config.provider === 'fake'
-    ? new FakeProvider({ delayMs: config.fakeDelayMs })
-    : new OpenAICompatibleProvider(config.llm);
+const models = new ModelSettings({
+  env: { provider: config.provider, ...config.llm },
+  filePath: config.settingsPath,
+  fake: () => new FakeProvider({ delayMs: config.fakeDelayMs }),
+  log,
+});
 
 const webDist = config.webDist ? resolve(config.webDist) : null;
-const app = createApp({ repo, provider, config: { ...config, webDist }, log });
+const app = createApp({ repo, models, config: { ...config, webDist }, log });
 
 app.server.listen(config.port, config.host, () => {
   const address = app.server.address();
@@ -68,12 +69,13 @@ app.server.listen(config.port, config.host, () => {
     db: config.dbPath,
     migrationsApplied: applied,
     interruptedAtBoot: interrupted,
-    provider: provider.name,
-    model: provider.model,
-    configured: provider.configured,
+    provider: models.view().provider,
+    model: models.view().model,
+    modelSettings: models.view().source,
+    configured: models.view().configured,
     webDist,
   });
-  if (!provider.configured) log.warn('the model provider is not configured; answers will fail until NOEMA_LLM_API_KEY is set');
+  if (!models.view().configured) log.info('no model connected yet: open the app and add an API key');
 });
 
 let closing = false;

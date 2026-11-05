@@ -18,6 +18,7 @@ import {
 } from '@noema/core';
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ApiFailure, api, watchMessage } from './api.ts';
+import { ConnectScreen, ModelDialog } from './ModelSettings.tsx';
 import { Markdown } from './markdown/Markdown.tsx';
 import { highlight, selectionToSource, sourceToRange } from './markdown/selection.ts';
 import { keys, storage } from './storage.ts';
@@ -30,25 +31,28 @@ type Boot = { notebook: Notebook; thread: Thread; health: Health } | { error: st
 export function App() {
   const [boot, setBoot] = useState<Boot>(null);
 
+  // Runs at start, and again after a model is connected.
+  const load = useCallback(async (isCancelled: () => boolean = () => false) => {
+    try {
+      const health = await api.health();
+      const { notebooks } = await api.notebooks();
+      const notebook = notebooks[0];
+      if (!notebook) throw new Error('no notebook');
+      const { threads } = await api.threads(notebook.id);
+      const thread = threads[0] ?? (await api.createThread(notebook.id, ulid()));
+      if (!isCancelled()) setBoot({ notebook, thread, health });
+    } catch (err) {
+      if (!isCancelled()) setBoot({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const health = await api.health();
-        const { notebooks } = await api.notebooks();
-        const notebook = notebooks[0];
-        if (!notebook) throw new Error('no notebook');
-        const { threads } = await api.threads(notebook.id);
-        const thread = threads[0] ?? (await api.createThread(notebook.id, ulid()));
-        if (!cancelled) setBoot({ notebook, thread, health });
-      } catch (err) {
-        if (!cancelled) setBoot({ error: err instanceof Error ? err.message : String(err) });
-      }
-    })();
+    void load(() => cancelled);
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [load]);
 
   if (boot === null) return <div className="boot">Opening your notebook…</div>;
   if ('error' in boot) {
@@ -59,7 +63,15 @@ export function App() {
       </div>
     );
   }
-  return <ThreadView notebook={boot.notebook} thread={boot.thread} health={boot.health} />;
+  if (!boot.health.configured) return <ConnectScreen onConnected={() => void load()} />;
+  return (
+    <ThreadView
+      notebook={boot.notebook}
+      thread={boot.thread}
+      health={boot.health}
+      onHealthChange={(health) => setBoot({ ...boot, health })}
+    />
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -122,11 +134,24 @@ interface Pin {
   pinnedAt: string;
 }
 
-function ThreadView({ notebook, thread, health }: { notebook: Notebook; thread: Thread; health: Health }) {
+function ThreadView({
+  notebook,
+  thread,
+  health,
+  onHealthChange,
+}: {
+  notebook: Notebook;
+  thread: Thread;
+  health: Health;
+  onHealthChange: (health: Health) => void;
+}) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [messages, dispatch] = useReducer(reducer, []);
   const [loaded, setLoaded] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [outbox, setOutbox] = useState<Outbox | null>(() => storage.getJson<Outbox | null>(keys.outbox(thread.id), null));
+  const [outbox, setOutbox] = useState<Outbox | null>(() =>
+    storage.getJson<Outbox | null>(keys.outbox(thread.id), null),
+  );
   const watchers = useRef(new Map<string, () => void>());
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -240,9 +265,9 @@ function ThreadView({ notebook, thread, health }: { notebook: Notebook; thread: 
         setSelection(null);
         return;
       }
-      const container = (sel.anchorNode instanceof Element ? sel.anchorNode : sel.anchorNode?.parentElement)?.closest<HTMLElement>(
-        '[data-message-id]',
-      );
+      const container = (
+        sel.anchorNode instanceof Element ? sel.anchorNode : sel.anchorNode?.parentElement
+      )?.closest<HTMLElement>('[data-message-id]');
       const message = container ? byId.get(container.dataset.messageId ?? '') : undefined;
       if (!container || !message || !isTerminal(message.status)) {
         setSelection(null);
@@ -295,10 +320,24 @@ function ThreadView({ notebook, thread, health }: { notebook: Notebook; thread: 
           <span className="wordmark">Noema</span>
           <span className="notebook-title">{notebook.title}</span>
         </div>
-        <span className={`model ${health.model ? '' : 'model-missing'}`} title={`provider: ${health.provider}`}>
-          {health.model ?? 'no model configured'}
-        </span>
+        <button
+          type="button"
+          className="model"
+          onClick={() => setSettingsOpen(true)}
+          title="Model settings"
+          data-testid="model-button"
+        >
+          {health.model ?? 'Connect a model'}
+        </button>
       </header>
+      {settingsOpen && (
+        <ModelDialog
+          onClose={() => setSettingsOpen(false)}
+          onSaved={() => {
+            api.health().then(onHealthChange, () => {});
+          }}
+        />
+      )}
 
       <main className="thread" aria-busy={!loaded}>
         {loaded && messages.length === 0 && (
@@ -308,7 +347,12 @@ function ThreadView({ notebook, thread, health }: { notebook: Notebook; thread: 
           </div>
         )}
         {messages.map((m) => (
-          <MessageView key={m.id} message={m} onStop={() => void stop(m.id)} />
+          <MessageView
+            key={m.id}
+            message={m}
+            onStop={() => void stop(m.id)}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
         ))}
         <div ref={bottom} />
       </main>
@@ -382,7 +426,12 @@ function ThreadView({ notebook, thread, health }: { notebook: Notebook; thread: 
 
 // ---------------------------------------------------------------------------
 
-function MessageView({ message, onStop }: { message: Message; onStop: () => void }) {
+interface MessageActions {
+  onStop: () => void;
+  onOpenSettings: () => void;
+}
+
+function MessageView({ message, onStop, onOpenSettings }: { message: Message } & MessageActions) {
   const { role, status } = message;
   return (
     <article className={`message message-${role}`} data-testid="message" data-role={role} data-status={status}>
@@ -399,12 +448,14 @@ function MessageView({ message, onStop }: { message: Message; onStop: () => void
         {role === 'assistant' && status === 'pending' && <span className="thinking">Thinking…</span>}
         {role === 'assistant' && status === 'streaming' && <span className="caret" aria-hidden />}
       </div>
-      <MessageStatusLine message={message} onStop={onStop} />
+      <MessageStatusLine message={message} onStop={onStop} onOpenSettings={onOpenSettings} />
     </article>
   );
 }
 
-function MessageStatusLine({ message, onStop }: { message: Message; onStop: () => void }) {
+const SETTINGS_ERRORS = new Set(['auth', 'quota', 'not_configured']);
+
+function MessageStatusLine({ message, onStop, onOpenSettings }: { message: Message } & MessageActions) {
   const { role, status, error } = message;
   if (role === 'user') {
     if (status === 'pending') return <div className="status">Sending…</div>;
@@ -429,6 +480,11 @@ function MessageStatusLine({ message, onStop }: { message: Message; onStop: () =
       return (
         <div className="status status-bad" role="alert">
           {error?.message ?? 'The answer failed.'}
+          {error && SETTINGS_ERRORS.has(error.kind) && (
+            <button type="button" className="quiet" onClick={onOpenSettings}>
+              Open model settings
+            </button>
+          )}
         </div>
       );
     default:

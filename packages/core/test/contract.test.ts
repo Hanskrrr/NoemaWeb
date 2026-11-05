@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { AskRequest, assertTransition, canTransition, describeError, ErrorKind, isTerminal, ulid } from '../src/index.ts';
+import {
+  AskRequest,
+  assertTransition,
+  canTransition,
+  describeError,
+  ErrorKind,
+  isTerminal,
+  ulid,
+} from '../src/index.ts';
 
 test('AskRequest needs a ULID and some non-blank text', () => {
   assert.equal(AskRequest.safeParse({ id: ulid(), content: 'hi' }).success, true);

@@ -2,7 +2,7 @@ import type { AddressInfo } from 'node:net';
 import { ulid } from '@noema/core';
 import { createApp } from '../src/app.ts';
 import { FakeProvider } from '../src/llm/fake.ts';
-import type { ModelProvider } from '../src/llm/provider.ts';
+import { ModelSettings, type ModelSettingsOptions } from '../src/llm/settings.ts';
 import { silentLogger } from '../src/log.ts';
 import { Db } from '../src/store/db.ts';
 import { Repo } from '../src/store/repo.ts';
@@ -11,18 +11,29 @@ export interface TestServer {
   base: string;
   repo: Repo;
   db: Db;
+  models: ModelSettings;
   close(): Promise<void>;
 }
 
-export async function startServer(options: { provider?: ModelProvider; dbPath?: string; budget?: number } = {}) {
+/** The fake model unless `models` says otherwise. */
+export async function startServer(
+  options: { models?: Partial<ModelSettingsOptions>; dbPath?: string; budget?: number } = {},
+) {
   const db = new Db(options.dbPath ?? ':memory:');
   db.migrate();
   const repo = new Repo(db);
   repo.interruptLive();
+  const models = new ModelSettings({
+    env: { provider: 'fake', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: '' },
+    filePath: null,
+    fake: () => new FakeProvider({ delayMs: 1 }),
+    log: silentLogger,
+    ...options.models,
+  });
   const app = createApp({
     repo,
-    provider: options.provider ?? new FakeProvider({ delayMs: 1 }),
-    config: { contextBudgetTokens: options.budget ?? 48_000, maxOutputTokens: 1024, webDist: null },
+    models,
+    config: { contextBudgetTokens: options.budget ?? 48_000, maxOutputTokens: null, webDist: null },
     log: silentLogger,
   });
   await new Promise<void>((resolve) => app.server.listen(0, '127.0.0.1', resolve));
@@ -31,6 +42,7 @@ export async function startServer(options: { provider?: ModelProvider; dbPath?: 
     base: `http://127.0.0.1:${port}`,
     repo,
     db,
+    models,
     async close() {
       await app.close();
       db.close();
@@ -40,7 +52,7 @@ export async function startServer(options: { provider?: ModelProvider; dbPath?: 
 }
 
 export async function api<T = unknown>(
-  s: TestServer,
+  s: Pick<TestServer, 'base'>,
   method: string,
   path: string,
   body?: unknown,
@@ -61,7 +73,10 @@ export interface SseEvent {
 }
 
 /** Read an SSE stream until `end`, the stream closes, `stopAfter` events, or the timeout. */
-export async function readEvents(url: string, opts: { stopAfter?: number; timeoutMs?: number } = {}): Promise<SseEvent[]> {
+export async function readEvents(
+  url: string,
+  opts: { stopAfter?: number; timeoutMs?: number } = {},
+): Promise<SseEvent[]> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 5000);
   const events: SseEvent[] = [];
@@ -121,7 +136,7 @@ export function finalStatus(events: SseEvent[]): { status: string; error: { kind
   return out;
 }
 
-export async function newThread(s: TestServer): Promise<{ notebookId: string; threadId: string }> {
+export async function newThread(s: Pick<TestServer, 'base'>): Promise<{ notebookId: string; threadId: string }> {
   const nb = await api<{ notebooks: Array<{ id: string }> }>(s, 'GET', '/api/notebooks');
   const notebookId = nb.json.notebooks[0]?.id as string;
   const threadId = ulid();

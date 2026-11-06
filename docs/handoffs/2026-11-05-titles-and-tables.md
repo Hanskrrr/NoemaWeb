@@ -9,7 +9,12 @@
 
 ## Verified
 
-See the final message of the session for the exact counts; the commands are `pnpm test` and `pnpm e2e`.
+| Check | Result |
+| --- | --- |
+| `node --test` | 103 pass. New: titles are clean one-line text; a branch's title request carries its passage; DeepSeek gets `thinking: disabled` for titles and other providers get nothing extra; a thread is titled once, after its first answer, and the title is searchable; branches are titled; a learner's title is never replaced; older threads are titled by the start-up pass; table cells map to their raw characters (including an escaped `\|`); single tildes stay text; task lists and footnotes parse |
+| Playwright | 15 pass. New: the fake answer's table renders with header, right alignment, strikethrough, inline math in a cell and `3~5 ms` left alone; a word in a table cell becomes a branch anchored exactly; sidebar shows the model's title |
+| Real DeepSeek, on the founder's Mac | The start-up pass titled his existing threads and branches, each in the language it was asked in |
+| Real answers | His 9 DeepSeek answers rendered with the new renderer and checked by eye: tables, display math, Chinese text, code blocks and box-drawing diagrams all correct |
 
 ## Next
 

@@ -2533,24 +2533,33 @@ button.quiet.inline.faint:hover {
   line-height: 1.7;
 }
 
-.source-text .md h1,
+/* Headings are drawn one level down (# is an h2), as in answers. */
 .source-text .md h2,
 .source-text .md h3,
-.source-text .md h4 {
+.source-text .md h4,
+.source-text .md h5 {
   font-family: var(--serif);
   font-weight: 600;
 }
 
-.source-text .md h1 {
-  font-size: 1.35rem;
+.source-text .md h2 {
+  font-size: 1.3rem;
   margin: 1.4em 0 0.5em;
+}
+
+.source-text .md h3 {
+  font-size: 1.14rem;
+}
+
+.source-text .md h4 {
+  font-size: 1.04rem;
 }
 
 .source-text .md > :first-child {
   margin-top: 0;
 }
 
-.source-text.title-in-text .md > h1:first-child {
+.source-text.title-in-text .md > h2:first-child {
   display: none;
 }
 

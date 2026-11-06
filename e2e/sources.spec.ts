@@ -81,6 +81,21 @@ test('acceptance (M3): a question about a source passage opens beside the text, 
   await page.goto(`/#/s/${src.id}`);
   await expect(page.getByTestId('source-pane')).toContainText('Scaled Dot-Product Attention');
   await expect(page.getByTestId('source-overview')).toContainText('Select any passage to ask about it.');
+  // Its own first heading is the title, shown once, in the header.
+  await expect(page.getByTestId('source-text').locator('h2').first()).toBeHidden();
+  // Contents jumps to a section in the pane (far below, after the background).
+  await page.getByTestId('source-contents').click();
+  await page.locator('.source-contents button', { hasText: '3.2.2 Multi-Head Attention' }).click();
+  await expect
+    .poll(() =>
+      page.getByTestId('source-pane').evaluate((pane) => {
+        const h = [...pane.querySelectorAll('h3')].find((x) => x.textContent?.includes('3.2.2'));
+        const r = h?.getBoundingClientRect();
+        const p = pane.getBoundingClientRect();
+        return r ? pane.scrollTop > 0 && r.top >= p.top && r.bottom <= p.bottom : false;
+      }),
+    )
+    .toBe(true);
 
   await selectInSource(page, 'the dot products grow large');
   await page.getByTestId('ask-source').click();

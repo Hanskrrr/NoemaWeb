@@ -239,7 +239,7 @@ export function SourceView({
     const span = Array.from(text.current?.querySelectorAll<HTMLElement>('[data-s][data-e]') ?? []).find(
       (s) => Number(s.dataset.e) > start,
     );
-    const heading = span?.closest('h1, h2, h3') ?? span;
+    const heading = span?.closest('h2, h3, h4, h5, h6') ?? span;
     if (heading && pane.current) {
       const box = pane.current.getBoundingClientRect();
       pane.current.scrollTo({ top: pane.current.scrollTop + heading.getBoundingClientRect().top - box.top - 12 });

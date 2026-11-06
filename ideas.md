@@ -6,6 +6,7 @@ Things worth doing that are outside the v0.1 scope fence or not yet scheduled. A
 
 - **Import a ChatGPT export**: second candidate.
 - PDF sources via the pdf.js text layer.
+- **Sources, next steps** (ADR 0013): figures, kept as local copies from the original HTML; for a passage asked about an older version, propose where it is in the latest one (shown as a proposal, never a silent jump); a question about a whole section from its heading; the passages asked most across all sources, in one list.
 - Semantic search with sqlite-vec, only if keyword search misses in real use.
 - An MCP server over the notebook, so other tools can read it.
 - A desktop shell (Tauri or Electron) around the same server and web app.

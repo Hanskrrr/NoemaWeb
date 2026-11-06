@@ -15,7 +15,7 @@ Things worth doing that are outside the v0.1 scope fence or not yet scheduled. A
 - **Ask in several branches at once**: select a passage and send two or three side questions that run in parallel, each its own branch (Super Agent runs workers in parallel and keeps their state in a database, which is how answers already work here).
 - **A note from passages**: write a short note on a selected passage, anchored like a branch, shown in the margin and on the map.
 - **Note history view**: every version of a note is kept (`note_revision`, with what changed and the blocks); show them and restore one.
-- **Notes, next steps**: merge two blocks, drag to reorder, keyboard moves between blocks (Jupyter's Esc/Enter modes), and "start a new thread from here" to move the later part of a drifting thread into its own thread.
+- **Notes, next steps**: merge two blocks, drag to reorder, keyboard moves between blocks (Jupyter's Esc/Enter modes), and moving out a middle range of a thread (from here to the end is done: "New thread from here").
 
 ## Engineering, not yet scheduled
 

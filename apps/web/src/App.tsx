@@ -114,6 +114,7 @@ function NotebookView({
     const place = last?.hash ? parseHash(last.hash) : null;
     const exists =
       place !== null &&
+      place.kind !== 'new' &&
       (place.kind === 'note' ? notes.some((n) => n.id === place.id) : threads.some((t) => t.id === place.id));
     if (place && exists && (!recent || (last?.at ?? '') >= recent.updatedAt)) {
       navigate(place, { replace: true });

@@ -5,20 +5,23 @@ import {
   ApiError,
   AskResponse,
   CLIENT_HEADER,
-  CreateBranchResponse,
-  type CreateBranchRequest,
   CLIENT_HEADER_VALUE,
+  type CreateBranchRequest,
+  CreateBranchResponse,
   Health,
+  type InsertBlockRequest,
+  Merge,
+  type MergeMode,
   type Message,
   type MessageError,
   type MessageStatus,
   ModelSettingsResponse,
   ModelSettingsView,
   Note,
-  NoteHistory,
-  NoteList,
   Notebook,
   NotebookList,
+  NoteHistory,
+  NoteList,
   SearchResponse,
   StopResponse,
   StreamDelta,
@@ -28,7 +31,6 @@ import {
   ThreadDetail,
   ThreadList,
   ThreadMap,
-  type InsertBlockRequest,
   type UpdateModelSettingsRequest,
 } from '@noema/core';
 import { z } from 'zod';
@@ -120,6 +122,17 @@ export const api = {
     call(Note, 'POST', `/api/notes/${noteId}/blocks/${blockId}/suggest`, { instruction }),
   accept: (noteId: string, blockId: string) => call(Note, 'POST', `/api/notes/${noteId}/blocks/${blockId}/accept`, {}),
   discard: (noteId: string, blockId: string) => call(Note, 'POST', `/api/notes/${noteId}/blocks/${blockId}/discard`, {}),
+  mergeNote: (noteId: string, from: string, after: string | null = null) =>
+    call(Note, 'POST', `/api/notes/${noteId}/merge`, { from, after }),
+  // Merges: a draft (AI summary or the whole exchange) the learner edits and accepts.
+  startMerge: (sourceId: string, id: string, into: string, mode: MergeMode) =>
+    call(Merge, 'POST', `/api/threads/${sourceId}/merges`, { id, into, mode }),
+  merge: (id: string) => call(Merge, 'GET', `/api/merges/${id}`),
+  editMerge: (id: string, summary: string) => call(Merge, 'PATCH', `/api/merges/${id}`, { summary }),
+  redraftMerge: (id: string, mode: MergeMode) => call(Merge, 'POST', `/api/merges/${id}/redraft`, { mode }),
+  acceptMerge: (id: string) => call(Merge, 'POST', `/api/merges/${id}/accept`, {}),
+  undoMerge: (id: string) => call(Merge, 'POST', `/api/merges/${id}/undo`, {}),
+  discardMerge: (id: string) => call(Merge, 'POST', `/api/merges/${id}/discard`, {}),
   moveOut: (noteId: string, newId: string, blockIds: string[]) =>
     call(Note, 'POST', `/api/notes/${noteId}/move-out`, { id: newId, blockIds }),
 };

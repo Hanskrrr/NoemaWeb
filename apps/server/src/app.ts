@@ -9,20 +9,25 @@ import {
   CreateThreadRequest,
   describeError,
   EditBlockRequest,
+  EditMergeRequest,
   InsertBlockRequest,
   isLive,
   type Message,
+  MergeNoteRequest,
   MoveBlockRequest,
   MoveOutRequest,
+  RedraftMergeRequest,
   RenameThreadRequest,
   RewriteRequest,
   SplitThreadRequest,
+  StartMergeRequest,
   SuggestRequest,
   UpdateModelSettingsRequest,
   UpdateNoteRequest,
   UpdateNotebookRequest,
 } from '@noema/core';
 import { Generations } from './chat/generation.ts';
+import { fullTranscript, MergeWriter } from './chat/merges.ts';
 import { NoteWriter, Suggester } from './chat/notes.ts';
 import { Titler } from './chat/titles.ts';
 import type { Config } from './config.ts';
@@ -50,6 +55,7 @@ export interface App {
   titler: Titler;
   notes: NoteWriter;
   suggestions: Suggester;
+  merges: MergeWriter;
   /** Stop live answers (stored as interrupted) and close the server. */
   close(): Promise<void>;
 }
@@ -60,6 +66,7 @@ export function createApp(deps: AppDeps): App {
   const generations = new Generations({ repo, models, titler, config: deps.config, log });
   const notes = new NoteWriter({ repo, models, maxOutputTokens: deps.config.maxOutputTokens, log });
   const suggestions = new Suggester({ repo, models, maxOutputTokens: deps.config.maxOutputTokens, log });
+  const merges = new MergeWriter({ repo, models, log });
   const router = new Router();
 
   const notFound = (what: string) => new HttpError(404, 'not_found', `${what} not found`);
@@ -139,7 +146,52 @@ export function createApp(deps: AppDeps): App {
       branches: repo.branchesOf(thread.id),
       origin: repo.originOf(thread.id),
       path: repo.pathOf(thread.id),
+      merges: repo.mergesInto(thread.id),
+      outgoing: repo.outgoingOf(thread.id),
     });
+  });
+
+  // Merge this thread into another: a draft (the AI's summary, or the
+  // exchanges as they are) the learner edits and accepts.
+  router.on('POST', '/api/threads/:id/merges', async (ctx) => {
+    const sourceId = ctx.params.id as string;
+    const { id, into, mode } = await ctx.body(StartMergeRequest);
+    const { merge, created } = repo.startMerge(id, sourceId, into, mode, () => fullTranscript(repo, sourceId));
+    if (created && merge.status === 'drafting') merges.start(merge.id);
+    sendJson(ctx.res, created ? 201 : 200, merge);
+  });
+
+  router.on('GET', '/api/merges/:id', ({ res, params }) => {
+    const merge = repo.getMerge(params.id as string);
+    if (!merge) throw notFound('merge');
+    sendJson(res, 200, merge);
+  });
+
+  router.on('PATCH', '/api/merges/:id', async (ctx) => {
+    const { summary } = await ctx.body(EditMergeRequest);
+    sendJson(ctx.res, 200, repo.editMerge(ctx.params.id as string, summary));
+  });
+
+  router.on('POST', '/api/merges/:id/redraft', async (ctx) => {
+    const { mode } = await ctx.body(RedraftMergeRequest);
+    const id = ctx.params.id as string;
+    const current = repo.getMerge(id);
+    if (!current) throw notFound('merge');
+    const merge = repo.redraftMerge(id, mode, () => fullTranscript(repo, current.sourceThreadId));
+    if (merge.status === 'drafting') merges.start(merge.id);
+    sendJson(ctx.res, 202, merge);
+  });
+
+  router.on('POST', '/api/merges/:id/accept', ({ res, params }) => {
+    sendJson(res, 200, repo.acceptMerge(params.id as string));
+  });
+
+  router.on('POST', '/api/merges/:id/undo', ({ res, params }) => {
+    sendJson(res, 200, repo.undoMerge(params.id as string));
+  });
+
+  router.on('POST', '/api/merges/:id/discard', ({ res, params }) => {
+    sendJson(res, 200, repo.discardMerge(params.id as string));
   });
 
   const answer = (notebookId: string, threadId: string, pair: AskPair) =>
@@ -289,6 +341,12 @@ export function createApp(deps: AppDeps): App {
     sendJson(res, 200, repo.discardProposal(params.id as string, params.block as string));
   });
 
+  // Bring another note's blocks into this one; the other note is removed.
+  router.on('POST', '/api/notes/:id/merge', async (ctx) => {
+    const { from, after } = await ctx.body(MergeNoteRequest);
+    sendJson(ctx.res, 200, repo.mergeNote(ctx.params.id as string, from, after));
+  });
+
   // Move a section (or everything from a block down) into a new note. Idempotent on the new note's id.
   router.on('POST', '/api/notes/:id/move-out', async (ctx) => {
     const { id, blockIds } = await ctx.body(MoveOutRequest);
@@ -410,8 +468,9 @@ export function createApp(deps: AppDeps): App {
     titler,
     notes,
     suggestions,
+    merges,
     async close() {
-      await Promise.all([generations.shutdown(), notes.shutdown(), suggestions.shutdown()]);
+      await Promise.all([generations.shutdown(), notes.shutdown(), suggestions.shutdown(), merges.shutdown()]);
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
         server.closeAllConnections();

@@ -1,6 +1,7 @@
 // All SQL lives here. Routes and the generation loop call these methods and
 // never write SQL themselves.
 
+import type { SQLInputValue } from 'node:sqlite';
 import {
   type AnchorRef,
   type BranchSummary,
@@ -9,18 +10,20 @@ import {
   type ErrorKind,
   ftsQuery,
   type HistoryItem,
+  headingLevel,
   isLive,
+  joinBlocks,
+  type MapExchange,
+  type MapNode,
+  type Merge,
+  type MergedText,
   type Message,
   type MessageError,
   type MessageStatus,
   makeSnippet,
-  type MapExchange,
-  type MapNode,
-  type Notebook,
-  headingLevel,
-  joinBlocks,
   type Note,
   type NoteBlock,
+  type Notebook,
   type Origin,
   type SearchHit,
   searchText,
@@ -58,6 +61,7 @@ function toThread(r: Row): Thread {
     parentThreadId: (r.parent_thread_id as string | null) ?? null,
     originQuote: exact ? shorten(exact, 160) : null,
     splitAt: (r.split_at as string | null | undefined) ?? null,
+    mergedIntoId: (r.merged_into as string | null | undefined) ?? null,
     title: r.title as string,
     titleSource: ((r.title_source as string | undefined) ?? 'question') as Thread['titleSource'],
     createdAt: r.created_at as string,
@@ -65,7 +69,10 @@ function toThread(r: Row): Thread {
   };
 }
 
-const THREAD_SELECT = `SELECT t.*, a.exact AS origin_exact FROM thread t LEFT JOIN anchor a ON a.id = t.origin_anchor_id`;
+const THREAD_SELECT = `SELECT t.*, a.exact AS origin_exact,
+  (SELECT m.target_thread_id FROM thread_merge m WHERE m.source_thread_id = t.id AND m.status = 'merged'
+   ORDER BY m.merged_at DESC LIMIT 1) AS merged_into
+  FROM thread t LEFT JOIN anchor a ON a.id = t.origin_anchor_id`;
 
 function toBlock(r: Row): NoteBlock {
   const status = r.proposal_status as NonNullable<NoteBlock['proposal']>['status'] | null;
@@ -265,6 +272,7 @@ export class Repo {
         parentThreadId: null,
         originQuote: null,
         splitAt: null,
+        mergedIntoId: null,
         title,
         titleSource: 'question',
         createdAt: t,
@@ -405,6 +413,259 @@ export class Repo {
     return Boolean(row?.split_at);
   }
 
+  // Merges ------------------------------------------------------------------
+
+  private toMerge(r: Row): Merge {
+    return {
+      id: r.id as string,
+      sourceThreadId: r.source_thread_id as string,
+      targetThreadId: r.target_thread_id as string,
+      sourceTitle: (r.source_title as string | null) ?? '',
+      targetTitle: (r.target_title as string | null) ?? '',
+      mode: r.mode as Merge['mode'],
+      summary: r.summary as string,
+      refs: JSON.parse(r.refs as string) as Merge['refs'],
+      status: r.status as Merge['status'],
+      error: (r.error as string | null) ?? null,
+      afterMessageId: (r.after_message_id as string | null) ?? null,
+      quote: (r.quote as string | null) ?? null,
+      createdAt: r.created_at as string,
+      mergedAt: (r.merged_at as string | null) ?? null,
+    };
+  }
+
+  private mergeRows(where: string, ...args: SQLInputValue[]): Merge[] {
+    return (
+      this.db.sql
+        .prepare(
+          `SELECT m.*, s.title AS source_title, t.title AS target_title FROM thread_merge m
+           JOIN thread s ON s.id = m.source_thread_id JOIN thread t ON t.id = m.target_thread_id
+           WHERE ${where} ORDER BY m.created_at`,
+        )
+        .all(...args) as Row[]
+    ).map((r) => {
+      const m = this.toMerge(r);
+      return { ...m, quote: this.mergePlace(m.sourceThreadId, m.targetThreadId).quote };
+    });
+  }
+
+  getMerge(id: string): Merge | null {
+    return this.mergeRows('m.id = ?', id)[0] ?? null;
+  }
+
+  /** Threads merged into this one, in the order they were merged. */
+  mergesInto(threadId: string): Merge[] {
+    return this.mergeRows("m.target_thread_id = ? AND m.status = 'merged'", threadId).sort((a, b) =>
+      (a.mergedAt ?? '').localeCompare(b.mergedAt ?? ''),
+    );
+  }
+
+  /** This thread's merges into others: an open draft, and merges done. */
+  outgoingOf(threadId: string): Merge[] {
+    return this.mergeRows("m.source_thread_id = ? AND m.status IN ('drafting', 'draft', 'failed', 'merged')", threadId);
+  }
+
+  /** Every thread below this one, split or not. */
+  private descendantsOf(threadId: string): Set<string> {
+    const out = new Set<string>();
+    const stmt = this.db.sql.prepare('SELECT id FROM thread WHERE parent_thread_id = ?');
+    const walk = (id: string) => {
+      for (const r of stmt.all(id) as Row[]) {
+        const child = r.id as string;
+        if (out.has(child)) continue;
+        out.add(child);
+        walk(child);
+      }
+    };
+    walk(threadId);
+    return out;
+  }
+
+  /**
+   * Where a merge shows when reading the target. A side question (of the
+   * target, or of a side question below it) shows under the message it left
+   * from, with its passage; anything else shows after the target's last
+   * message at the time.
+   */
+  private mergePlace(sourceId: string, targetId: string): { messageId: string | null; quote: string | null } {
+    let current = sourceId;
+    const seen = new Set<string>();
+    while (!seen.has(current)) {
+      seen.add(current);
+      const origin = this.originOf(current);
+      if (!origin) break;
+      if (origin.parentThreadId === targetId) return { messageId: origin.anchor.messageId, quote: origin.anchor.exact };
+      current = origin.parentThreadId;
+    }
+    return { messageId: null, quote: null };
+  }
+
+  private lastMessage(threadId: string): { id: string; seq: number } | null {
+    const r = this.db.sql
+      .prepare('SELECT id, seq FROM message WHERE thread_id = ? ORDER BY seq DESC LIMIT 1')
+      .get(threadId) as Row | undefined;
+    return r ? { id: r.id as string, seq: r.seq as number } : null;
+  }
+
+  private hasLiveAnswer(threadId: string): boolean {
+    return Boolean(
+      this.db.sql
+        .prepare(
+          `SELECT 1 FROM message m JOIN message_revision r ON r.id = m.current_revision_id
+           WHERE m.thread_id = ? AND r.status IN ('pending', 'streaming')`,
+        )
+        .get(threadId),
+    );
+  }
+
+  /**
+   * Start merging `sourceId` into `targetId`. A summary is drafted by the
+   * AI (the caller starts the writer); the whole exchange is ready at once.
+   * An open draft of the same source is replaced. Idempotent on the id.
+   */
+  startMerge(
+    id: string,
+    sourceId: string,
+    targetId: string,
+    mode: Merge['mode'],
+    full: () => { text: string; refs: Merge['refs'] },
+  ): { merge: Merge; created: boolean } {
+    return this.db.tx(() => {
+      const existing = this.getMerge(id);
+      if (existing) return { merge: existing, created: false };
+      if (!this.getThread(sourceId) || !this.getThread(targetId)) throw new NotFoundError('thread');
+      if (sourceId === targetId) throw new InvalidError('a thread cannot be merged into itself');
+      if (this.descendantsOf(sourceId).has(targetId)) {
+        throw new InvalidError('a side question already sees the conversation it came from; merge the other way');
+      }
+      if (this.hasLiveAnswer(sourceId)) throw new ConflictError('wait for the answer to finish');
+      this.db.sql
+        .prepare(
+          "UPDATE thread_merge SET status = 'discarded' WHERE source_thread_id = ? AND status IN ('drafting', 'draft', 'failed')",
+        )
+        .run(sourceId);
+      const draft = mode === 'full' ? full() : { text: '', refs: {} };
+      this.db.sql
+        .prepare(
+          `INSERT INTO thread_merge (id, source_thread_id, target_thread_id, mode, summary, refs, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(id, sourceId, targetId, mode, draft.text, JSON.stringify(draft.refs), mode === 'full' ? 'draft' : 'drafting', now());
+      this.logEvent('merge.started', id, { sourceId, targetId, mode });
+      return { merge: this.getMerge(id) as Merge, created: true };
+    });
+  }
+
+  /** Draft it again, as a summary (the AI) or as the whole exchange. */
+  redraftMerge(id: string, mode: Merge['mode'], full: () => { text: string; refs: Merge['refs'] }): Merge {
+    return this.db.tx(() => {
+      const m = this.getMerge(id);
+      if (!m) throw new NotFoundError('merge');
+      if (!['draft', 'failed'].includes(m.status)) throw new ConflictError('this merge cannot be drafted again now');
+      if (this.hasLiveAnswer(m.sourceThreadId)) throw new ConflictError('wait for the answer to finish');
+      const draft = mode === 'full' ? full() : { text: '', refs: m.refs };
+      this.db.sql
+        .prepare('UPDATE thread_merge SET mode = ?, summary = ?, refs = ?, status = ?, error = NULL WHERE id = ?')
+        .run(mode, draft.text, JSON.stringify(draft.refs), mode === 'full' ? 'draft' : 'drafting', id);
+      return this.getMerge(id) as Merge;
+    });
+  }
+
+  saveMergeDraft(id: string, text: string): void {
+    this.db.sql.prepare("UPDATE thread_merge SET summary = ? WHERE id = ? AND status = 'drafting'").run(text, id);
+  }
+
+  finishMergeDraft(id: string, text: string, refs: Merge['refs'], status: 'draft' | 'failed', error: string | null): void {
+    this.db.sql
+      .prepare("UPDATE thread_merge SET summary = ?, refs = ?, status = ?, error = ? WHERE id = ? AND status = 'drafting'")
+      .run(text, JSON.stringify(refs), status, error, id);
+  }
+
+  /** The learner's edit of the draft. */
+  editMerge(id: string, summary: string): Merge {
+    const m = this.getMerge(id);
+    if (!m) throw new NotFoundError('merge');
+    if (!['draft', 'failed'].includes(m.status)) throw new ConflictError('only a draft can be edited');
+    this.db.sql.prepare("UPDATE thread_merge SET summary = ?, status = 'draft', error = NULL WHERE id = ?").run(summary, id);
+    return this.getMerge(id) as Merge;
+  }
+
+  /**
+   * Accept the draft. From now on it goes in front of the target's next
+   * question; what the target already said is not touched.
+   */
+  acceptMerge(id: string): Merge {
+    return this.db.tx(() => {
+      const m = this.getMerge(id);
+      if (!m) throw new NotFoundError('merge');
+      if (m.status !== 'draft' || m.summary.trim() === '') throw new ConflictError('there is no draft to merge');
+      const last = this.lastMessage(m.targetThreadId);
+      const place = this.mergePlace(m.sourceThreadId, m.targetThreadId);
+      const t = now();
+      this.db.sql
+        .prepare(
+          "UPDATE thread_merge SET status = 'merged', after_seq = ?, after_message_id = ?, merged_at = ? WHERE id = ?",
+        )
+        .run(last?.seq ?? -1, place.messageId ?? last?.id ?? null, t, id);
+      this.db.sql.prepare('UPDATE thread SET updated_at = ? WHERE id = ?').run(t, m.targetThreadId);
+      this.logEvent('merge.merged', id, { sourceId: m.sourceThreadId, targetId: m.targetThreadId });
+      return this.getMerge(id) as Merge;
+    });
+  }
+
+  /** Stop carrying it: the target's next questions no longer include it. */
+  undoMerge(id: string): Merge {
+    const m = this.getMerge(id);
+    if (!m) throw new NotFoundError('merge');
+    if (m.status !== 'merged') throw new ConflictError('only a merge can be undone');
+    this.db.sql.prepare("UPDATE thread_merge SET status = 'undone', undone_at = ? WHERE id = ?").run(now(), id);
+    this.logEvent('merge.undone', id);
+    return this.getMerge(id) as Merge;
+  }
+
+  discardMerge(id: string): Merge {
+    const m = this.getMerge(id);
+    if (!m) throw new NotFoundError('merge');
+    if (m.status === 'merged' || m.status === 'undone') throw new ConflictError('use undo for a merge that is done');
+    this.db.sql.prepare("UPDATE thread_merge SET status = 'discarded' WHERE id = ?").run(id);
+    return this.getMerge(id) as Merge;
+  }
+
+  /** At boot: drafts being written were cut off. */
+  failDraftingMerges(): number {
+    const r = this.db.sql
+      .prepare("UPDATE thread_merge SET status = 'failed', error = ? WHERE status = 'drafting'")
+      .run('The server stopped before this was finished.');
+    return Number(r.changes);
+  }
+
+  /**
+   * Merged texts that apply to a question at `beforeSeq`, each with the
+   * seq it was merged after.
+   */
+  private mergedBefore(threadId: string, beforeSeq: number): Array<{ afterSeq: number; text: MergedText }> {
+    return (
+      this.db.sql
+        .prepare(
+          `SELECT m.id, m.summary, m.after_seq, s.title FROM thread_merge m JOIN thread s ON s.id = m.source_thread_id
+           WHERE m.target_thread_id = ? AND m.status = 'merged' AND m.after_seq < ? ORDER BY m.after_seq, m.merged_at`,
+        )
+        .all(threadId, beforeSeq) as Row[]
+    ).map((r) => ({
+      afterSeq: r.after_seq as number,
+      text: { id: r.id as string, title: (r.title as string) || 'Untitled', text: r.summary as string },
+    }));
+  }
+
+  /** Merged texts with no question after them yet: they go in front of the question being asked. */
+  pendingMerges(threadId: string, beforeSeq: number): MergedText[] {
+    const items = this.history(threadId, beforeSeq);
+    const placed = new Set(items.flatMap((h) => (h.merged ?? []).map((m) => m.id)));
+    return this.mergedBefore(threadId, beforeSeq)
+      .map((m) => m.text)
+      .filter((m) => !placed.has(m.id));
+  }
+
   // Map ---------------------------------------------------------------------
 
   /** The outermost thread above this one, stopping at a thread made its own. */
@@ -427,6 +688,7 @@ export class Repo {
         title: thread?.title ?? '',
         origin: origin ? { messageId: origin.anchor.messageId, exact: shorten(origin.anchor.exact, 200) } : null,
         split: !isRoot && Boolean(thread?.splitAt),
+        mergedIntoId: thread?.mergedIntoId ?? null,
       };
       if (node.split) return { ...node, exchanges: [] };
       const messages = this.listMessages(id);
@@ -844,6 +1106,55 @@ export class Repo {
   }
 
   /**
+   * Bring every block of another note into this one, after `after` (null: at
+   * the end), then remove the other note. Its citation labels are renumbered
+   * where they clash, so each still opens the exchange it did.
+   */
+  mergeNote(targetId: string, fromId: string, after: string | null): Note {
+    return this.db.tx(() => {
+      if (targetId === fromId) throw new InvalidError('a note cannot be merged into itself');
+      const target = this.editable(targetId);
+      const from = this.editable(fromId);
+      const ids = this.allBlockIds(targetId);
+      if (after !== null && !target.blocks.some((b) => b.id === after)) throw new InvalidError('no such block in this note');
+
+      // Labels: reuse the target's label for an exchange it already cites; keep a free label; else a new number.
+      const refs = { ...target.refs };
+      const byMessage = new Map(Object.entries(refs).map(([label, r]) => [r.messageId, label]));
+      let next = Math.max(0, ...Object.keys(refs).map((l) => Number(l.slice(1)) || 0));
+      const rename = new Map<string, string>();
+      for (const [label, ref] of Object.entries(from.refs)) {
+        const known = byMessage.get(ref.messageId);
+        let to = known;
+        if (!to) {
+          to = refs[label] ? `E${++next}` : label;
+          refs[to] = ref;
+          byMessage.set(ref.messageId, to);
+        }
+        if (to !== label) rename.set(label, to);
+      }
+      const relabel = (text: string) => text.replace(/\[(E\d{1,4})\]/g, (whole, l: string) => (rename.has(l) ? `[${rename.get(l)}]` : whole));
+
+      const moving = from.blocks.map((b) => b.id);
+      const at = after === null ? ids.length : ids.indexOf(after) + 1;
+      const t = now();
+      const update = this.db.sql.prepare(
+        'UPDATE note_block SET note_id = ?, content = ?, proposal = ?, updated_at = ? WHERE id = ?',
+      );
+      for (const b of from.blocks) {
+        update.run(targetId, relabel(b.content), b.proposal ? relabel(b.proposal.text) : null, t, b.id);
+      }
+      ids.splice(at, 0, ...moving);
+      this.renumber(targetId, ids);
+      this.db.sql.prepare('UPDATE note SET refs = ? WHERE id = ?').run(JSON.stringify(refs), targetId);
+      this.syncNote(targetId, 'user', `merged “${from.title}” into this note`);
+      this.db.sql.prepare('DELETE FROM note WHERE id = ?').run(fromId);
+      this.logEvent('note.merged', targetId, { from: fromId, blocks: moving.length, relabelled: rename.size });
+      return this.getNote(targetId) as Note;
+    });
+  }
+
+  /**
    * After a change: the note's text, its author (from its blocks) and a new
    * version with what changed. `who` null: no new version (a failed write).
    */
@@ -1053,11 +1364,15 @@ export class Repo {
     return [...this.inheritedHistory(origin.parentThreadId), ...this.history(origin.parentThreadId, through + 1)];
   }
 
-  /** The finished conversation before `beforeSeq`, as question/answer pairs only. */
+  /**
+   * The finished conversation before `beforeSeq`, as question/answer pairs
+   * only. A thread merged in goes in front of the first question after the
+   * merge (see pendingMerges for one with no question after it yet).
+   */
   history(threadId: string, beforeSeq: number): HistoryItem[] {
     const rows = this.db.sql
       .prepare(
-        `SELECT u.id AS uid, ur.content AS ucontent, a.id AS aid, ar.content AS acontent
+        `SELECT u.id AS uid, u.seq AS useq, ur.content AS ucontent, a.id AS aid, ar.content AS acontent
          FROM message a
          JOIN message_revision ar ON ar.id = a.current_revision_id
          JOIN message u ON u.id = a.reply_to
@@ -1067,10 +1382,15 @@ export class Repo {
          ORDER BY a.seq`,
       )
       .all(threadId, beforeSeq) as Row[];
-    return rows.flatMap((r) => [
-      { id: r.uid as string, role: 'user' as const, content: r.ucontent as string },
-      { id: r.aid as string, role: 'assistant' as const, content: r.acontent as string },
-    ]);
+    const merges = this.mergedBefore(threadId, beforeSeq);
+    return rows.flatMap((r) => {
+      const useq = r.useq as number;
+      const here = merges.filter((m) => m.afterSeq < useq).map((m) => m.text);
+      merges.splice(0, here.length);
+      const user: HistoryItem = { id: r.uid as string, role: 'user', content: r.ucontent as string };
+      if (here.length > 0) user.merged = here;
+      return [user, { id: r.aid as string, role: 'assistant' as const, content: r.acontent as string }];
+    });
   }
 
   revisionStatus(revisionId: string): MessageStatus | null {

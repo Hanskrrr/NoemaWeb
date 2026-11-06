@@ -25,6 +25,7 @@ export async function startServer(
   const repo = new Repo(db);
   repo.interruptLive();
   repo.recoverNotes();
+  repo.failDraftingMerges();
   const models = new ModelSettings({
     env: { provider: 'fake', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: '' },
     filePath: null,

@@ -163,6 +163,7 @@ function ExchangeView({ node, exchange: e, go }: { node: MapNode; exchange: MapE
                   <>
                     <button type="button" className="map-branch-title" onClick={() => go.toThread(b.threadId)}>
                       ↳ {b.title || 'Side question'}
+                      {b.mergedIntoId === node.threadId && <span className="map-own">merged back</span>}
                     </button>
                     <NodeView node={b} go={go} />
                   </>

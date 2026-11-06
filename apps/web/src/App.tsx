@@ -168,6 +168,8 @@ function NotebookView({
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenMap={(id) => go({ kind: 'map', id })}
         onOpenNote={openNote}
+        onCite={toMessage}
+        threads={threads ?? []}
       />
     );
   } else if (route?.kind === 'map') {
@@ -189,6 +191,7 @@ function NotebookView({
         onCite={toMessage}
         onOpenThread={(id) => open(id)}
         onOpenNote={openNote}
+        notes={notes}
         onChanged={onRefresh}
         onDeleted={() => {
           onRefresh();

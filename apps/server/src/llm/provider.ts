@@ -11,7 +11,7 @@ export interface StreamRequest {
   /** A short utility call (a title): skip the model's reasoning step where the provider allows it. */
   light?: boolean | undefined;
   /** What the call is for; the fake model answers titles differently. */
-  purpose?: 'answer' | 'title' | 'note' | 'suggest' | undefined;
+  purpose?: 'answer' | 'title' | 'note' | 'suggest' | 'merge' | undefined;
   signal: AbortSignal;
 }
 

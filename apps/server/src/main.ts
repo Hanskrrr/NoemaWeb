@@ -33,6 +33,7 @@ const applied = db.migrate();
 const repo = new Repo(db);
 const interrupted = repo.interruptLive();
 const notes = repo.recoverNotes();
+const mergeDrafts = repo.failDraftingMerges();
 repo.ensureDefaultNotebook();
 
 let backupTimer: NodeJS.Timeout | null = null;
@@ -72,6 +73,7 @@ app.server.listen(config.port, config.host, () => {
     interruptedAtBoot: interrupted,
     notesCutOff: notes.failed,
     notesMadeIntoBlocks: notes.blockified,
+    mergeDraftsCutOff: mergeDrafts,
     provider: models.view().provider,
     model: models.view().model,
     modelSettings: models.view().source,

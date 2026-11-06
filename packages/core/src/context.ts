@@ -15,10 +15,22 @@ export interface ChatMessage {
   content: string;
 }
 
+/** Another thread merged into this one: its summary (or exchanges), as the learner accepted it. */
+export interface MergedText {
+  id: string;
+  title: string;
+  text: string;
+}
+
 export interface HistoryItem {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  /**
+   * Threads merged in just before this question. They go in front of it,
+   * every time, so the conversation before them stays the same prefix.
+   */
+  merged?: MergedText[];
 }
 
 export interface ContextInput {
@@ -29,6 +41,8 @@ export interface ContextInput {
   /** For a branch: the passage it was asked about. Attached to every question in the branch. */
   origin?: { quote: string };
   history: HistoryItem[];
+  /** Threads merged in since the last question: they go in front of this one. */
+  mergedNow?: MergedText[];
   question: { id: string; content: string };
   /** Prompt budget in tokens, excluding the room kept for the answer. */
   budgetTokens: number;
@@ -40,6 +54,7 @@ export type ManifestPart =
   | { kind: 'inherited'; id: string; role: 'user' | 'assistant'; tokens: number }
   | { kind: 'history'; id: string; role: 'user' | 'assistant'; tokens: number }
   | { kind: 'origin'; tokens: number }
+  | { kind: 'merged'; id: string; tokens: number }
   | { kind: 'question'; id: string; tokens: number };
 
 export interface ContextManifest {
@@ -94,6 +109,25 @@ export function formatOrigin(quote: string): string {
   return `About this passage from earlier in the conversation:\n\n${quoted}`;
 }
 
+/** Longest merged text sent to the model. */
+export const MAX_MERGED_CHARS = 12_000;
+
+/**
+ * A merged thread, as it is put in front of the question that follows the
+ * merge. Citation labels are taken out: they belong to the other thread.
+ */
+export function formatMerged(m: MergedText): string {
+  const plain = m.text.replace(/\[E\d{1,4}\]/g, '').replace(/[ \t]+([.,;:!?。，；：！？])/g, '$1').trim();
+  const chars = Array.from(plain);
+  const text = chars.length > MAX_MERGED_CHARS ? `${chars.slice(0, MAX_MERGED_CHARS).join('')}…` : plain;
+  return `Merged into this conversation from "${m.title}":\n\n${text}`;
+}
+
+function withMerged(content: string, merged: MergedText[] | undefined): string {
+  if (!merged || merged.length === 0) return content;
+  return [...merged.map(formatMerged), content].join('\n\n---\n\n');
+}
+
 export function assembleContext(input: ContextInput): AssembledContext {
   const aboutMe = input.aboutMe?.trim();
   const systemContent = aboutMe ? `${input.system}\n\n## About the learner\n${aboutMe}` : input.system;
@@ -101,8 +135,10 @@ export function assembleContext(input: ContextInput): AssembledContext {
   const aboutTokens = aboutMe ? estimateTokens(systemContent) - systemTokens : 0;
   const originText = input.origin ? formatOrigin(input.origin.quote) : null;
   const originTokens = originText ? estimateTokens(originText) : 0;
+  const mergedNow = (input.mergedNow ?? []).map((m) => ({ id: m.id, tokens: estimateTokens(formatMerged(m)) }));
+  const mergedTokens = mergedNow.reduce((n, m) => n + m.tokens, 0);
   const questionTokens = estimateTokens(input.question.content);
-  const fixed = systemTokens + aboutTokens + originTokens + questionTokens;
+  const fixed = systemTokens + aboutTokens + originTokens + mergedTokens + questionTokens;
   if (fixed > input.budgetTokens) throw new ContextBudgetError(fixed, input.budgetTokens);
 
   // Inherited turns come first, then the thread's own; walk newest to oldest, keeping what fits.
@@ -110,7 +146,7 @@ export function assembleContext(input: ContextInput): AssembledContext {
   const all: Array<HistoryItem & { inherited: boolean }> = [
     ...(input.inherited ?? []).map((h) => ({ ...h, inherited: true })),
     ...input.history.map((h) => ({ ...h, inherited: false })),
-  ];
+  ].map((h) => ({ ...h, content: withMerged(h.content, h.merged) }));
   let used = fixed;
   const kept: Turn[] = [];
   const omitted: ContextManifest['omitted'] = [];
@@ -135,7 +171,8 @@ export function assembleContext(input: ContextInput): AssembledContext {
 
   // The origin goes with the question, not before the history, so the
   // history prefix stays identical across a branch's turns (prompt cache).
-  const question = originText ? `${originText}\n\n${input.question.content}` : input.question.content;
+  const asked = originText ? `${originText}\n\n${input.question.content}` : input.question.content;
+  const question = withMerged(asked, input.mergedNow);
   const messages: ChatMessage[] = [
     { role: 'system', content: systemContent },
     ...kept.map((h) => ({ role: h.role, content: h.content })),
@@ -144,8 +181,15 @@ export function assembleContext(input: ContextInput): AssembledContext {
   const parts: ManifestPart[] = [{ kind: 'system', tokens: systemTokens }];
   if (aboutMe) parts.push({ kind: 'about_me', tokens: aboutTokens });
   for (const h of kept) {
-    parts.push({ kind: h.inherited ? 'inherited' : 'history', id: h.id, role: h.role, tokens: h.tokens });
+    let own = h.tokens;
+    for (const m of h.merged ?? []) {
+      const tokens = estimateTokens(formatMerged(m));
+      own -= tokens;
+      parts.push({ kind: 'merged', id: m.id, tokens });
+    }
+    parts.push({ kind: h.inherited ? 'inherited' : 'history', id: h.id, role: h.role, tokens: Math.max(1, own) });
   }
+  for (const m of mergedNow) parts.push({ kind: 'merged', id: m.id, tokens: m.tokens });
   if (originText) parts.push({ kind: 'origin', tokens: originTokens });
   parts.push({ kind: 'question', id: input.question.id, tokens: questionTokens });
 

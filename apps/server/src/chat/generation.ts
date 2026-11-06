@@ -172,6 +172,7 @@ export class Generations {
         inherited: this.repo.inheritedHistory(args.threadId),
         ...(origin ? { origin: { quote: origin.anchor.exact } } : {}),
         history: this.repo.history(args.threadId, args.question.seq),
+        mergedNow: this.repo.pendingMerges(args.threadId, args.question.seq),
         question: { id: args.question.id, content: args.question.content },
         budgetTokens: this.config.contextBudgetTokens,
       });

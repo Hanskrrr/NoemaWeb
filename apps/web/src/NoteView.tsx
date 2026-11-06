@@ -6,7 +6,7 @@
 // Citations ([E3]) open the exchange they came from. Every change is kept
 // as a version on the server.
 
-import { headingLevel, type Note, type NoteBlock, sectionOf, ulid } from '@noema/core';
+import { headingLevel, type Note, type NoteBlock, type NoteSummary, sectionOf, ulid } from '@noema/core';
 import { type KeyboardEvent, type MouseEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { EditableTitle } from './EditableTitle.tsx';
@@ -42,10 +42,13 @@ export function NoteView({
   onCite,
   onOpenThread,
   onOpenNote,
+  notes,
   onChanged,
   onDeleted,
 }: {
   noteId: string;
+  /** The notebook's notes, to choose one to merge in. */
+  notes: NoteSummary[];
   onCite: (threadId: string, messageId: string) => void;
   onOpenThread: (threadId: string) => void;
   onOpenNote: (noteId: string) => void;
@@ -59,6 +62,7 @@ export function NoteView({
   const [menu, setMenu] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [merging, setMerging] = useState<{ from: NoteSummary | null } | null>(null);
   const wasWriting = useRef(false);
 
   const load = useCallback(async () => {
@@ -191,6 +195,15 @@ export function NoteView({
     void change(() => api.insertBlock(note.id, { id: ulid(), after, ask: instruction }));
   };
 
+  const mergeIn = (from: NoteSummary) =>
+    change(
+      () => api.mergeNote(note.id, from.id),
+      () => {
+        setMerging(null);
+        setToast({ text: `Merged “${from.title}” into this note.` });
+      },
+    );
+
   const startWriting = (after: string | null) => {
     setAsking(null);
     setEditing({ id: ulid(), draft: '', after, isNew: true });
@@ -259,6 +272,15 @@ export function NoteView({
             </>
           )}
           {' · '}
+          <button
+            type="button"
+            className="quiet inline"
+            onClick={() => setMerging(merging ? null : { from: null })}
+            data-testid="note-merge"
+          >
+            merge a note in
+          </button>
+          {' · '}
           {confirmDelete ? (
             <span className="confirm">
               {note.threadId ? 'Delete this note? The thread stays.' : 'Delete this note?'}
@@ -290,6 +312,43 @@ export function NoteView({
         </p>
       </header>
 
+      {merging && (
+        <section className="askbox merge-picker" data-testid="note-merge-picker">
+          {merging.from ? (
+            <div className="askbox-row confirm-row">
+              <span>
+                Move all blocks of “{merging.from.title}” to the end of this note, and remove “{merging.from.title}”?
+              </span>
+              <button
+                type="button"
+                onClick={() => merging.from && void mergeIn(merging.from)}
+                data-testid="note-merge-confirm"
+              >
+                Merge
+              </button>
+              <button type="button" className="quiet" onClick={() => setMerging(null)}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <>
+              <p className="merge-explain">Bring which note into this one? Its citations keep working.</p>
+              <ul className="merge-options">
+                {notes
+                  .filter((n) => n.id !== note.id && n.status !== 'generating')
+                  .map((n) => (
+                    <li key={n.id}>
+                      <button type="button" onClick={() => setMerging({ from: n })} data-testid="note-merge-option">
+                        {n.title || 'Untitled'}
+                      </button>
+                    </li>
+                  ))}
+                {notes.filter((n) => n.id !== note.id).length === 0 && <li className="map-empty">No other note.</li>}
+              </ul>
+            </>
+          )}
+        </section>
+      )}
       {error && (
         <p className="status status-bad" role="alert">
           {error}

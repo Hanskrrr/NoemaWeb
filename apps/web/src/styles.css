@@ -1531,3 +1531,118 @@ button.quiet.inline.faint:hover {
   font-size: 0.82rem;
   padding: 0.15rem 0.6rem;
 }
+
+/* Merges ------------------------------------------------------------------- */
+
+.message-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.merge-card,
+.merge-draft {
+  border-radius: 10px;
+  padding: 0.6rem 0.9rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--rule));
+  background: color-mix(in srgb, var(--accent) 5%, var(--paper));
+  font-size: 0.95rem;
+}
+
+.merge-card {
+  border-left: 3px solid color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.merge-draft {
+  border-style: dashed;
+}
+
+.merge-head {
+  margin: 0;
+  font: 0.82rem / 1.45 var(--sans);
+  color: var(--ink-soft);
+}
+
+.merge-head q {
+  font-style: italic;
+}
+
+.merge-mode {
+  color: var(--ink-faint);
+}
+
+.merge-explain {
+  margin: 0.15rem 0 0;
+  font: 0.8rem / 1.4 var(--sans);
+  color: var(--ink-faint);
+}
+
+.merge-body {
+  font-family: var(--serif);
+}
+
+.merge-body .md > :first-child {
+  margin-top: 0.4rem;
+}
+
+.merge-body .md > :last-child {
+  margin-bottom: 0.3rem;
+}
+
+.merge-foot {
+  margin: 0.2rem 0 0;
+  font: 0.78rem / 1.4 var(--sans);
+  color: var(--ink-faint);
+}
+
+.merge-done {
+  margin: 0;
+  font: 0.85rem / 1.4 var(--sans);
+  color: var(--ink-soft);
+}
+
+.merge-picker {
+  margin-left: 0;
+}
+
+.merge-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.merge-options button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  color: var(--ink);
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+
+.merge-options button:hover,
+.merge-options button:focus-visible {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.confirm-row span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

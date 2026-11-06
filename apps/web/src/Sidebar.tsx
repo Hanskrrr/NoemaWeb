@@ -61,7 +61,14 @@ export function Sidebar({
           data-testid="thread-link"
           data-thread-id={t.id}
         >
-          {depth > 0 && <span aria-hidden>↳ </span>}
+          {t.mergedIntoId ? (
+            <span title="Merged into another thread">
+              <span aria-hidden>⤶ </span>
+              <span className="sr-only">merged: </span>
+            </span>
+          ) : (
+            depth > 0 && <span aria-hidden>↳ </span>
+          )}
           {depth === 0 && t.splitAt && (
             <span aria-hidden title="Made its own thread from a side question">
               ↗{' '}

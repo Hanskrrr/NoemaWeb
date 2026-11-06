@@ -55,6 +55,8 @@ export const Thread = z.object({
    * model, only the passage it came from. Null for a branch still in place.
    */
   splitAt: z.string().nullable(),
+  /** The thread this one was last merged into (and not undone), if any. */
+  mergedIntoId: Id.nullable(),
   title: z.string(),
   /** question: the first question; model: written by the AI; user: renamed by the learner. */
   titleSource: z.enum(['question', 'model', 'user']),
@@ -108,6 +110,43 @@ export type BranchSummary = z.infer<typeof BranchSummary>;
 export const Origin = z.object({ parentThreadId: Id, parentTitle: z.string(), anchor: AnchorRef });
 export type Origin = z.infer<typeof Origin>;
 
+/** Where a citation label in a note or a merge ([E3]) points: the exact message it came from. */
+export const CiteRef = z.object({ threadId: Id, messageId: Id });
+export const CiteRefs = z.record(z.string().regex(/^E\d{1,4}$/), CiteRef);
+export type CiteRefs = z.infer<typeof CiteRefs>;
+
+// Merges: one thread carried into another, like a merge commit. Nothing is
+// rewritten: the AI drafts a summary (or the exchanges are taken as they
+// are), the learner edits and accepts it, and from then on it goes in front
+// of the target's next question. The card is shown where the source left
+// from (for a side question) or where the merge happened.
+export const MergeStatus = z.enum(['drafting', 'draft', 'failed', 'merged', 'undone', 'discarded']);
+export const MergeMode = z.enum(['summary', 'full']);
+export type MergeMode = z.infer<typeof MergeMode>;
+export const Merge = z.object({
+  id: Id,
+  sourceThreadId: Id,
+  targetThreadId: Id,
+  sourceTitle: z.string(),
+  targetTitle: z.string(),
+  mode: MergeMode,
+  /** Markdown with [E#] citations into the source. */
+  summary: z.string(),
+  refs: CiteRefs,
+  status: MergeStatus,
+  error: z.string().nullable(),
+  /** When reading the target, the card sits after this message (null: before the first). */
+  afterMessageId: Id.nullable(),
+  /** For a side question merged back: the passage it came from. */
+  quote: z.string().nullable(),
+  createdAt: z.string(),
+  mergedAt: z.string().nullable(),
+});
+export type Merge = z.infer<typeof Merge>;
+export const StartMergeRequest = z.object({ id: Id, into: Id, mode: MergeMode.default('summary') });
+export const EditMergeRequest = z.object({ summary: z.string().trim().min(1).max(20_000) });
+export const RedraftMergeRequest = z.object({ mode: MergeMode });
+
 export const ThreadDetail = z.object({
   thread: Thread,
   messages: z.array(Message),
@@ -117,6 +156,10 @@ export const ThreadDetail = z.object({
   origin: Origin.nullable(),
   /** Ancestors, outermost first, for the breadcrumb. */
   path: z.array(z.object({ id: Id, title: z.string() })),
+  /** Threads merged into this one. */
+  merges: z.array(Merge),
+  /** This thread's merges into others: a draft being prepared, and merges done. */
+  outgoing: z.array(Merge),
 });
 export type ThreadDetail = z.infer<typeof ThreadDetail>;
 
@@ -152,6 +195,8 @@ export interface MapNode {
   origin: { messageId: string; exact: string } | null;
   /** A branch made its own thread: shown as a link, its exchanges are on its own map. */
   split: boolean;
+  /** Merged into another thread (its summary is there). */
+  mergedIntoId: string | null;
   exchanges: MapExchange[];
 }
 const MapExchangeSchema: z.ZodType<MapExchange> = z.lazy(() =>
@@ -171,6 +216,7 @@ export const MapNodeSchema: z.ZodType<MapNode> = z.lazy(() =>
     title: z.string(),
     origin: z.object({ messageId: Id, exact: z.string() }).nullable(),
     split: z.boolean(),
+    mergedIntoId: Id.nullable(),
     exchanges: z.array(MapExchangeSchema),
   }),
 );
@@ -213,10 +259,6 @@ export const NoteBlock = z.object({
   proposal: Proposal.nullable(),
 });
 export type NoteBlock = z.infer<typeof NoteBlock>;
-/** Where a citation label in a note ([E3]) points: the exact message it came from. */
-export const CiteRef = z.object({ threadId: Id, messageId: Id });
-export const CiteRefs = z.record(z.string().regex(/^E\d{1,4}$/), CiteRef);
-export type CiteRefs = z.infer<typeof CiteRefs>;
 export const Note = z.object({
   id: Id,
   notebookId: Id,
@@ -259,6 +301,8 @@ export const MoveBlockRequest = z.object({ after: Id.nullable() });
 export const SuggestRequest = z.object({ instruction: Instruction });
 /** Move blocks out into a new note (a section, or everything from one block down). */
 export const MoveOutRequest = z.object({ id: Id, blockIds: z.array(Id).min(1).max(5000) });
+/** Bring every block of another note into this one, after `after` (null: at the end). The other note is removed. */
+export const MergeNoteRequest = z.object({ from: Id, after: Id.nullable().default(null) });
 /** Rename a note. Its text changes block by block. */
 export const UpdateNoteRequest = z.object({ title: z.string().trim().min(1).max(200) });
 export type UpdateNoteRequest = z.infer<typeof UpdateNoteRequest>;

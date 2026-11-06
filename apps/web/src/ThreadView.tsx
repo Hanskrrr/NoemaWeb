@@ -6,6 +6,7 @@ import {
   createAnchor,
   isLive,
   isTerminal,
+  type Merge,
   type Message,
   type MessageError,
   type MessageStatus,
@@ -18,6 +19,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { ApiFailure, api, watchMessage } from './api.ts';
 import { Composer } from './Composer.tsx';
 import { EditableTitle } from './EditableTitle.tsx';
+import { MergeCard, MergePicker, OutgoingMerges } from './Merges.tsx';
 import { MessageView } from './MessageView.tsx';
 import { highlight, selectionToSource, sourceToRange } from './markdown/selection.ts';
 import { keys, storage } from './storage.ts';
@@ -119,8 +121,13 @@ export function ThreadView({
   onOpenSettings,
   onOpenMap,
   onOpenNote,
+  onCite,
+  threads,
 }: {
   threadId: string;
+  /** Every thread, to choose one to merge into. */
+  threads: Thread[];
+  onCite: (threadId: string, messageId: string) => void;
   returningFrom?: string | undefined;
   /** Scroll to this exact message and flash it (from the map, a note citation or search). */
   message?: string | undefined;
@@ -136,6 +143,9 @@ export function ThreadView({
   const [origin, setOrigin] = useState<Origin | null>(null);
   const [path, setPath] = useState<Array<{ id: string; title: string }>>([]);
   const [branches, setBranches] = useState<BranchSummary[]>([]);
+  const [merges, setMerges] = useState<Merge[]>([]);
+  const [outgoing, setOutgoing] = useState<Merge[]>([]);
+  const [picking, setPicking] = useState(false);
   const [messages, dispatch] = useReducer(reducer, []);
   const [loaded, setLoaded] = useState(false);
   const [missing, setMissing] = useState(false);
@@ -199,6 +209,8 @@ export function ThreadView({
         setOrigin(detail.origin);
         setPath(detail.path);
         setBranches(detail.branches);
+        setMerges(detail.merges);
+        setOutgoing(detail.outgoing);
         dispatch({ type: 'reset', messages: detail.messages });
         setLoaded(true);
         for (const m of detail.messages) if (isLive(m.status)) watch(m.id);
@@ -354,6 +366,38 @@ export function ThreadView({
     }
   };
 
+  // Merging this thread into another: a draft here, a card there.
+  const onMergeChange = useCallback(
+    (m: Merge) => {
+      setOutgoing((list) => {
+        const rest = list.filter((x) => x.id !== m.id);
+        return ['discarded', 'undone'].includes(m.status) ? rest : [...rest, m];
+      });
+      if (m.status === 'merged' || m.status === 'undone') onChanged();
+    },
+    [onChanged],
+  );
+
+  const startMerge = async (into: string) => {
+    setPicking(false);
+    try {
+      const m = await api.startMerge(threadId, ulid(), into, 'summary');
+      setOutgoing((list) => [...list.filter((x) => x.status === 'merged'), m]);
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
+
+  const undoMerged = async (m: Merge) => {
+    try {
+      await api.undoMerge(m.id);
+      setMerges((list) => list.filter((x) => x.id !== m.id));
+      onChanged();
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
+
   // Make this side question its own thread, or put it back. Reload: its path changes.
   const split = async (next: boolean) => {
     try {
@@ -398,6 +442,8 @@ export function ThreadView({
             onRename={rename}
             onOpenMap={() => onOpenMap(threadId)}
             onRewrite={() => void rewrite()}
+            canMerge={messages.some((m) => m.role === 'assistant' && m.status === 'done')}
+            onMerge={() => setPicking((p) => !p)}
           />
         )}
         {origin && (
@@ -409,22 +455,65 @@ export function ThreadView({
             onOpen={(id) => onNavigate(id)}
             split={Boolean(thread?.splitAt)}
             onSplit={(next) => void split(next)}
+            onMergeBack={
+              messages.some((m) => m.role === 'assistant' && m.status === 'done') &&
+              !outgoing.some((m) => m.targetThreadId === origin.parentThreadId && m.status !== 'merged')
+                ? () => void startMerge(origin.parentThreadId)
+                : undefined
+            }
           />
         )}
+        {picking && (
+          <MergePicker
+            threads={threads}
+            from={threadId}
+            onPick={(id) => void startMerge(id)}
+            onCancel={() => setPicking(false)}
+          />
+        )}
+        <OutgoingMerges
+          merges={outgoing}
+          onChange={onMergeChange}
+          onOpenTarget={(id) => onNavigate(id)}
+          onCite={onCite}
+        />
         {loaded && messages.length === 0 && !origin && (
           <div className="empty">
             <p className="empty-title">Ask anything you are studying.</p>
           </div>
         )}
+        {merges
+          .filter((x) => !x.afterMessageId || !byId.has(x.afterMessageId))
+          .map((x) => (
+            <MergeCard
+              key={x.id}
+              merge={x}
+              onOpenSource={(id) => onNavigate(id)}
+              onCite={onCite}
+              onUndo={() => void undoMerged(x)}
+            />
+          ))}
         {messages.map((m) => (
-          <MessageView
-            key={m.id}
-            message={m}
-            branches={branchesByMessage.get(m.id) ?? []}
-            onStop={() => void stop(m.id)}
-            onOpenSettings={onOpenSettings}
-            onOpenBranch={(id) => onNavigate(id)}
-          />
+          <div key={m.id} className="message-slot">
+            <MessageView
+              message={m}
+              branches={branchesByMessage.get(m.id) ?? []}
+              onStop={() => void stop(m.id)}
+              onOpenSettings={onOpenSettings}
+              onOpenBranch={(id) => onNavigate(id)}
+            />
+            {merges
+              .filter((x) => x.afterMessageId === m.id)
+              .map((x) => (
+                <MergeCard
+                  key={x.id}
+                  merge={x}
+                  onOpenSource={(id) => onNavigate(id)}
+                  onCite={onCite}
+                  onUndo={() => void undoMerged(x)}
+                />
+              ))}
+          </div>
         ))}
         {loaded && messages.length > 0 && branches.length === 0 && !origin && messages.length <= 2 && (
           <p className="hint">Tip: select any passage to ask about it in a side branch.</p>
@@ -478,12 +567,16 @@ function ThreadHeader({
   onRename,
   onOpenMap,
   onRewrite,
+  canMerge,
+  onMerge,
 }: {
   title: string;
   canRewrite: boolean;
   onRename: (title: string) => Promise<void>;
   onOpenMap: () => void;
   onRewrite: () => void;
+  canMerge: boolean;
+  onMerge: () => void;
 }) {
   return (
     <header className="thread-head">
@@ -502,6 +595,16 @@ function ThreadHeader({
         >
           Rewrite as note
         </button>
+        <button
+          type="button"
+          className="quiet"
+          onClick={onMerge}
+          disabled={!canMerge}
+          title="Carry what this thread found into another thread"
+          data-testid="merge-into"
+        >
+          Merge into…
+        </button>
       </div>
     </header>
   );
@@ -515,6 +618,7 @@ function OriginCard({
   onOpen,
   split,
   onSplit,
+  onMergeBack,
 }: {
   parentTitle: string;
   exact: string;
@@ -524,6 +628,8 @@ function OriginCard({
   /** Absent for a branch not yet asked. */
   split?: boolean;
   onSplit?: (split: boolean) => void;
+  /** Absent until there is an answer to merge, or while a merge back is being drafted. */
+  onMergeBack?: (() => void) | undefined;
 }) {
   const quote = exact.length > 600 ? `${exact.slice(0, 600)}…` : exact;
   return (
@@ -566,6 +672,17 @@ function OriginCard({
               data-testid="split"
             >
               ↗ Make it its own thread
+            </button>
+          )}
+          {onMergeBack && (
+            <button
+              type="button"
+              className="quiet"
+              onClick={onMergeBack}
+              title="Carry what this side question found back into the thread it came from"
+              data-testid="merge-back"
+            >
+              ⤶ Merge back into {parentTitle || 'the thread'}
             </button>
           )}
         </div>

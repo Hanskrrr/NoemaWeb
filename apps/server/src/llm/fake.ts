@@ -77,6 +77,19 @@ export class FakeProvider implements ModelProvider {
       yield { type: 'finish', reason: 'stop' };
       return;
     }
+    if (req.purpose === 'merge') {
+      // A predictable summary that names what it read, so tests can follow it.
+      const all = req.messages.map((m) => m.content).join('\n');
+      if (all.includes('[[fail-merge]]')) throw new ProviderError('rate_limit', 'fake failure: rate_limit');
+      const labels = [...all.matchAll(/^\[(E\d+)\] Question:/gm)].map((m) => m[1]);
+      const text = `- What the side question found${labels.length > 0 ? ` [${labels.join(', ')}]` : ''}.\n- One more point to keep.`;
+      for (const part of text.match(/[\s\S]{1,12}/g) ?? []) {
+        await sleep(this.delayMs, req.signal);
+        yield { type: 'text', text: part };
+      }
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
     if (req.purpose === 'suggest') {
       // A predictable suggestion that says what it was asked, so tests can follow it.
       const instruction = /Instruction: (.*)$/s.exec(question)?.[1]?.trim() ?? '';

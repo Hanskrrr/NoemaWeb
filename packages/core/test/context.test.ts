@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { assembleContext, ContextBudgetError, estimateTokens, formatOrigin, MAX_ORIGIN_CHARS } from '../src/index.ts';
+import {
+  assembleContext,
+  ContextBudgetError,
+  estimateTokens,
+  formatMerged,
+  formatOrigin,
+  MAX_ORIGIN_CHARS,
+} from '../src/index.ts';
 
 const h = (id: string, role: 'user' | 'assistant', content: string) => ({ id, role, content });
 
@@ -122,4 +129,43 @@ test('very long origin quotes are shortened for the model', () => {
   const text = formatOrigin('x'.repeat(MAX_ORIGIN_CHARS + 50));
   assert.ok(text.endsWith('…'));
   assert.ok(text.length < MAX_ORIGIN_CHARS + 100);
+});
+
+test('a merged thread goes in front of the question after the merge, and stays there', () => {
+  const merged = { id: 'm1', title: 'Why offline?', text: '- It answers the same way [E1], so tests can check text [E2].' };
+  assert.equal(
+    formatMerged(merged),
+    'Merged into this conversation from "Why offline?":\n\n- It answers the same way, so tests can check text.',
+  );
+  const base = {
+    system: 'You are Noema.',
+    history: [h('u1', 'user', 'What is a gradient?'), h('a1', 'assistant', 'Steepest ascent.')],
+    budgetTokens: 2000,
+  };
+  // The first question after merging carries it.
+  const first = assembleContext({ ...base, mergedNow: [merged], question: { id: 'u2', content: 'So why descend?' } });
+  assert.equal(first.messages.at(-1)?.content, `${formatMerged(merged)}\n\n---\n\nSo why descend?`);
+  assert.deepEqual(
+    first.manifest.parts.map((p) => p.kind),
+    ['system', 'history', 'history', 'merged', 'question'],
+  );
+  // Later, it stays with that question in the history: the earlier requests are a prefix of later ones.
+  const second = assembleContext({
+    ...base,
+    history: [...base.history, { ...h('u2', 'user', 'So why descend?'), merged: [merged] }, h('a2', 'assistant', 'To go down.')],
+    question: { id: 'u3', content: 'And the step size?' },
+  });
+  assert.deepEqual(second.messages.slice(0, first.messages.length), first.messages);
+  assert.deepEqual(
+    second.manifest.parts.map((p) => p.kind),
+    ['system', 'history', 'history', 'merged', 'history', 'history', 'question'],
+  );
+  // In a branch the merged text comes first, then the passage, then the question.
+  const branch = assembleContext({
+    ...base,
+    origin: { quote: 'steepest' },
+    mergedNow: [merged],
+    question: { id: 'b1', content: 'Why?' },
+  });
+  assert.match(branch.messages.at(-1)?.content ?? '', /^Merged into[\s\S]*---\n\nAbout this passage[\s\S]*\n\nWhy\?$/);
 });

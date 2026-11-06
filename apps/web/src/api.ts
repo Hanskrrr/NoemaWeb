@@ -8,6 +8,7 @@ import {
   CLIENT_HEADER_VALUE,
   type CreateBranchRequest,
   CreateBranchResponse,
+  DeleteThreadResponse,
   Health,
   type InsertBlockRequest,
   Merge,
@@ -33,6 +34,7 @@ import {
   ThreadDetail,
   ThreadList,
   ThreadMap,
+  Trash,
   type UpdateModelSettingsRequest,
 } from '@noema/core';
 import { z } from 'zod';
@@ -119,6 +121,10 @@ export const api = {
   splitOff: (threadId: string, id: string, messageId: string) =>
     call(Thread, 'POST', `/api/threads/${threadId}/split-off`, { id, messageId }),
   joinBack: (threadId: string) => call(Thread, 'POST', `/api/threads/${threadId}/join-back`, {}),
+  deleteThread: (threadId: string) => call(DeleteThreadResponse, 'DELETE', `/api/threads/${threadId}`),
+  restoreThread: (threadId: string) => call(Thread, 'POST', `/api/threads/${threadId}/restore`, {}),
+  restoreNote: (noteId: string) => call(Note, 'POST', `/api/notes/${noteId}/restore`, {}),
+  trash: (notebookId: string) => call(Trash, 'GET', `/api/notebooks/${notebookId}/trash`),
   // Blocks: every change answers with the whole note.
   insertBlock: (noteId: string, req: InsertBlockRequest) => call(Note, 'POST', `/api/notes/${noteId}/blocks`, req),
   editBlock: (noteId: string, blockId: string, content: string) =>

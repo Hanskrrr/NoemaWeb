@@ -28,6 +28,7 @@ import {
   type Notebook,
   type OpenBranch,
   type Origin,
+  type Trash,
   plainText,
   parseQuery,
   type SearchHit,
@@ -68,6 +69,7 @@ function toThread(r: Row): Thread {
     splitAt: (r.split_at as string | null | undefined) ?? null,
     mergedIntoId: (r.merged_into as string | null | undefined) ?? null,
     continuedFromId: (r.continued_from as string | null | undefined) ?? null,
+    deletedAt: (r.deleted_at as string | null | undefined) ?? null,
     title: r.title as string,
     titleSource: ((r.title_source as string | undefined) ?? 'question') as Thread['titleSource'],
     createdAt: r.created_at as string,
@@ -110,6 +112,7 @@ function toNote(r: Row, blocks: NoteBlock[]): Note {
     error: (r.error as string | null) ?? null,
     author: r.author as Note['author'],
     revision: r.revision as number,
+    deletedAt: (r.deleted_at as string | null | undefined) ?? null,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };
@@ -250,7 +253,7 @@ export class Repo {
   listThreads(notebookId: string): Thread[] {
     return (
       this.db.sql
-        .prepare(`${THREAD_SELECT} WHERE t.notebook_id = ? ORDER BY t.updated_at DESC`)
+        .prepare(`${THREAD_SELECT} WHERE t.notebook_id = ? AND t.deleted_at IS NULL ORDER BY t.updated_at DESC`)
         .all(notebookId) as Row[]
     ).map(toThread);
   }
@@ -282,6 +285,7 @@ export class Repo {
         splitAt: null,
         mergedIntoId: null,
         continuedFromId: null,
+        deletedAt: null,
         title,
         titleSource: 'question',
         createdAt: t,
@@ -328,6 +332,7 @@ export class Repo {
         return { pair: existing, created: false };
       }
       if (this.getMessage(userMessageId)) throw new ConflictError('message id already used');
+      this.notInTrash(threadId);
       const t = now();
       const seqRow = this.db.sql
         .prepare('SELECT COALESCE(MAX(seq), -1) + 1 AS next FROM message WHERE thread_id = ?')
@@ -417,6 +422,105 @@ export class Repo {
     });
   }
 
+  // Trash ---------------------------------------------------------------------
+  //
+  // Deleting a thread hides it, and the side questions asked from it (and
+  // from them), everywhere: the sidebar, search, maps, the list of side
+  // questions left open. Nothing is removed, so restoring brings it all back
+  // as it was. Threads that left it to be their own (made their own thread,
+  // or split off at a question) are their own: they stay. Merges stay where
+  // they were merged, notes stay, and so do their citations.
+
+  private notInTrash(threadId: string): void {
+    const row = this.db.sql.prepare('SELECT deleted_at FROM thread WHERE id = ?').get(threadId) as Row | undefined;
+    if (row?.deleted_at) throw new ConflictError('this thread is in the Trash: restore it first');
+  }
+
+  /** The side questions below a thread that are still its (not their own threads), not already deleted. */
+  private sideQuestionsBelow(threadId: string): string[] {
+    const stmt = this.db.sql.prepare(
+      'SELECT id FROM thread WHERE parent_thread_id = ? AND split_at IS NULL AND deleted_at IS NULL',
+    );
+    const out: string[] = [];
+    const walk = (id: string) => {
+      for (const r of stmt.all(id) as Row[]) {
+        out.push(r.id as string);
+        walk(r.id as string);
+      }
+    };
+    walk(threadId);
+    return out;
+  }
+
+  /** To the Trash, with its side questions. Returns how many threads went. Idempotent. */
+  deleteThread(threadId: string): number {
+    return this.db.tx(() => {
+      const thread = this.getThread(threadId);
+      if (!thread) throw new NotFoundError('thread');
+      if (thread.deletedAt) return 0;
+      const along = this.sideQuestionsBelow(threadId);
+      if ([threadId, ...along].some((id) => this.hasLiveAnswer(id))) throw new ConflictError('wait for the answer to finish');
+      const t = now();
+      this.db.sql.prepare('UPDATE thread SET deleted_at = ?, deleted_with = NULL WHERE id = ?').run(t, threadId);
+      const take = this.db.sql.prepare('UPDATE thread SET deleted_at = ?, deleted_with = ? WHERE id = ?');
+      for (const id of along) take.run(t, threadId, id);
+      this.logEvent('thread.deleted', threadId, { sideQuestions: along.length });
+      return 1 + along.length;
+    });
+  }
+
+  /**
+   * Back from the Trash with everything that went with it. A side question
+   * whose thread is in the Trash too brings that thread back as well, so it
+   * is never shown without where it came from.
+   */
+  restoreThread(threadId: string): Thread {
+    return this.db.tx(() => {
+      let row = this.db.sql
+        .prepare('SELECT id, parent_thread_id, split_at, deleted_at, deleted_with FROM thread WHERE id = ?')
+        .get(threadId) as Row | undefined;
+      if (!row) throw new NotFoundError('thread');
+      const back = this.db.sql.prepare(
+        'UPDATE thread SET deleted_at = NULL, deleted_with = NULL WHERE id = ? OR deleted_with = ?',
+      );
+      const seen = new Set<string>();
+      while (row?.deleted_at && !seen.has(row.id as string)) {
+        seen.add(row.id as string);
+        const batch = (row.deleted_with as string | null) ?? (row.id as string);
+        back.run(batch, batch);
+        this.logEvent('thread.restored', batch);
+        if (!row.parent_thread_id || row.split_at) break;
+        row = this.db.sql
+          .prepare('SELECT id, parent_thread_id, split_at, deleted_at, deleted_with FROM thread WHERE id = ?')
+          .get(row.parent_thread_id as string) as Row | undefined;
+      }
+      return this.getThread(threadId) as Thread;
+    });
+  }
+
+  /** What is in the Trash, last deleted first. */
+  trash(notebookId: string): Trash {
+    const threads = this.db.sql
+      .prepare(
+        `SELECT t.id, t.title, t.deleted_at, (SELECT count(*) FROM thread w WHERE w.deleted_with = t.id) AS along
+         FROM thread t WHERE t.notebook_id = ? AND t.deleted_at IS NOT NULL AND t.deleted_with IS NULL
+         ORDER BY t.deleted_at DESC`,
+      )
+      .all(notebookId) as Row[];
+    const notes = this.db.sql
+      .prepare('SELECT id, title, deleted_at FROM note WHERE notebook_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC')
+      .all(notebookId) as Row[];
+    return {
+      threads: threads.map((r) => ({
+        threadId: r.id as string,
+        title: r.title as string,
+        deletedAt: r.deleted_at as string,
+        sideQuestions: r.along as number,
+      })),
+      notes: notes.map((r) => ({ noteId: r.id as string, title: r.title as string, deletedAt: r.deleted_at as string })),
+    };
+  }
+
   // New thread from here ------------------------------------------------------
   //
   // A thread that drifted into a second subject is cut at a question: that
@@ -444,6 +548,7 @@ export class Repo {
       if (!q) throw new InvalidError('no such question in this thread');
       if (q.role !== 'user') throw new InvalidError('a thread is split at a question, not an answer');
       if ((q.seq as number) === 0) throw new InvalidError('that is the first question: the whole thread would move');
+      this.notInTrash(threadId);
       if (this.hasLiveAnswer(threadId)) throw new ConflictError('wait for the answer to finish');
       const at = q.seq as number;
       const first = this.getMessage(messageId) as Message;
@@ -564,7 +669,9 @@ export class Repo {
   private continuedIn(threadId: string): Continuation[] {
     return (
       this.db.sql
-        .prepare('SELECT id, title FROM thread WHERE continued_from = ? ORDER BY continued_at_seq, created_at')
+        .prepare(
+          'SELECT id, title FROM thread WHERE continued_from = ? AND deleted_at IS NULL ORDER BY continued_at_seq, created_at',
+        )
         .all(threadId) as Row[]
     ).map((r) => ({ threadId: r.id as string, title: r.title as string }));
   }
@@ -748,6 +855,8 @@ export class Repo {
       const existing = this.getMerge(id);
       if (existing) return { merge: existing, created: false };
       if (!this.getThread(sourceId) || !this.getThread(targetId)) throw new NotFoundError('thread');
+      this.notInTrash(sourceId);
+      this.notInTrash(targetId);
       if (sourceId === targetId) throw new InvalidError('a thread cannot be merged into itself');
       if (this.descendantsOf(sourceId).has(targetId)) {
         throw new InvalidError('a side question already sees the conversation it came from; merge the other way');
@@ -976,7 +1085,9 @@ export class Repo {
 
   listNotes(notebookId: string): Note[] {
     return (
-      this.db.sql.prepare('SELECT * FROM note WHERE notebook_id = ? ORDER BY updated_at DESC').all(notebookId) as Row[]
+      this.db.sql
+        .prepare('SELECT * FROM note WHERE notebook_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC')
+        .all(notebookId) as Row[]
     ).map((r) => toNote(r, []));
   }
 
@@ -1095,19 +1206,37 @@ export class Repo {
     });
   }
 
+  /** To the Trash: hidden from the list and from search, kept as it is. */
   deleteNote(id: string): boolean {
     return this.db.tx(() => {
-      const result = this.db.sql.prepare('DELETE FROM note WHERE id = ?').run(id);
-      if (Number(result.changes) === 0) return false;
-      this.unindexNote(id);
-      this.logEvent('note.deleted', id);
+      const row = this.db.sql.prepare('SELECT status, deleted_at FROM note WHERE id = ?').get(id) as Row | undefined;
+      if (!row) return false;
+      if (row.status === 'generating') throw new ConflictError('wait for the note to finish');
+      if (!row.deleted_at) {
+        this.db.sql.prepare('UPDATE note SET deleted_at = ? WHERE id = ?').run(now(), id);
+        this.logEvent('note.deleted', id);
+      }
       return true;
+    });
+  }
+
+  /** Back from the Trash, as it was. */
+  restoreNote(id: string): Note {
+    return this.db.tx(() => {
+      const note = this.getNote(id);
+      if (!note) throw new NotFoundError('note');
+      if (note.deletedAt) {
+        this.db.sql.prepare('UPDATE note SET deleted_at = NULL WHERE id = ?').run(id);
+        this.logEvent('note.restored', id);
+      }
+      return this.getNote(id) as Note;
     });
   }
 
   private editable(noteId: string): Note {
     const note = this.getNote(noteId);
     if (!note) throw new NotFoundError('note');
+    if (note.deletedAt) throw new ConflictError('this note is in the Trash: restore it first');
     if (note.status === 'generating') throw new ConflictError('wait for the note to finish before changing it');
     return note;
   }
@@ -1539,6 +1668,7 @@ export class Repo {
       }
       const parent = this.getThread(parentThreadId);
       if (!parent) throw new InvalidError('parent thread not found');
+      this.notInTrash(parentThreadId);
       const message = this.getMessage(at.messageId);
       if (!message || message.threadId !== parentThreadId) throw new InvalidError('that message is not in this thread');
       if (isLive(message.status)) throw new ConflictError('wait for the answer to finish before branching from it');
@@ -1589,7 +1719,7 @@ export class Repo {
       .prepare(
         `SELECT t.id AS thread_id, t.title, t.created_at AS thread_created_at, a.*
          FROM thread t JOIN anchor a ON a.id = t.origin_anchor_id
-         WHERE t.parent_thread_id = ? ORDER BY t.created_at`,
+         WHERE t.parent_thread_id = ? AND t.deleted_at IS NULL ORDER BY t.created_at`,
       )
       .all(threadId) as Row[];
     return rows.map((r) => ({
@@ -1921,7 +2051,7 @@ export class Repo {
     for (const r of rows) {
       if (r.kind === 'thread' || r.kind === 'message') {
         const thread = this.getThread(r.thread_id);
-        if (!thread) continue;
+        if (!thread || thread.deletedAt) continue;
         if (r.kind === 'thread') {
           hits.push({
             ...none,
@@ -1951,9 +2081,9 @@ export class Repo {
           ...snippetFields(s),
         });
       } else {
-        const note = this.db.sql.prepare('SELECT id, title, updated_at FROM note WHERE id = ?').get(r.thread_id) as
-          | Row
-          | undefined;
+        const note = this.db.sql
+          .prepare('SELECT id, title, updated_at FROM note WHERE id = ? AND deleted_at IS NULL')
+          .get(r.thread_id) as Row | undefined;
         if (!note) continue;
         const base = { ...none, noteId: note.id as string, title: note.title as string, path: [], at: note.updated_at as string };
         if (r.kind === 'note') {
@@ -1995,7 +2125,7 @@ export class Repo {
          JOIN thread p ON p.id = t.parent_thread_id
          LEFT JOIN anchor a ON a.id = t.origin_anchor_id
          JOIN (SELECT thread_id, max(created_at) AS last_at FROM message GROUP BY thread_id) x ON x.thread_id = t.id
-         WHERE t.notebook_id = ? AND t.split_at IS NULL
+         WHERE t.notebook_id = ? AND t.split_at IS NULL AND t.deleted_at IS NULL
            AND EXISTS (
              SELECT 1 FROM message m JOIN message_revision r ON r.id = m.current_revision_id
              WHERE m.thread_id = t.id AND m.role = 'assistant' AND r.status = 'done')

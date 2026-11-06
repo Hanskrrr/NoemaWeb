@@ -58,7 +58,7 @@ test('a note written by hand gets a catalog, and one box holding several blocks 
   await expect(outline).toHaveText(['Plan', 'Questions', 'Type guards']);
 });
 
-test('threads that came from one another stay together in the sidebar', async ({ page, request }) => {
+test('threads that became their own are listed at the top level, right after the thread they came from', async ({ page, request }) => {
   await freshThread(request);
   await page.goto('/');
   await answered(page, 'Machine learning systems: what are they?');
@@ -85,13 +85,28 @@ test('threads that came from one another stay together in the sidebar', async ({
   await expect(page.locator('[data-testid=message]')).toHaveCount(0);
   await answered(page, 'An unrelated thread about cooking rice');
 
-  const family = page.locator(`li:has(> [data-testid=thread-link][data-thread-id="${main}"])`);
-  await expect(family.locator(`[data-testid=thread-link][data-thread-id="${own}"]`)).toContainText('↗');
-  await expect(family.locator(`[data-testid=thread-link][data-thread-id="${continued}"]`)).toContainText('↪');
-  // And asking anywhere in the family brings it all to the top.
+  // Own threads are their own, at the top level, right after the thread they came from; side questions stay under it.
+  const tops = page.locator('nav.sidebar > ul > li');
+  const ids = await tops.evaluateAll((lis) =>
+    lis.map((li) => li.querySelector(':scope > .thread-row [data-testid=thread-link]')?.getAttribute('data-thread-id')),
+  );
+  const at = ids.indexOf(main);
+  expect(ids.slice(at, at + 3)).toEqual([main, own, continued]);
+  await expect(tops.nth(at + 1)).toContainText('↗');
+  await expect(tops.nth(at + 2)).toContainText('↪');
+  // And asking anywhere in the group brings it all to the top.
   await page.locator(`[data-testid=thread-link][data-thread-id="${own}"]`).click();
   await expect(page.locator('[data-testid=message][data-role=assistant]')).toHaveCount(1);
   await answered(page, 'One more in the side question');
-  const first = page.locator('nav.sidebar > ul > li').first();
-  await expect(first.locator(`[data-testid=thread-link][data-thread-id="${main}"]`)).toHaveCount(1);
+  await expect
+    .poll(async () =>
+      (
+        await tops.evaluateAll((lis) =>
+          lis.map((li) =>
+            li.querySelector(':scope > .thread-row [data-testid=thread-link]')?.getAttribute('data-thread-id'),
+          ),
+        )
+      ).slice(0, 3),
+    )
+    .toEqual([main, own, continued]);
 });

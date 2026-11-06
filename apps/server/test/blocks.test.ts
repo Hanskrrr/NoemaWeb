@@ -372,7 +372,7 @@ test('a section moves out into its own note, keeping the thread and citations', 
   assert.equal((await api(s, 'POST', `/api/notes/${note.id}/move-out`, { id: ulid(), blockIds: [ulid()] })).status, 400);
 
   assert.equal((await api(s, 'DELETE', `/api/notes/${other}`)).status, 200);
-  assert.equal((await api(s, 'GET', `/api/notes/${other}`)).status, 404);
+  assert.ok((await api<Note>(s, 'GET', `/api/notes/${other}`)).json.deletedAt, 'in the Trash, still readable');
 });
 
 test('notes from before blocks are split into blocks at start-up, and cut-off suggestions fail', async () => {

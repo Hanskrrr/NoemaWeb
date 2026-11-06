@@ -114,9 +114,11 @@ test('a side question becomes its own thread, and can be put back', async ({ pag
 
   await page.getByTestId('split').click();
   await expect(page.getByTestId('unsplit')).toBeVisible();
-  // Its own thread now, still listed with the thread it came from.
-  await expect(nested).toHaveCount(1);
-  await expect(nested).toContainText('↗');
+  // Its own thread now: listed at the top level, right after the thread it came from.
+  await expect(nested).toHaveCount(0);
+  const own = page.locator(`nav.sidebar > ul > li:has(> .thread-row [data-thread-id="${branch}"])`);
+  await expect(own).toContainText('↗');
+  await expect(own.locator('xpath=preceding-sibling::li[1]').locator(`[data-thread-id="${parent}"]`).first()).toBeVisible();
   // Back still goes to the passage.
   await expect(page.getByTestId('origin')).toContainText('offline');
 

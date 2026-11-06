@@ -310,9 +310,27 @@ export function createApp(deps: AppDeps): App {
     sendJson(ctx.res, 200, note);
   });
 
+  // To the Trash, and back.
   router.on('DELETE', '/api/notes/:id', ({ res, params }) => {
     if (!repo.deleteNote(params.id as string)) throw notFound('note');
     sendJson(res, 200, { ok: true });
+  });
+
+  router.on('POST', '/api/notes/:id/restore', ({ res, params }) => {
+    sendJson(res, 200, repo.restoreNote(params.id as string));
+  });
+
+  router.on('DELETE', '/api/threads/:id', ({ res, params }) => {
+    sendJson(res, 200, { ok: true, deleted: repo.deleteThread(params.id as string) });
+  });
+
+  router.on('POST', '/api/threads/:id/restore', ({ res, params }) => {
+    sendJson(res, 200, repo.restoreThread(params.id as string));
+  });
+
+  router.on('GET', '/api/notebooks/:id/trash', ({ res, params }) => {
+    if (!repo.getNotebook(params.id as string)) throw notFound('notebook');
+    sendJson(res, 200, repo.trash(params.id as string));
   });
 
   // Blocks. Every change answers with the whole note, which is small.

@@ -59,6 +59,8 @@ export const Thread = z.object({
   mergedIntoId: Id.nullable(),
   /** "New thread from here": the thread this one was split off from, at one of its questions. */
   continuedFromId: Id.nullable(),
+  /** In the Trash since then; restoring brings it back as it was. */
+  deletedAt: z.string().nullable(),
   title: z.string(),
   /** question: the first question; model: written by the AI; user: renamed by the learner. */
   titleSource: z.enum(['question', 'model', 'user']),
@@ -312,11 +314,29 @@ export const Note = z.object({
   /** ai: as written by the model; user: written by the learner; ai+user: both. */
   author: NoteAuthor,
   revision: z.number().int().nonnegative(),
+  /** In the Trash since then; restoring brings it back as it was. */
+  deletedAt: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type Note = z.infer<typeof Note>;
 export const NoteSummary = Note.omit({ content: true, blocks: true, refs: true });
+
+/** What is in the Trash: threads (each with the side questions that went with it) and notes, last deleted first. */
+export const Trash = z.object({
+  threads: z.array(
+    z.object({ threadId: Id, title: z.string(), deletedAt: z.string(), sideQuestions: z.number().int().nonnegative() }),
+  ),
+  notes: z.array(z.object({ noteId: Id, title: z.string(), deletedAt: z.string() })),
+});
+export type Trash = z.infer<typeof Trash>;
+
+export const DeleteThreadResponse = z.object({
+  ok: z.literal(true),
+  /** The thread and the side questions that went to the Trash with it. */
+  deleted: z.number().int().nonnegative(),
+});
+export type DeleteThreadResponse = z.infer<typeof DeleteThreadResponse>;
 export type NoteSummary = z.infer<typeof NoteSummary>;
 export const NoteList = z.object({ notes: z.array(NoteSummary) });
 export const RewriteRequest = z.object({ id: Id });

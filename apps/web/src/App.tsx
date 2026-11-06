@@ -3,7 +3,16 @@
 // map of a thread tree, or a note).
 // Still to come: sources (M3).
 
-import { type Health, type Notebook, type NoteSummary, type OpenBranch, type SearchHit, type Thread, ulid } from '@noema/core';
+import {
+  type Health,
+  type Notebook,
+  type NoteSummary,
+  type OpenBranch,
+  type SearchHit,
+  type Thread,
+  type Trash,
+  ulid,
+} from '@noema/core';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { api } from './api.ts';
 import { expectFound } from './found.ts';
@@ -73,6 +82,9 @@ function NotebookView({
   const [route, navigate] = useRoute();
   const [threads, setThreads] = useState<Thread[] | null>(null);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
+  const [trash, setTrash] = useState<Trash>({ threads: [], notes: [] });
+  /** One line at the bottom after something went to the Trash, with Undo. */
+  const [toast, setToast] = useState<{ text: string; undo: () => void } | null>(null);
   const [draft, setDraft] = useState<BranchDraft | null>(null);
   const [focus, setFocus] = useState<Focus | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -86,9 +98,10 @@ function NotebookView({
 
   const refresh = useCallback(async () => {
     try {
-      const [t, n] = await Promise.all([api.threads(notebook.id), api.notes(notebook.id)]);
+      const [t, n, tr] = await Promise.all([api.threads(notebook.id), api.notes(notebook.id), api.trash(notebook.id)]);
       setThreads(t.threads);
       setNotes(n.notes);
+      setTrash(tr);
     } catch {
       // keep the lists we have; the views report connection problems
     }
@@ -175,6 +188,34 @@ function NotebookView({
     }
   };
 
+  const restoreThread = async (id: string) => {
+    try {
+      await api.restoreThread(id);
+      setToast(null);
+      await refresh();
+      open(id);
+    } catch {
+      // the thread view reports problems when opened
+    }
+  };
+
+  const restoreNote = async (id: string) => {
+    try {
+      await api.restoreNote(id);
+      setToast(null);
+      await refresh();
+      openNote(id);
+    } catch {
+      // the note view reports problems when opened
+    }
+  };
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 8000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
   const startNew = () => go({ kind: 'new' });
   const newNote = async () => {
     const id = ulid();
@@ -233,6 +274,16 @@ function NotebookView({
         onOpenMap={(id) => go({ kind: 'map', id })}
         onOpenNote={openNote}
         onCite={toMessage}
+        onDeleted={(t, count) => {
+          void refresh();
+          const sides = count - 1;
+          setToast({
+            text: `“${t.title || 'Untitled'}”${sides > 0 ? ` and ${sides === 1 ? 'its side question' : `${sides} side questions`}` : ''} moved to the Trash.`,
+            undo: () => void restoreThread(t.id),
+          });
+          if (t.parentThreadId && !t.splitAt) open(t.parentThreadId);
+          else go({ kind: 'new' });
+        }}
         threads={threads ?? []}
       />
     );
@@ -258,8 +309,12 @@ function NotebookView({
         onOpenNote={openNote}
         notes={notes}
         onChanged={onRefresh}
+        onRestore={onRefresh}
         onDeleted={() => {
+          const n = notes.find((x) => x.id === route.id);
+          const id = route.id;
           onRefresh();
+          setToast({ text: `“${n?.title || 'Untitled'}” moved to the Trash.`, undo: () => void restoreNote(id) });
           go({ kind: 'new' });
         }}
       />
@@ -310,6 +365,14 @@ function NotebookView({
           {health.model ?? 'Connect a model'}
         </button>
       </header>
+      {toast && (
+        <div className="toast" role="status" data-testid="app-toast">
+          {toast.text}
+          <button type="button" onClick={toast.undo} data-testid="toast-undo">
+            Undo
+          </button>
+        </div>
+      )}
       {searching && (
         <SearchDialog
           notebookId={notebook.id}
@@ -337,6 +400,10 @@ function NotebookView({
           onOpenNote={openNote}
           onNew={startNew}
           onNewNote={() => void newNote()}
+          trash={trash}
+          onRestoreThread={(id) => void restoreThread(id)}
+          onRestoreNote={(id) => void restoreNote(id)}
+          onOpenTrashed={(kind, id) => (kind === 'thread' ? open(id) : openNote(id))}
         />
         <div className="main">
           {leftOpen.length > 0 && (

@@ -91,6 +91,7 @@ function errorText(err: unknown): string {
 
 export function NoteView({
   noteId,
+  onRestore,
   block: soughtBlock,
   onCite,
   onOpenThread,
@@ -100,6 +101,8 @@ export function NoteView({
   onDeleted,
 }: {
   noteId: string;
+  /** Bring it back from the Trash. */
+  onRestore?: (() => void) | undefined;
   /** Open at this block (from search): scrolled to, flashed, the words searched for marked. */
   block?: string | undefined;
   /** The notebook's notes, to choose one to merge in. */
@@ -187,6 +190,7 @@ export function NoteView({
   if (error && !note) return <main className="thread note-page">{error}</main>;
   if (!note) return <main className="thread note-page" aria-busy />;
   const writing = note.status === 'generating';
+  const trashed = note.deletedAt !== null;
   const blocks = note.blocks;
   const catalog = catalogOf(blocks);
 
@@ -278,7 +282,7 @@ export function NoteView({
 
   // The gap above each block, and one at the end, where new blocks go.
   const gap = (after: string | null, last = false) => {
-    if (writing) return null;
+    if (writing || trashed) return null;
     const newHere = editing?.isNew && editing.after === after ? editing : null;
     const askingHere = asking && asking.after === after;
     return (
@@ -427,8 +431,31 @@ export function NoteView({
         </p>
       )}
 
+      {trashed && (
+        <div className="in-trash" role="status" data-testid="in-trash">
+          This note is in the Trash.
+          <button
+            type="button"
+            onClick={() =>
+              void api.restoreNote(note.id).then((n) => {
+                setNote(n);
+                onRestore?.();
+              }, (err: unknown) => setError(errorText(err)))
+            }
+            data-testid="restore"
+          >
+            Restore
+          </button>
+        </div>
+      )}
       <CiteContext.Provider value={{ refs: note.refs, go: onCite }}>
-        {writing ? (
+        {trashed ? (
+          <article className="note-body message-assistant">
+            <div className="message-body">
+              <Markdown source={note.content} />
+            </div>
+          </article>
+        ) : writing ? (
           <article className="note-body message-assistant">
             <div className="message-body">
               <Markdown source={note.content} />

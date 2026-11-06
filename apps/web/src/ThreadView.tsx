@@ -194,9 +194,12 @@ export function ThreadView({
   onOpenMap,
   onOpenNote,
   onCite,
+  onDeleted,
   threads,
 }: {
   threadId: string;
+  /** It went to the Trash (with this many threads, side questions included). */
+  onDeleted: (thread: Thread, count: number) => void;
   /** Every thread, to choose one to merge into. */
   threads: Thread[];
   onCite: (threadId: string, messageId: string) => void;
@@ -219,6 +222,7 @@ export function ThreadView({
   const [outgoing, setOutgoing] = useState<Merge[]>([]);
   const [continuedFrom, setContinuedFrom] = useState<ContinuedFrom | null>(null);
   const [continuedIn, setContinuedIn] = useState<Continuation[]>([]);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   /** The question a new thread would start from, while the learner confirms. */
   const [cutting, setCutting] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
@@ -488,6 +492,26 @@ export function ThreadView({
     }
   };
 
+  const remove = async () => {
+    if (!thread) return;
+    try {
+      const r = await api.deleteThread(threadId);
+      setConfirmDelete(false);
+      onDeleted(thread, r.deleted);
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
+
+  const restore = async () => {
+    try {
+      setThread(await api.restoreThread(threadId));
+      onChanged();
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
+
   // New thread from here: this question and everything after it move into a thread of their own.
   const splitOff = async (messageId: string) => {
     const id = ulid();
@@ -550,6 +574,23 @@ export function ThreadView({
             onRewrite={() => void rewrite()}
             canMerge={messages.some((m) => m.role === 'assistant' && m.status === 'done')}
             onMerge={() => setPicking((p) => !p)}
+            onDelete={thread.deletedAt ? undefined : () => setConfirmDelete((c) => !c)}
+          />
+        )}
+        {thread?.deletedAt && (
+          <div className="in-trash" role="status" data-testid="in-trash">
+            This thread is in the Trash.
+            <button type="button" onClick={() => void restore()} data-testid="restore">
+              Restore
+            </button>
+          </div>
+        )}
+        {confirmDelete && thread && !thread.deletedAt && (
+          <DeleteConfirm
+            title={thread.title}
+            sides={sideQuestionsOf(threads, threadId)}
+            onConfirm={() => void remove()}
+            onCancel={() => setConfirmDelete(false)}
           />
         )}
         {origin && (
@@ -677,13 +718,15 @@ export function ThreadView({
         </div>
       )}
 
-      <Composer
-        key={threadId}
-        draftKey={keys.draft(threadId)}
-        busy={Boolean(live)}
-        onSend={send}
-        onStop={() => live && void stop(live.id)}
-      />
+      {!thread?.deletedAt && (
+        <Composer
+          key={threadId}
+          draftKey={keys.draft(threadId)}
+          busy={Boolean(live)}
+          onSend={send}
+          onStop={() => live && void stop(live.id)}
+        />
+      )}
 
       {selection && (
         <button
@@ -711,6 +754,7 @@ function ThreadHeader({
   onRewrite,
   canMerge,
   onMerge,
+  onDelete,
 }: {
   title: string;
   canRewrite: boolean;
@@ -719,6 +763,8 @@ function ThreadHeader({
   onRewrite: () => void;
   canMerge: boolean;
   onMerge: () => void;
+  /** Absent for a thread already in the Trash. */
+  onDelete?: (() => void) | undefined;
 }) {
   return (
     <header className="thread-head">
@@ -747,9 +793,54 @@ function ThreadHeader({
         >
           Merge into…
         </button>
+        {onDelete && (
+          <button type="button" className="quiet faint-danger" onClick={onDelete} data-testid="thread-delete">
+            Delete
+          </button>
+        )}
       </div>
     </header>
   );
+}
+
+/** Asked before a thread goes to the Trash: what goes with it, and that it can come back. */
+function DeleteConfirm({
+  title,
+  sides,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  sides: number;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <section className="split-off-confirm delete-confirm" data-testid="thread-delete-confirm" aria-label="Delete thread">
+      <p>
+        <strong>Delete “{title || 'Untitled'}”</strong>
+        {sides > 0 ? ` and ${sides === 1 ? 'its side question' : `its ${sides} side questions`}` : ''}? It goes to the
+        Trash, where you can restore it. Threads that became their own stay, and so do notes.
+      </p>
+      <div className="proposal-actions">
+        <button type="button" className="danger" onClick={onConfirm} data-testid="thread-delete-yes">
+          Delete
+        </button>
+        <button type="button" className="quiet" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/** The side questions that go to the Trash with a thread: those still its own, at any depth. */
+function sideQuestionsOf(threads: Thread[], id: string): number {
+  let n = 0;
+  for (const t of threads) {
+    if (t.parentThreadId === id && !t.splitAt) n += 1 + sideQuestionsOf(threads, t.id);
+  }
+  return n;
 }
 
 /** What moves with a new thread started at this question: it and every question after it, and their side questions. */

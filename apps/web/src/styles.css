@@ -569,6 +569,115 @@ button.quiet:hover {
   font-size: 0.85rem;
 }
 
+/* A row: the caret that folds a thread's side questions, then its title. */
+.thread-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.thread-row .thread-link {
+  flex: 1;
+  min-width: 0;
+}
+
+.fold,
+.fold-space {
+  flex: none;
+  width: 1.1rem;
+}
+
+.fold {
+  padding: 0.3rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 0.7rem;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.fold:hover,
+.fold:focus-visible {
+  color: var(--ink);
+}
+
+.fold-count {
+  flex: none;
+  min-width: 1.3rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  color: var(--ink-faint);
+  font-size: 0.72rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.trash-item .fold-count {
+  background: none;
+}
+
+.sidebar-trash {
+  margin-top: 1rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--rule);
+}
+
+.trash-toggle {
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+  padding-left: 0.3rem;
+}
+
+.trash-item {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.trash-item .thread-link {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink-faint);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--ink-faint) 50%, transparent);
+}
+
+.trash-item button.quiet {
+  flex: none;
+  font-size: 0.78rem;
+}
+
+/* A thread or note in the Trash, open to read. */
+.in-trash {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
+  margin-bottom: 1rem;
+  padding: 0.5rem 0.6rem 0.5rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--bad) 35%, var(--rule));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bad) 6%, var(--sheet));
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.thread-actions button.faint-danger {
+  color: var(--ink-faint);
+}
+
+.thread-actions button.faint-danger:hover,
+.thread-actions button.faint-danger:focus-visible {
+  color: var(--bad);
+}
+
+.delete-confirm {
+  border-left-color: var(--bad);
+}
+
 .sidebar-empty {
   color: var(--ink-faint);
   padding: 0 0.5rem;

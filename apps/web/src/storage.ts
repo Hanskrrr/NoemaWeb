@@ -45,4 +45,6 @@ export const keys = {
   mergeOpen: (mergeId: string) => `noema:merge-open:${mergeId}`,
   /** The last thread, map or note open in this browser, and when: where Noema reopens. */
   lastPlace: 'noema:last-place',
+  /** Threads whose side questions are folded away in the sidebar. */
+  sidebarFolded: 'noema:sidebar-folded',
 };

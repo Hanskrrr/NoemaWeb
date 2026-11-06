@@ -14,6 +14,7 @@ import {
   type MessageStatus,
   type Origin,
   resolveAnchor,
+  type SourceOrigin,
   type Thread,
   ulid,
 } from '@noema/core';
@@ -33,6 +34,16 @@ export interface Focus {
   messageId: string;
   start: number;
   end: number;
+}
+
+/** A passage of a source being asked about, before its first question. The thread is created on the first send. */
+export interface SourceDraft {
+  sourceId: string;
+  sourceTitle: string;
+  versionId: string;
+  start: number;
+  end: number;
+  exact: string;
 }
 
 /** A branch that has a passage but no question yet. It is created on the first send. */
@@ -195,9 +206,15 @@ export function ThreadView({
   onOpenNote,
   onCite,
   onDeleted,
+  onBackToSource,
+  beside = false,
   threads,
 }: {
   threadId: string;
+  /** Back to the passage of the source this thread was asked about. */
+  onBackToSource: (origin: SourceOrigin, threadId: string) => void;
+  /** Shown beside the source it was asked about (which then shows the passage itself). */
+  beside?: boolean;
   /** It went to the Trash (with this many threads, side questions included). */
   onDeleted: (thread: Thread, count: number) => void;
   /** Every thread, to choose one to merge into. */
@@ -221,6 +238,7 @@ export function ThreadView({
   const [merges, setMerges] = useState<Merge[]>([]);
   const [outgoing, setOutgoing] = useState<Merge[]>([]);
   const [continuedFrom, setContinuedFrom] = useState<ContinuedFrom | null>(null);
+  const [sourceOrigin, setSourceOrigin] = useState<SourceOrigin | null>(null);
   const [continuedIn, setContinuedIn] = useState<Continuation[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   /** The question a new thread would start from, while the learner confirms. */
@@ -295,6 +313,7 @@ export function ThreadView({
         setMerges(detail.merges);
         setOutgoing(detail.outgoing);
         setContinuedFrom(detail.continuedFrom);
+        setSourceOrigin(detail.sourceOrigin);
         setContinuedIn(detail.continuedIn);
         dispatch({ type: 'reset', messages: detail.messages });
         setLoaded(true);
@@ -615,6 +634,9 @@ export function ThreadView({
             }
           />
         )}
+        {sourceOrigin && (
+          <SourceOriginCard origin={sourceOrigin} beside={beside} onBack={() => onBackToSource(sourceOrigin, threadId)} />
+        )}
         {continuedFrom && (
           <ContinuedFromCard from={continuedFrom} onOpen={(id) => onNavigate(id)} onJoinBack={() => void joinBack()} />
         )}
@@ -632,7 +654,7 @@ export function ThreadView({
           onOpenTarget={(id) => onNavigate(id)}
           onCite={onCite}
         />
-        {loaded && messages.length === 0 && !origin && (
+        {loaded && messages.length === 0 && !origin && !sourceOrigin && (
           <div className="empty">
             <p className="empty-title">Ask anything you are studying.</p>
           </div>
@@ -695,7 +717,7 @@ export function ThreadView({
             </button>
           </p>
         ))}
-        {loaded && messages.length > 0 && branches.length === 0 && !origin && messages.length <= 2 && (
+        {loaded && messages.length > 0 && branches.length === 0 && !origin && !sourceOrigin && messages.length <= 2 && (
           <p className="hint">Tip: select any passage to ask about it in a side branch.</p>
         )}
         <div ref={bottom} />
@@ -920,6 +942,40 @@ function ContinuedFromCard({
   );
 }
 
+/** A thread asked about a passage of a source: the passage, and the way back to it in the text. */
+function SourceOriginCard({ origin, beside, onBack }: { origin: SourceOrigin; beside: boolean; onBack: () => void }) {
+  const exact = origin.passage.exact;
+  const quote = exact.length > 600 ? `${exact.slice(0, 600)}…` : exact;
+  return (
+    <section
+      className="origin source-origin"
+      data-testid="source-origin"
+      data-exact={exact}
+      aria-label="The passage this thread was asked about"
+    >
+      <div className="origin-top">
+        <button
+          type="button"
+          className="back"
+          onClick={onBack}
+          title="Close this thread and go on reading, at this passage"
+          data-testid="back"
+        >
+          {beside ? '← Back to reading' : '← Back to the text'}
+        </button>
+        <span className="origin-from">
+          from {origin.sourceTitle || 'Untitled'}
+          {origin.deleted ? ' (in the Trash)' : ''}
+        </span>
+      </div>
+      <blockquote>{quote}</blockquote>
+      {origin.latestVersionId !== origin.passage.versionId && (
+        <p className="origin-note">Asked about an earlier version of this page; the text shown is that version.</p>
+      )}
+    </section>
+  );
+}
+
 function OriginCard({
   parentTitle,
   exact,
@@ -1019,11 +1075,14 @@ function OriginCard({
 export function DraftView({
   notebookId,
   branch,
+  source = null,
   onCreated,
   onCancel,
 }: {
   notebookId: string;
   branch: BranchDraft | null;
+  /** Asking about a passage of a source, instead. */
+  source?: SourceDraft | null;
   onCreated: (threadId: string) => void;
   onCancel: () => void;
 }) {
@@ -1041,7 +1100,13 @@ export function DraftView({
     ids.current = current;
     const id = current.thread;
     try {
-      if (branch) {
+      if (source) {
+        await api.askAboutSource(source.sourceId, {
+          id,
+          passage: { versionId: source.versionId, start: source.start, end: source.end },
+          question: { id: current.question, content },
+        });
+      } else if (branch) {
         await api.createBranch(branch.parentThreadId, {
           id,
           anchor: { messageId: branch.messageId, start: branch.start, end: branch.end },
@@ -1062,7 +1127,9 @@ export function DraftView({
   return (
     <>
       <main className="thread">
-        {branch ? (
+        {source ? (
+          <OriginCard parentTitle={source.sourceTitle} exact={source.exact} onBack={onCancel} />
+        ) : branch ? (
           <OriginCard parentTitle={branch.parentTitle} exact={branch.exact} onBack={onCancel} />
         ) : (
           <div className="empty">
@@ -1080,11 +1147,17 @@ export function DraftView({
         </div>
       )}
       <Composer
-        key={branch ? `${branch.messageId}:${branch.start}` : 'new'}
-        draftKey={branch ? keys.draft(`branch:${branch.messageId}:${branch.start}-${branch.end}`) : keys.draft('new')}
+        key={source ? `${source.versionId}:${source.start}-${source.end}` : branch ? `${branch.messageId}:${branch.start}` : 'new'}
+        draftKey={
+          source
+            ? keys.draft(`source:${source.versionId}:${source.start}-${source.end}`)
+            : branch
+              ? keys.draft(`branch:${branch.messageId}:${branch.start}-${branch.end}`)
+              : keys.draft('new')
+        }
         busy={false}
         autoFocus
-        placeholder={branch ? 'Ask about this passage…' : 'Ask a question…'}
+        placeholder={source || branch ? 'Ask about this passage…' : 'Ask a question…'}
         onSend={send}
       />
     </>

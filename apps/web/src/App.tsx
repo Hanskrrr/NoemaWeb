@@ -1,7 +1,7 @@
 // The app shell: start-up, the connect screen, the header with search, the
-// sidebar of threads and notes, and which view fills the page (a thread, the
-// map of a thread tree, or a note).
-// Still to come: sources (M3).
+// sidebar of threads, sources and notes, and which view fills the page (a
+// thread, the map of a thread tree, a note, or a source). A thread asked about
+// a source, and its side questions, are shown beside that source.
 
 import {
   type Health,
@@ -9,19 +9,24 @@ import {
   type NoteSummary,
   type OpenBranch,
   type SearchHit,
+  type Source,
+  type SourceOrigin,
   type Thread,
   type Trash,
   ulid,
 } from '@noema/core';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
+import { AddSourceDialog } from './AddSource.tsx';
 import { api } from './api.ts';
 import { expectFound } from './found.ts';
 import { MapView } from './MapView.tsx';
 import { ConnectScreen, ModelDialog } from './ModelSettings.tsx';
 import { NoteView } from './NoteView.tsx';
+import { sourceFamily } from './reading.ts';
 import { parseHash, type Route, toHash, useRoute } from './route.ts';
 import { ComeBack, isTyping, SearchDialog, searchShortcut } from './Search.tsx';
 import { Sidebar } from './Sidebar.tsx';
+import { SourceView } from './SourceView.tsx';
 import { keys, storage } from './storage.ts';
 import { type BranchDraft, DraftView, type Focus, ThreadView } from './ThreadView.tsx';
 
@@ -82,7 +87,9 @@ function NotebookView({
   const [route, navigate] = useRoute();
   const [threads, setThreads] = useState<Thread[] | null>(null);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
-  const [trash, setTrash] = useState<Trash>({ threads: [], notes: [] });
+  const [sources, setSources] = useState<Source[]>([]);
+  const [trash, setTrash] = useState<Trash>({ threads: [], notes: [], sources: [] });
+  const [adding, setAdding] = useState(false);
   /** One line at the bottom after something went to the Trash, with Undo. */
   const [toast, setToast] = useState<{ text: string; undo: () => void } | null>(null);
   const [draft, setDraft] = useState<BranchDraft | null>(null);
@@ -98,9 +105,15 @@ function NotebookView({
 
   const refresh = useCallback(async () => {
     try {
-      const [t, n, tr] = await Promise.all([api.threads(notebook.id), api.notes(notebook.id), api.trash(notebook.id)]);
+      const [t, n, src, tr] = await Promise.all([
+        api.threads(notebook.id),
+        api.notes(notebook.id),
+        api.sources(notebook.id),
+        api.trash(notebook.id),
+      ]);
       setThreads(t.threads);
       setNotes(n.notes);
+      setSources(src.sources);
       setTrash(tr);
     } catch {
       // keep the lists we have; the views report connection problems
@@ -128,13 +141,17 @@ function NotebookView({
     const exists =
       place !== null &&
       place.kind !== 'new' &&
-      (place.kind === 'note' ? notes.some((n) => n.id === place.id) : threads.some((t) => t.id === place.id));
+      (place.kind === 'note'
+        ? notes.some((n) => n.id === place.id)
+        : place.kind === 'source'
+          ? sources.some((x) => x.id === place.id)
+          : threads.some((t) => t.id === place.id));
     if (place && exists && (!recent || (last?.at ?? '') >= recent.updatedAt)) {
       navigate(place, { replace: true });
       return;
     }
     navigate(recent ? { kind: 'thread', id: recent.id } : { kind: 'new' }, { replace: true });
-  }, [route, threads, notes, navigate]);
+  }, [route, threads, notes, sources, navigate]);
 
   useEffect(() => {
     if (!freshStart) return;
@@ -173,13 +190,39 @@ function NotebookView({
   const open = useCallback((id: string, from?: string) => go({ kind: 'thread', id, from }), [go]);
   const toMessage = useCallback((id: string, message: string) => go({ kind: 'thread', id, message }), [go]);
   const openNote = useCallback((id: string) => go({ kind: 'note', id }), [go]);
+  const openSource = useCallback((id: string) => go({ kind: 'source', id }), [go]);
+  /** Open a thread just made: the lists first, so it is known whether it goes beside a source. */
+  const openNew = useCallback(
+    async (id: string) => {
+      await refresh();
+      open(id);
+    },
+    [refresh, open],
+  );
+  const backToSource = useCallback(
+    (o: SourceOrigin, threadId: string) =>
+      go({
+        kind: 'source',
+        id: o.sourceId,
+        version: o.passage.versionId === o.latestVersionId ? undefined : o.passage.versionId,
+        from: threadId,
+      }),
+    [go],
+  );
 
   const openHit = (hit: SearchHit, terms: string[], rank: number, queryChars: number) => {
     void api.searchOpened({ kind: hit.kind, rank, queryChars }).catch(() => {});
-    const target = hit.messageId ?? hit.blockId;
+    const target =
+      hit.kind === 'passage' && hit.versionId && hit.offset !== null
+        ? `${hit.versionId}:${hit.offset}`
+        : (hit.messageId ?? hit.blockId);
     if (target) expectFound(target, terms);
     setJump((n) => n + 1);
-    if (hit.kind === 'message' && hit.threadId && hit.messageId) {
+    if (hit.kind === 'passage' && hit.sourceId && hit.offset !== null) {
+      go({ kind: 'source', id: hit.sourceId, at: hit.offset });
+    } else if (hit.kind === 'source' && hit.sourceId) {
+      go({ kind: 'source', id: hit.sourceId });
+    } else if (hit.kind === 'message' && hit.threadId && hit.messageId) {
       go({ kind: 'thread', id: hit.threadId, message: hit.messageId });
     } else if (hit.kind === 'thread' && hit.threadId) {
       go({ kind: 'thread', id: hit.threadId });
@@ -196,6 +239,17 @@ function NotebookView({
       open(id);
     } catch {
       // the thread view reports problems when opened
+    }
+  };
+
+  const restoreSource = async (id: string) => {
+    try {
+      await api.restoreSource(id);
+      setToast(null);
+      await refresh();
+      openSource(id);
+    } catch {
+      // the source view reports problems when opened
     }
   };
 
@@ -231,16 +285,20 @@ function NotebookView({
   const onRefresh = useCallback(() => void refresh(), [refresh]);
   const showDraft = draft && route?.kind === 'thread' && route.id === draft.parentThreadId ? draft : null;
 
+  // A thread asked about a source (or a side question of one) is shown beside it.
+  const family = route?.kind === 'thread' && threads ? sourceFamily(threads, route.id) : null;
+  const beside = family && sources.some((x) => x.id === family.sourceId) ? family : null;
+
   let main: ReactNode = null;
-  if (showDraft) {
-    main = (
+  let thread: ReactNode = null;
+  if (route?.kind === 'thread' && threads === null) {
+    // The lists are not loaded yet, so it is not known whether it goes beside a source.
+  } else if (showDraft) {
+    thread = (
       <DraftView
         notebookId={notebook.id}
         branch={showDraft}
-        onCreated={(id) => {
-          void refresh();
-          open(id);
-        }}
+        onCreated={(id) => void openNew(id)}
         onCancel={() => {
           setFocus({ messageId: showDraft.messageId, start: showDraft.start, end: showDraft.end });
           setDraft(null);
@@ -248,19 +306,9 @@ function NotebookView({
       />
     );
   } else if (route?.kind === 'new') {
-    main = (
-      <DraftView
-        notebookId={notebook.id}
-        branch={null}
-        onCreated={(id) => {
-          void refresh();
-          open(id);
-        }}
-        onCancel={() => {}}
-      />
-    );
+    main = <DraftView notebookId={notebook.id} branch={null} onCreated={(id) => void openNew(id)} onCancel={() => {}} />;
   } else if (route?.kind === 'thread') {
-    main = (
+    thread = (
       <ThreadView
         key={`${route.id}:${route.from ?? ''}:${route.message ?? ''}:${jump}`}
         threadId={route.id}
@@ -274,6 +322,8 @@ function NotebookView({
         onOpenMap={(id) => go({ kind: 'map', id })}
         onOpenNote={openNote}
         onCite={toMessage}
+        onBackToSource={backToSource}
+        beside={beside !== null}
         onDeleted={(t, count) => {
           void refresh();
           const sides = count - 1;
@@ -282,6 +332,7 @@ function NotebookView({
             undo: () => void restoreThread(t.id),
           });
           if (t.parentThreadId && !t.splitAt) open(t.parentThreadId);
+          else if (t.sourceId) openSource(t.sourceId);
           else go({ kind: 'new' });
         }}
         threads={threads ?? []}
@@ -319,6 +370,38 @@ function NotebookView({
         }}
       />
     );
+  }
+
+  // The reading pane: the same view (so the same place in the text) whether a thread is open beside it or not.
+  const reading = route?.kind === 'source' ? route : beside ? { id: beside.sourceId } : null;
+  if (reading) {
+    const r = route?.kind === 'source' ? route : null;
+    main = (
+      <SourceView
+        key={reading.id}
+        sourceId={reading.id}
+        version={r ? r.version : beside?.versionId}
+        at={r?.at}
+        focusThread={r ? r.from : beside?.rootId}
+        jump={jump}
+        arrival={route ? toHash(route) : ''}
+        notebookId={notebook.id}
+        threads={threads ?? []}
+        onOpenThread={open}
+        onVersion={(version) => go({ kind: 'source', id: reading.id, version })}
+        onAsked={(id) => void openNew(id)}
+        onChanged={onRefresh}
+        onDeleted={(x) => {
+          void refresh();
+          setToast({ text: `“${x.title || 'Untitled'}” moved to the Trash.`, undo: () => void restoreSource(x.id) });
+          go({ kind: 'new' });
+        }}
+      >
+        {thread}
+      </SourceView>
+    );
+  } else if (thread) {
+    main = thread;
   }
 
   const activeId = showDraft || !route || route.kind === 'new' ? null : route.id;
@@ -381,6 +464,17 @@ function NotebookView({
           onOpenThread={(id) => open(id)}
         />
       )}
+      {adding && (
+        <AddSourceDialog
+          notebookId={notebook.id}
+          onClose={() => setAdding(false)}
+          onAdded={(x) => {
+            setAdding(false);
+            void refresh();
+            openSource(x.id);
+          }}
+        />
+      )}
       {settingsOpen && (
         <ModelDialog
           onClose={() => setSettingsOpen(false)}
@@ -392,18 +486,30 @@ function NotebookView({
       <div className="layout">
         <Sidebar
           threads={threads ?? []}
+          sources={sources}
           notes={notes}
           activeId={activeId}
           open={sidebarOpen}
           onOpen={(id) => open(id)}
-          onJump={(branch) => branch.parentThreadId && open(branch.parentThreadId, branch.id)}
+          onJump={(t) => {
+            if (t.sourceId) {
+              const latest = sources.find((x) => x.id === t.sourceId)?.latestVersionId;
+              const version = t.sourceVersionId && t.sourceVersionId !== latest ? t.sourceVersionId : undefined;
+              go({ kind: 'source', id: t.sourceId, version, from: t.id });
+            } else if (t.parentThreadId) {
+              open(t.parentThreadId, t.id);
+            }
+          }}
           onOpenNote={openNote}
           onNew={startNew}
           onNewNote={() => void newNote()}
           trash={trash}
           onRestoreThread={(id) => void restoreThread(id)}
           onRestoreNote={(id) => void restoreNote(id)}
-          onOpenTrashed={(kind, id) => (kind === 'thread' ? open(id) : openNote(id))}
+          onOpenTrashed={(kind, id) => (kind === 'thread' ? open(id) : kind === 'source' ? openSource(id) : openNote(id))}
+          onOpenSource={openSource}
+          onAddSource={() => setAdding(true)}
+          onRestoreSource={(id) => void restoreSource(id)}
         />
         <div className="main">
           {leftOpen.length > 0 && (
@@ -431,6 +537,8 @@ function placeOf(route: Route | null): Route | null {
       return { kind: 'note', id: route.id };
     case 'map':
       return route;
+    case 'source':
+      return { kind: 'source', id: route.id, version: route.version };
     case 'new':
       return null;
   }

@@ -63,7 +63,7 @@ function renderMath(value: string, display: boolean): string {
       strict: 'ignore',
       output: 'htmlAndMathml',
     });
-    if (mathCache.size > 500) mathCache.clear();
+    if (mathCache.size > 5000) mathCache.clear(); // a long paper has many formulas
     mathCache.set(key, html);
   }
   return html;

@@ -23,7 +23,8 @@ export function isTyping(target: EventTarget | null): boolean {
 
 const short = (text: string, max = 60) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
-const hitKey = (h: SearchHit) => `${h.kind}:${h.messageId ?? h.blockId ?? h.threadId ?? h.noteId}`;
+const hitKey = (h: SearchHit) =>
+  `${h.kind}:${h.messageId ?? h.blockId ?? h.threadId ?? h.noteId ?? h.sourceId}:${h.versionId ?? ''}:${h.offset ?? ''}`;
 
 export function SearchDialog({
   notebookId,

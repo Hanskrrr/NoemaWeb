@@ -1,14 +1,17 @@
-// Threads, notes and the Trash. A thread's side questions (↳) sit under it,
+// Threads, sources, notes and the Trash. A thread's side questions (↳) sit under it,
 // in the order opened, and fold away with its caret. Threads that left a
 // thread to be their own, a side question made its own thread (↗) or a
 // thread split off at a question (↪), are threads of their own: listed at
 // the top level, right after the thread they came from, so they stay near
 // it. A group moves up as a whole when anything in it is asked in. Each side
 // question shows the passage it came from: click the passage to jump to that
-// exact spot, the title to open it.
+// exact spot, the title to open it. A source lists the threads asked about
+// its passages (›), with their side questions, under it, so a paper and
+// everything asked about it stay together.
 
-import type { NoteSummary, Thread, Trash } from '@noema/core';
+import type { NoteSummary, Source, Thread, Trash } from '@noema/core';
 import { useState } from 'react';
+import { sourceFamily } from './reading.ts';
 import { keys, storage } from './storage.ts';
 
 /** The thread this one came from, if any: the one it was asked from, or split off from. */
@@ -94,6 +97,7 @@ export function tree(threads: Thread[]): SidebarTree {
 /** How a top-level thread came out of another, or how a side question hangs under its thread. */
 function markOf(t: Thread, depth: number, byId: Map<string, Thread>): { glyph: string; label: string } | null {
   const from = (id: string | null) => byId.get(id ?? '')?.title || 'another thread';
+  if (t.sourceId) return { glyph: '›', label: `Asked about “${t.sourceQuote ?? 'a passage'}”` };
   if (t.continuedFromId) return { glyph: '↪', label: `Split off from “${from(t.continuedFromId)}” at a question` };
   if (t.splitAt) return { glyph: '↗', label: `A side question of “${from(t.parentThreadId)}”, made its own thread` };
   if (depth > 0) return { glyph: '↳', label: 'A side question' };
@@ -102,6 +106,7 @@ function markOf(t: Thread, depth: number, byId: Map<string, Thread>): { glyph: s
 
 export function Sidebar({
   threads,
+  sources,
   notes,
   activeId,
   open,
@@ -114,8 +119,12 @@ export function Sidebar({
   onRestoreThread,
   onRestoreNote,
   onOpenTrashed,
+  onOpenSource,
+  onAddSource,
+  onRestoreSource,
 }: {
   threads: Thread[];
+  sources: Source[];
   notes: NoteSummary[];
   activeId: string | null;
   open: boolean;
@@ -128,9 +137,21 @@ export function Sidebar({
   trash: Trash;
   onRestoreThread: (threadId: string) => void;
   onRestoreNote: (noteId: string) => void;
-  onOpenTrashed: (kind: 'thread' | 'note', id: string) => void;
+  onOpenTrashed: (kind: 'thread' | 'note' | 'source', id: string) => void;
+  onOpenSource: (sourceId: string) => void;
+  onAddSource: () => void;
+  onRestoreSource: (sourceId: string) => void;
 }) {
-  const { roots, children } = tree(threads);
+  // Threads asked about a source are listed under it; the rest, here.
+  const listed = new Set(sources.map((x) => x.id));
+  const sourceOf = new Map(threads.map((t) => [t.id, sourceFamily(threads, t.id)?.sourceId ?? null]));
+  const underSource = (threadId: string) => {
+    const id = sourceOf.get(threadId);
+    return id && listed.has(id) ? id : null;
+  };
+  const { roots, children } = tree(threads.filter((t) => underSource(t.id) === null));
+  const bySource = new Map(sources.map((x) => [x.id, tree(threads.filter((t) => underSource(t.id) === x.id))]));
+  for (const { children: kids } of bySource.values()) for (const [k, v] of kids) children.set(k, v);
   const byId = new Map(threads.map((t) => [t.id, t]));
   const [folded, setFolded] = useState<string[]>(() => storage.getJson<string[]>(keys.sidebarFolded, []));
   const [trashOpen, setTrashOpen] = useState(false);
@@ -145,6 +166,8 @@ export function Sidebar({
   for (let t = activeId ? byId.get(activeId) : undefined; t && isSide(t); t = byId.get(t.parentThreadId ?? '')) {
     if (t.parentThreadId) above.add(t.parentThreadId);
   }
+  const activeSource = activeId ? underSource(activeId) : null;
+  if (activeSource) above.add(activeSource);
 
   const count = (id: string): number =>
     (children.get(id) ?? []).reduce((n, k) => n + 1 + count(k.id), 0);
@@ -197,16 +220,16 @@ export function Sidebar({
             </span>
           )}
         </div>
-        {t.originQuote && isSide(t) && (
+        {((t.originQuote && isSide(t)) || t.sourceQuote) && (
           <button
             type="button"
             className="passage-link"
             onClick={() => onJump(t)}
-            title="Jump to where this side question started"
+            title={t.sourceQuote ? 'Back to this passage in the text' : 'Jump to where this side question started'}
             data-testid="passage-link"
             data-thread-id={t.id}
           >
-            “{t.originQuote}”
+            “{t.sourceQuote ?? t.originQuote}”
           </button>
         )}
         {kids.length > 0 && !closed && <ul>{kids.map((k) => item(k, depth + 1))}</ul>}
@@ -214,7 +237,53 @@ export function Sidebar({
     );
   };
 
-  const inTrash = trash.threads.length + trash.notes.length;
+  const inTrash = trash.threads.length + trash.notes.length + trash.sources.length;
+
+  const sourceItem = (x: Source) => {
+    const own = bySource.get(x.id)?.roots ?? [];
+    const closed = own.length > 0 && folded.includes(x.id) && !above.has(x.id);
+    const total = own.reduce((n, t) => n + 1 + count(t.id), 0);
+    return (
+      <li key={x.id}>
+        <div className="thread-row">
+          {own.length > 0 ? (
+            <button
+              type="button"
+              className="fold"
+              onClick={() => fold(x.id, !closed)}
+              aria-expanded={!closed}
+              aria-label={closed ? `Show the threads about ${x.title || 'this source'}` : 'Hide the threads'}
+              title={closed ? `Show ${total} threads` : 'Hide the threads'}
+              data-testid="fold"
+              data-source-id={x.id}
+            >
+              <span aria-hidden>{closed ? '▸' : '▾'}</span>
+            </button>
+          ) : (
+            <span className="fold-space" aria-hidden />
+          )}
+          <button
+            type="button"
+            className={`thread-link source-link${x.id === activeId ? ' active' : ''}`}
+            aria-current={x.id === activeId ? 'page' : undefined}
+            onClick={() => onOpenSource(x.id)}
+            title={x.url ?? 'Pasted text'}
+            data-testid="source-link"
+            data-source-id={x.id}
+          >
+            <span aria-hidden>❡ </span>
+            {x.title || 'Untitled'}
+          </button>
+          {closed && (
+            <span className="fold-count" title={`${total} threads folded away`} data-testid="fold-count">
+              {total}
+            </span>
+          )}
+        </div>
+        {own.length > 0 && !closed && <ul>{own.map((t) => item(t, 1))}</ul>}
+      </li>
+    );
+  };
 
   return (
     <nav className={`sidebar${open ? ' open' : ''}`} aria-label="Threads and notes">
@@ -222,6 +291,15 @@ export function Sidebar({
         + New thread
       </button>
       {roots.length === 0 ? <p className="sidebar-empty">No threads yet.</p> : <ul>{roots.map((t) => item(t, 0))}</ul>}
+      <section className="sidebar-notes sidebar-sources" aria-label="Sources">
+        <div className="sidebar-notes-head">
+          <h2>Sources</h2>
+          <button type="button" className="quiet" onClick={onAddSource} data-testid="add-source">
+            + Add source
+          </button>
+        </div>
+        {sources.length > 0 && <ul>{sources.map(sourceItem)}</ul>}
+      </section>
       <section className="sidebar-notes" aria-label="Notes">
         <div className="sidebar-notes-head">
           <h2>Notes</h2>
@@ -273,6 +351,22 @@ export function Sidebar({
                     type="button"
                     className="quiet"
                     onClick={() => onRestoreThread(t.threadId)}
+                    data-testid="trash-restore"
+                  >
+                    Restore
+                  </button>
+                </li>
+              ))}
+              {trash.sources.map((x) => (
+                <li key={x.sourceId} className="trash-item" data-testid="trash-item" data-id={x.sourceId}>
+                  <button type="button" className="thread-link" onClick={() => onOpenTrashed('source', x.sourceId)}>
+                    <span aria-hidden>❡ </span>
+                    {x.title || 'Untitled'}
+                  </button>
+                  <button
+                    type="button"
+                    className="quiet"
+                    onClick={() => onRestoreSource(x.sourceId)}
                     data-testid="trash-restore"
                   >
                     Restore

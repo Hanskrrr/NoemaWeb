@@ -19,6 +19,10 @@ import {
   ModelSettingsResponse,
   ModelSettingsView,
   Note,
+  RefetchResponse,
+  Source,
+  SourceDetail,
+  SourceList,
   Notebook,
   NotebookList,
   NoteHistory,
@@ -125,6 +129,20 @@ export const api = {
   restoreThread: (threadId: string) => call(Thread, 'POST', `/api/threads/${threadId}/restore`, {}),
   restoreNote: (noteId: string) => call(Note, 'POST', `/api/notes/${noteId}/restore`, {}),
   trash: (notebookId: string) => call(Trash, 'GET', `/api/notebooks/${notebookId}/trash`),
+  // Sources: what the learner reads.
+  sources: (notebookId: string) => call(SourceList, 'GET', `/api/notebooks/${notebookId}/sources`),
+  addSource: (notebookId: string, body: { id: string; title?: string; text?: string; url?: string }) =>
+    call(Source, 'POST', `/api/notebooks/${notebookId}/sources`, body),
+  source: (id: string, version?: string) =>
+    call(SourceDetail, 'GET', `/api/sources/${id}${version ? `?version=${encodeURIComponent(version)}` : ''}`),
+  renameSource: (id: string, title: string) => call(Source, 'PATCH', `/api/sources/${id}`, { title }),
+  refetchSource: (id: string) => call(RefetchResponse, 'POST', `/api/sources/${id}/refetch`, {}),
+  deleteSource: (id: string) => call(Ok, 'DELETE', `/api/sources/${id}`),
+  restoreSource: (id: string) => call(Source, 'POST', `/api/sources/${id}/restore`, {}),
+  askAboutSource: (
+    sourceId: string,
+    body: { id: string; passage: { versionId: string; start: number; end: number }; question: { id: string; content: string } },
+  ) => call(CreateBranchResponse, 'POST', `/api/sources/${sourceId}/threads`, body),
   // Blocks: every change answers with the whole note.
   insertBlock: (noteId: string, req: InsertBlockRequest) => call(Note, 'POST', `/api/notes/${noteId}/blocks`, req),
   editBlock: (noteId: string, blockId: string, content: string) =>

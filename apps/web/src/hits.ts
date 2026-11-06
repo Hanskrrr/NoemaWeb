@@ -32,6 +32,7 @@ export function snippetParts(text: string, matches: Array<{ start: number; end: 
 export function whereParts(hit: SearchHit): string[] {
   const title = (t: string) => t || 'Untitled';
   if (hit.kind === 'note' || hit.kind === 'block') return [`Note · ${title(hit.title)}`];
+  if (hit.kind === 'source' || hit.kind === 'passage') return [`Source · ${title(hit.title)}`];
   return [...hit.path.map((p) => title(p.title)), title(hit.title)];
 }
 
@@ -52,6 +53,10 @@ export function kindOf(hit: SearchHit): string {
       return 'Note title';
     case 'block':
       return 'In a note';
+    case 'source':
+      return 'Source title';
+    case 'passage':
+      return 'In a source';
   }
 }
 

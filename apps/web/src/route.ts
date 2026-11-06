@@ -7,6 +7,12 @@
 //   #/note/<noteId>                 a note
 //   #/note/<noteId>/b/<blockId>     a note, scrolled to one block
 //   #/new                           a new thread, before its first question
+//   #/s/<sourceId>                  a source in the reading pane (its latest version)
+//   #/s/<sourceId>/v/<versionId>    one version of it
+//     …/at/<offset>                 scrolled to the block that holds this offset (from search)
+//     …/from/<threadId>             back from a thread asked there: its passage, highlighted
+// A thread asked about a source (and its side questions) keeps #/t/…; it is
+// shown beside the source.
 
 import { isUlid } from '@noema/core';
 import { useCallback, useEffect, useState } from 'react';
@@ -15,6 +21,13 @@ export type Route =
   | { kind: 'thread'; id: string; from?: string | undefined; message?: string | undefined }
   | { kind: 'map'; id: string }
   | { kind: 'note'; id: string; block?: string | undefined }
+  | {
+      kind: 'source';
+      id: string;
+      version?: string | undefined;
+      at?: number | undefined;
+      from?: string | undefined;
+    }
   | { kind: 'new' };
 
 export function parseHash(hash: string): Route | null {
@@ -23,6 +36,7 @@ export function parseHash(hash: string): Route | null {
   if (head === 'new') return { kind: 'new' };
   if (!isUlid(id)) return null;
   if (head === 'map') return { kind: 'map', id };
+  if (head === 'source' || head === 's') return parseSource(id, parts.slice(2));
   if (head === 'note') return sub === 'b' && isUlid(subId) ? { kind: 'note', id, block: subId } : { kind: 'note', id };
   if (head === 't') {
     if (sub === 'from' && isUlid(subId)) return { kind: 'thread', id, from: subId };
@@ -32,8 +46,27 @@ export function parseHash(hash: string): Route | null {
   return null;
 }
 
+function parseSource(id: string, rest: string[]): Route {
+  const route: Extract<Route, { kind: 'source' }> = { kind: 'source', id };
+  let i = 0;
+  if (rest[i] === 'v' && isUlid(rest[i + 1])) {
+    route.version = rest[i + 1];
+    i += 2;
+  }
+  if (rest[i] === 'at' && /^\d{1,9}$/.test(rest[i + 1] ?? '')) route.at = Number(rest[i + 1]);
+  else if (rest[i] === 'from' && isUlid(rest[i + 1])) route.from = rest[i + 1];
+  return route;
+}
+
 export function toHash(route: Route): string {
   switch (route.kind) {
+    case 'source': {
+      let hash = `#/s/${route.id}`;
+      if (route.version) hash += `/v/${route.version}`;
+      if (route.at !== undefined) hash += `/at/${route.at}`;
+      else if (route.from) hash += `/from/${route.from}`;
+      return hash;
+    }
     case 'new':
       return '#/new';
     case 'map':

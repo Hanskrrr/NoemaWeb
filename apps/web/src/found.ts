@@ -48,19 +48,31 @@ export function findTerms(root: Element, terms: string[]): Range[] {
   return ranges;
 }
 
+/** Scroll so `rect` sits in the middle: of `scroller` (a pane that scrolls by itself), or of the window. */
+export function centre(rect: DOMRect, scroller?: Element | null): void {
+  if (scroller) {
+    const box = scroller.getBoundingClientRect();
+    scroller.scrollTo({ top: scroller.scrollTop + rect.top - box.top - scroller.clientHeight / 2 + rect.height / 2 });
+  } else {
+    window.scrollTo({ top: window.scrollY + rect.top - window.innerHeight / 2 + rect.height / 2 });
+  }
+}
+
 /**
  * Bring a jump target into view and flash it. If search is opening it, mark
  * the words searched for and centre the first; otherwise centre the element.
+ * Inside a pane that scrolls by itself (a source), pass the pane.
  */
-export function arrive(el: Element, target: string): void {
+export function arrive(el: Element, target: string, scroller?: Element | null): void {
   const terms = pending?.target === target ? pending.terms : null;
   if (terms) pending = null;
   const ranges = terms ? findTerms(el, terms) : [];
   const first = ranges[0];
   if (first) {
     highlight('noema-found', ranges);
-    const rect = first.getBoundingClientRect();
-    window.scrollTo({ top: window.scrollY + rect.top - window.innerHeight / 2 + rect.height / 2 });
+    centre(first.getBoundingClientRect(), scroller);
+  } else if (scroller) {
+    centre(el.getBoundingClientRect(), scroller);
   } else {
     el.scrollIntoView({ block: 'center' });
   }

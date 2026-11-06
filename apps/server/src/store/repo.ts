@@ -258,6 +258,45 @@ export class Repo {
     });
   }
 
+  // Titles ------------------------------------------------------------------
+
+  titleSourceOf(threadId: string): 'question' | 'model' | 'user' | null {
+    const row = this.db.sql.prepare('SELECT title_source FROM thread WHERE id = ?').get(threadId) as
+      | { title_source: 'question' | 'model' | 'user' }
+      | undefined;
+    return row?.title_source ?? null;
+  }
+
+  /**
+   * Set a title. A model-written title only replaces the first-question title,
+   * never one the learner chose. Returns whether the title changed.
+   */
+  setTitle(threadId: string, title: string, source: 'model' | 'user'): boolean {
+    return this.db.tx(() => {
+      const guard = source === 'model' ? " AND title_source = 'question'" : '';
+      const result = this.db.sql
+        .prepare(`UPDATE thread SET title = ?, title_source = ? WHERE id = ?${guard}`)
+        .run(title, source, threadId);
+      if (Number(result.changes) === 0) return false;
+      this.index('thread', threadId, threadId, title);
+      return true;
+    });
+  }
+
+  /** Threads still titled by their first question that have a finished answer, oldest first. */
+  untitledThreads(limit: number): string[] {
+    const rows = this.db.sql
+      .prepare(
+        `SELECT DISTINCT t.id, t.created_at FROM thread t
+         JOIN message m ON m.thread_id = t.id AND m.role = 'assistant'
+         JOIN message_revision r ON r.id = m.current_revision_id AND r.status = 'done'
+         WHERE t.title_source = 'question'
+         ORDER BY t.created_at LIMIT ?`,
+      )
+      .all(limit) as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  }
+
   // Branches ----------------------------------------------------------------
 
   /**

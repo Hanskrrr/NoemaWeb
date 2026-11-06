@@ -16,6 +16,7 @@ const GOOD_KEY = 'sk-good-0123456789';
 const LISTED = ['mock-1', 'mock-2'];
 const ACCEPTED = new Set([...LISTED, 'legacy-alias']); // answers, but is not in the list
 let lastChat: Record<string, unknown> = {};
+const chats: Array<{ messages: Array<{ role: string; content: string }>; [k: string]: unknown }> = [];
 let mockBase = '';
 const mock = createServer((req: IncomingMessage, res: ServerResponse) => {
   let raw = '';
@@ -36,6 +37,7 @@ const mock = createServer((req: IncomingMessage, res: ServerResponse) => {
     if (req.method === 'GET' && path === '/nolist/models') return json(404, { error: { message: 'Not Found' } });
     if (req.method === 'POST' && path.endsWith('/chat/completions')) {
       lastChat = JSON.parse(raw) as Record<string, unknown>;
+      chats.push(lastChat as (typeof chats)[number]);
       if (!ACCEPTED.has(lastChat.model as string)) return json(400, { error: { message: 'Model Not Exist' } });
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       for (const t of ['Hello ', 'from the ', 'mock model.']) {
@@ -135,7 +137,9 @@ test('a working key is checked, saved privately, used for answers, and never sen
   const answer = s.repo.getMessage(r.json.assistant.id) as Message;
   assert.equal(answer.status, 'done');
   assert.equal(answer.content, 'Hello from the mock model.');
-  assert.equal('max_tokens' in lastChat, false, 'no output cap unless one is configured');
+  const answerCall = chats.find((c) => c.messages.at(-1)?.content === 'hi');
+  assert.ok(answerCall, 'the answer request reached the provider');
+  assert.equal('max_tokens' in answerCall, false, 'no output cap unless one is configured');
 
   const exported = await (await fetch(`${s.base}/api/export`)).text();
   assert.ok(!exported.includes(GOOD_KEY), 'the key leaked into the export');

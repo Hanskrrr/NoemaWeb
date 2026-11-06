@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -193,8 +193,9 @@ test('an existing notebook upgrades to branches without losing anything', () => 
   old.close();
 
   const db = new Db(file);
-  assert.equal(db.migrate(), 1);
-  assert.equal(db.version, 2);
+  const all = readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql')).length;
+  assert.equal(db.migrate(), all - 1);
+  assert.equal(db.version, all);
   const thread = new Repo(db).getThread(threadId);
   assert.equal(thread?.title, 'Old thread');
   assert.equal(thread?.parentThreadId, null);

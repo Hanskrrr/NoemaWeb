@@ -17,6 +17,7 @@ import type { ModelSource } from '../llm/settings.ts';
 import type { Logger } from '../log.ts';
 import type { Repo } from '../store/repo.ts';
 import { SYSTEM_PROMPT } from './prompt.ts';
+import type { Titler } from './titles.ts';
 
 export const FLUSH_MS = 200;
 
@@ -50,17 +51,20 @@ export class Generations {
   private readonly live = new Map<string, Live>();
   private readonly repo: Repo;
   private readonly models: ModelSource;
+  private readonly titler: Titler | null;
   private readonly config: Pick<Config, 'contextBudgetTokens' | 'maxOutputTokens'>;
   private readonly log: Logger;
 
   constructor(deps: {
     repo: Repo;
     models: ModelSource;
+    titler?: Titler;
     config: Pick<Config, 'contextBudgetTokens' | 'maxOutputTokens'>;
     log: Logger;
   }) {
     this.repo = deps.repo;
     this.models = deps.models;
+    this.titler = deps.titler ?? null;
     this.config = deps.config;
     this.log = deps.log;
   }
@@ -211,6 +215,9 @@ export class Generations {
     }
     this.repo.finishRevision(entry.revisionId, entry.content, final.status, final.error);
     this.setStatus(entry, final.status, final.error);
+    // Name the thread after its first answer, before telling watchers the
+    // answer has ended, so the sidebar they refresh shows the new title.
+    if (final.status === 'done' && this.titler && entry.stopReason === null) await this.titler.title(args.threadId);
     this.emit(entry, (w) => w.end());
     this.live.delete(entry.messageId);
     this.log.info('answer finished', {

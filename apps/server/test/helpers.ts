@@ -1,6 +1,6 @@
 import type { AddressInfo } from 'node:net';
 import { ulid } from '@noema/core';
-import { createApp } from '../src/app.ts';
+import { type App, createApp } from '../src/app.ts';
 import { FakeProvider } from '../src/llm/fake.ts';
 import { ModelSettings, type ModelSettingsOptions } from '../src/llm/settings.ts';
 import { silentLogger } from '../src/log.ts';
@@ -12,6 +12,7 @@ export interface TestServer {
   repo: Repo;
   db: Db;
   models: ModelSettings;
+  titler: App['titler'];
   close(): Promise<void>;
 }
 
@@ -43,6 +44,7 @@ export async function startServer(
     repo,
     db,
     models,
+    titler: app.titler,
     async close() {
       await app.close();
       db.close();

@@ -76,6 +76,8 @@ app.server.listen(config.port, config.host, () => {
     webDist,
   });
   if (!models.view().configured) log.info('no model connected yet: open the app and add an API key');
+  // Give threads from before AI titles a proper name, quietly, one at a time.
+  void app.titler.backfill();
 });
 
 let closing = false;

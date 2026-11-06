@@ -15,7 +15,8 @@ function fresh(path = ':memory:') {
 
 test('migrations apply once and record the schema version', () => {
   const { db } = fresh();
-  assert.equal(db.version, 2);
+  const migrations = readdirSync(new URL('../src/store/migrations/', import.meta.url)).filter((f) => f.endsWith('.sql'));
+  assert.equal(db.version, migrations.length);
   assert.equal(db.migrate(), 0);
   db.close();
 });

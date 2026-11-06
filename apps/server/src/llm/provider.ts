@@ -8,6 +8,10 @@ export interface StreamRequest {
   messages: ChatMessage[];
   /** Omitted: the provider's default. */
   maxTokens?: number | undefined;
+  /** A short utility call (a title): skip the model's reasoning step where the provider allows it. */
+  light?: boolean | undefined;
+  /** What the call is for; the fake model answers titles differently. */
+  purpose?: 'answer' | 'title' | undefined;
   signal: AbortSignal;
 }
 

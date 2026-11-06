@@ -104,6 +104,25 @@ function parseRetryAfter(value: string | null): number | undefined {
   return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
 }
 
+/**
+ * Provider-specific request fields. DeepSeek's models think before answering
+ * by default; for a short utility call (a title) that only costs time, and
+ * DeepSeek lets us turn it off. Other providers get nothing extra, since some
+ * reject fields they do not know.
+ */
+export function extraBody(baseUrl: string, req: Pick<StreamRequest, 'light'>): Record<string, unknown> {
+  let host = '';
+  try {
+    host = new URL(baseUrl).hostname;
+  } catch {
+    return {};
+  }
+  if (req.light && (host === 'api.deepseek.com' || host.endsWith('.deepseek.com'))) {
+    return { thinking: { type: 'disabled' } };
+  }
+  return {};
+}
+
 export function httpError(status: number, body: string, retryAfter: string | null): ProviderError {
   let message = `HTTP ${status}`;
   try {
@@ -282,6 +301,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
             stream: true,
             stream_options: { include_usage: true },
             ...(req.maxTokens ? { max_tokens: req.maxTokens } : {}),
+            ...extraBody(this.baseUrl, req),
           }),
           signal: ctrl.signal,
         });

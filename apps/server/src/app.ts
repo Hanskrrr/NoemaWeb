@@ -13,6 +13,7 @@ import {
   UpdateNotebookRequest,
 } from '@noema/core';
 import { Generations } from './chat/generation.ts';
+import { Titler } from './chat/titles.ts';
 import type { Config } from './config.ts';
 import { checkRequest, SECURITY_HEADERS } from './http/guard.ts';
 import { HttpError, Router, sendError, sendJson } from './http/router.ts';
@@ -35,13 +36,15 @@ export interface AppDeps {
 export interface App {
   server: Server;
   generations: Generations;
+  titler: Titler;
   /** Stop live answers (stored as interrupted) and close the server. */
   close(): Promise<void>;
 }
 
 export function createApp(deps: AppDeps): App {
   const { repo, models, log } = deps;
-  const generations = new Generations({ repo, models, config: deps.config, log });
+  const titler = new Titler({ repo, models, log });
+  const generations = new Generations({ repo, models, titler, config: deps.config, log });
   const router = new Router();
 
   const notFound = (what: string) => new HttpError(404, 'not_found', `${what} not found`);
@@ -252,6 +255,7 @@ export function createApp(deps: AppDeps): App {
   return {
     server,
     generations,
+    titler,
     async close() {
       await generations.shutdown();
       await new Promise<void>((resolve) => {

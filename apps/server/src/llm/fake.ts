@@ -26,6 +26,11 @@ export function fakeAnswer(question: string): string {
     '```ts',
     'const answer = 42;',
     '```',
+    '',
+    '| Step | Cost |',
+    '| --- | ---: |',
+    '| Forward | $O(n)$ |',
+    '| ~~Backward~~ | 3~5 ms or 4~6 ms |',
   ].join('\n');
 }
 
@@ -49,6 +54,13 @@ export class FakeProvider implements ModelProvider {
   async *stream(req: StreamRequest): AsyncIterable<StreamEvent> {
     const question = [...req.messages].reverse().find((m) => m.role === 'user')?.content ?? '';
     yield { type: 'attempt', n: 1 };
+    if (req.purpose === 'title') {
+      // A predictable title: "About" plus the question, so tests can tell it was written.
+      const asked = /Question:\n(.*)/.exec(question)?.[1] ?? 'this';
+      yield { type: 'text', text: `About ${asked.replace(/\[\[[^\]]*\]\]/g, '').trim()}` };
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
     const fail = /\[\[fail:([a-z_]+)\]\]/.exec(question);
     if (fail) throw new ProviderError(fail[1] as ErrorKind, `fake failure: ${fail[1]}`);
     const slow = question.includes('[[slow]]');

@@ -42,7 +42,9 @@ test('a side question merged back: checked, merged, shown under its passage, car
   await expect(page).toHaveURL(new RegExp(`#/t/${parent}$`));
   const card = page.getByTestId('merge-card');
   await expect(card).toHaveCount(1);
-  await expect(card).toContainText('the same way every time');
+  // Closed at first: one line with the start of the text.
+  await expect(card.getByTestId('merge-preview')).toContainText('the same way every time');
+  await expect(card.locator('.merge-body')).toBeHidden();
   await expect(card).toContainText('offline');
   // Inside the answer, right after the paragraph that holds the passage.
   const inAnswer = page.locator('[data-testid=message][data-role=assistant] .md-slot [data-testid=merge-card]');
@@ -50,14 +52,26 @@ test('a side question merged back: checked, merged, shown under its passage, car
   const before = page.locator('.md-slot').locator('xpath=preceding-sibling::*[1]');
   await expect(before).toContainText('offline fake model');
   await expect(page.locator('.md-slot').locator('xpath=following-sibling::*[1]')).toContainText('Inline math');
+  await card.getByTestId('merge-toggle').click();
+  await expect(card.getByTestId('merge-toggle')).toHaveAttribute('aria-expanded', 'true');
+  await expect(card.locator('.merge-body')).toBeVisible();
+  await expect(card.getByTestId('merge-preview')).toHaveCount(0);
   // Selecting inside the card is not a passage of the answer.
-  const word = card.getByText('every time', { exact: false });
+  const word = card.locator('.merge-body').getByText('every time', { exact: false });
   await word.dblclick();
   await expect(page.getByTestId('branch-button')).toHaveCount(0);
   // Its citation opens the side question's exchange.
   await card.getByTestId('cite').click();
   await expect(page).toHaveURL(new RegExp(`#/t/${side}/m/[0-9A-Z]{26}$`));
   await page.goBack();
+  // Left open, it stays open.
+  await expect(card.locator('.merge-body')).toBeVisible();
+  await card.getByTestId('merge-toggle').click();
+  await expect(card.locator('.merge-body')).toBeHidden();
+  await page.reload();
+  await expect(page.getByTestId('merge-card').locator('.merge-body')).toBeHidden();
+  await page.getByTestId('merge-card').getByTestId('merge-preview').click();
+  await expect(page.getByTestId('merge-card').locator('.merge-body')).toBeVisible();
 
   // The next question carries it (the fake model echoes what it was sent).
   await answered(page, 'So what follows?');
@@ -89,7 +103,7 @@ test('merge one thread into another, as the whole exchange', async ({ page, requ
 
   await page.goto(`/#/t/${a}`);
   const card = page.getByTestId('merge-card');
-  await expect(card).toContainText('Second topic, thread B');
+  await expect(card.getByTestId('merge-preview')).toContainText('Q: Second topic, thread B');
   // After the last message of A.
   const slot = page.locator('.message-slot').filter({ has: card });
   await expect(slot).toBeVisible();

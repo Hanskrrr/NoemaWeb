@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { ApiFailure, api, watchMessage } from './api.ts';
 import { Composer } from './Composer.tsx';
 import { EditableTitle } from './EditableTitle.tsx';
-import { MergeCard, MergePicker, OutgoingMerges } from './Merges.tsx';
+import { MergeCard, MergePicker, OPEN_MERGE_EVENT, OutgoingMerges } from './Merges.tsx';
 import { MessageView } from './MessageView.tsx';
 import { Outline, type OutlineItem, scrollRangeIntoView, shortLabel } from './Outline.tsx';
 import { highlight, selectionToSource, sourceToRange } from './markdown/selection.ts';
@@ -143,6 +143,12 @@ function outlineOf(
         level: 2,
         kind: 'merge',
         target: `[data-merge-id="${x.id}"]`,
+        go: () => {
+          window.dispatchEvent(new CustomEvent(OPEN_MERGE_EVENT, { detail: x.id }));
+          requestAnimationFrame(() =>
+            document.querySelector(`[data-merge-id="${x.id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
+          );
+        },
       });
     }
   }

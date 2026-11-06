@@ -23,6 +23,11 @@ The founder noticed merged cards sat at the bottom of the answer, asked for a ca
 
 Not verified: Biome (`pnpm lint`), Playwright on the Mac.
 
+## Later the same day: merged cards open and close
+
+- A merged card starts closed: one line saying where it came from, then the start of its text. Click the line (or the ▸) to open it; click ▸ again to close it. Each reader's choice is kept per card in the browser (`noema:merge-open:<id>`), so a card left open stays open. Choosing a merge in the catalog opens it.
+- Verified: Playwright 28 pass (the merge test now checks closed by default, opening, staying open after leaving and coming back, closing, staying closed after a reload, opening from the preview line); `tsc` on the Mac clean. The catalog opening a card was checked by script and screenshot, not by a test.
+
 ## Next
 
 - "Side questions you never came back from" when opening Noema (insight I3).

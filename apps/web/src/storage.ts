@@ -41,4 +41,6 @@ export const storage = {
 export const keys = {
   draft: (threadId: string) => `noema:draft:${threadId}`,
   outbox: (threadId: string) => `noema:outbox:${threadId}`,
+  /** Whether a merged card is open, as this reader left it. */
+  mergeOpen: (mergeId: string) => `noema:merge-open:${mergeId}`,
 };

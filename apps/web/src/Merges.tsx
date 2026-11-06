@@ -8,12 +8,37 @@ import type { Merge, Thread } from '@noema/core';
 import { useEffect, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { CiteContext, Markdown } from './markdown/Markdown.tsx';
+import { keys, storage } from './storage.ts';
 
 function errorText(err: unknown): string {
   return err instanceof ApiFailure ? err.message : 'Something went wrong. Try again.';
 }
 
-/** In the target thread: what was merged in, and from where. */
+/** Ask a merged card to open, then show it (from the catalog). */
+export const OPEN_MERGE_EVENT = 'noema:open-merge';
+
+/** The first line of a merged text, as plain words, for the closed card. */
+export function mergePreview(markdown: string, max = 140): string {
+  const line =
+    markdown
+      .split('\n')
+      .map((l) =>
+        l
+          .replace(/^\s{0,3}(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s?)/, '')
+          .replace(/\[E\d{1,4}\]/g, '')
+          .replace(/[ \t]+([.,;:!?。，；：！？])/g, '$1')
+          .replace(/(\*\*|__|\*|_|`)(.+?)\1/g, '$2')
+          .trim(),
+      )
+      .find((l) => l !== '' && !/^(\$\$|```|~~~|\|?[-: |]+\|?$)/.test(l)) ?? '';
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+/**
+ * In the target thread: what was merged in, and from where. Closed, it is
+ * one line with the start of the text; open, the whole text. Each reader's
+ * choice is remembered for that card.
+ */
 export function MergeCard({
   merge,
   onOpenSource,
@@ -25,11 +50,43 @@ export function MergeCard({
   onCite: (threadId: string, messageId: string) => void;
   onUndo: () => void;
 }) {
+  const [open, setOpen] = useState(() => storage.getJson<boolean>(keys.mergeOpen(merge.id), false));
+  const toggle = (next: boolean) => {
+    setOpen(next);
+    storage.setJson(keys.mergeOpen(merge.id), next);
+  };
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === merge.id) setOpen(true);
+    };
+    window.addEventListener(OPEN_MERGE_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_MERGE_EVENT, onOpen);
+  }, [merge.id]);
+  const bodyId = `merge-body-${merge.id}`;
+
   return (
-    <section className="merge-card" data-testid="merge-card" data-merge-id={merge.id}>
-      <p className="merge-head">
-        <span aria-hidden>⤶ </span>
-        Merged from{' '}
+    <section
+      className={`merge-card${open ? ' open' : ''}`}
+      data-testid="merge-card"
+      data-merge-id={merge.id}
+      data-open={open ? '' : undefined}
+    >
+      <div className="merge-head">
+        <button
+          type="button"
+          className="merge-toggle"
+          onClick={() => toggle(!open)}
+          aria-expanded={open}
+          aria-controls={bodyId}
+          title={open ? 'Collapse' : 'Expand'}
+          data-testid="merge-toggle"
+        >
+          <span className="merge-caret" aria-hidden>
+            ▸
+          </span>
+          <span aria-hidden>⤶ </span>
+          Merged from
+        </button>{' '}
         <button type="button" className="quiet inline" onClick={() => onOpenSource(merge.sourceThreadId)}>
           {merge.sourceTitle || 'a thread'}
         </button>
@@ -39,18 +96,27 @@ export function MergeCard({
             about <q>{merge.quote.length > 80 ? `${merge.quote.slice(0, 80)}…` : merge.quote}</q>
           </>
         )}
-      </p>
-      <div className="merge-body">
-        <CiteContext.Provider value={{ refs: merge.refs, go: onCite }}>
-          <Markdown source={merge.summary} />
-        </CiteContext.Provider>
       </div>
-      <p className="merge-foot">
-        The AI sees this from the next question on.{' '}
-        <button type="button" className="quiet inline faint" onClick={onUndo} data-testid="merge-undo">
-          Undo merge
-        </button>
-      </p>
+      {!open && (
+        // biome-ignore lint/a11y/useKeyWithClickEvents: the toggle button above is the keyboard path
+        // biome-ignore lint/a11y/noStaticElementInteractions: as above
+        <p className="merge-preview" onClick={() => toggle(true)} data-testid="merge-preview">
+          {mergePreview(merge.summary)}
+        </p>
+      )}
+      <div id={bodyId} hidden={!open}>
+        <div className="merge-body">
+          <CiteContext.Provider value={{ refs: merge.refs, go: onCite }}>
+            <Markdown source={merge.summary} />
+          </CiteContext.Provider>
+        </div>
+        <p className="merge-foot">
+          The AI sees this from the next question on.{' '}
+          <button type="button" className="quiet inline faint" onClick={onUndo} data-testid="merge-undo">
+            Undo merge
+          </button>
+        </p>
+      </div>
     </section>
   );
 }

@@ -1782,3 +1782,58 @@ button.quiet.inline.faint:hover {
     display: none;
   }
 }
+
+/* A merged card opens and closes. */
+.merge-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.2rem;
+}
+
+.merge-toggle {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+}
+
+.merge-toggle:hover {
+  color: var(--accent);
+}
+
+.merge-caret {
+  display: inline-block;
+  width: 0.8em;
+  font-size: 0.8em;
+  color: var(--accent);
+  transition: transform 0.15s;
+}
+
+.merge-card.open .merge-caret {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .merge-caret {
+    transition: none;
+  }
+}
+
+.merge-preview {
+  margin: 0.2rem 0 0 1.05rem;
+  font: 0.92rem / 1.45 var(--serif);
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.merge-card:not(.open) {
+  padding-block: 0.45rem;
+}

@@ -41,5 +41,4 @@ export const storage = {
 export const keys = {
   draft: (threadId: string) => `noema:draft:${threadId}`,
   outbox: (threadId: string) => `noema:outbox:${threadId}`,
-  pins: (threadId: string) => `noema:spike-pins:${threadId}`,
 };

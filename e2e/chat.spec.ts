@@ -62,3 +62,15 @@ test('a draft survives a reload', async ({ page, request }) => {
   await page.reload();
   await expect(page.getByTestId('composer')).toHaveValue('half-written question about 特征值');
 });
+
+test('New thread starts empty and appears in the sidebar after the first question', async ({ page, request }) => {
+  await freshThread(request);
+  await page.goto('/');
+  await page.getByTestId('new-thread').click();
+  await expect(page).toHaveURL(/#\/new$/);
+  await expect(page.getByTestId('message')).toHaveCount(0);
+  await ask(page, 'A brand new topic');
+  await expect(page).toHaveURL(/#\/t\/[0-9A-Z]{26}$/);
+  await expect(lastAnswer(page)).toHaveAttribute('data-status', 'done');
+  await expect(page.locator('[data-testid=thread-link].active')).toHaveText('A brand new topic');
+});

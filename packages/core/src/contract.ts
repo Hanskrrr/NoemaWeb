@@ -45,6 +45,8 @@ export type Notebook = z.infer<typeof Notebook>;
 export const Thread = z.object({
   id: Id,
   notebookId: Id,
+  /** Set for a branch: the thread it was asked from. */
+  parentThreadId: Id.nullable(),
   title: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -73,7 +75,39 @@ export const Message = z.object({
 });
 export type Message = z.infer<typeof Message>;
 
-export const ThreadDetail = z.object({ thread: Thread, messages: z.array(Message) });
+/** Where a branch starts: a span of one immutable message revision (W3C quote + position). */
+export const AnchorRef = z.object({
+  messageId: Id,
+  revisionId: Id,
+  start: z.number().int().nonnegative(),
+  end: z.number().int().positive(),
+  exact: z.string(),
+  prefix: z.string(),
+  suffix: z.string(),
+});
+export type AnchorRef = z.infer<typeof AnchorRef>;
+
+export const BranchSummary = z.object({
+  threadId: Id,
+  title: z.string(),
+  createdAt: z.string(),
+  anchor: AnchorRef,
+});
+export type BranchSummary = z.infer<typeof BranchSummary>;
+
+export const Origin = z.object({ parentThreadId: Id, parentTitle: z.string(), anchor: AnchorRef });
+export type Origin = z.infer<typeof Origin>;
+
+export const ThreadDetail = z.object({
+  thread: Thread,
+  messages: z.array(Message),
+  /** Branches that start in this thread's messages. */
+  branches: z.array(BranchSummary),
+  /** For a branch: where it starts. */
+  origin: Origin.nullable(),
+  /** Ancestors, outermost first, for the breadcrumb. */
+  path: z.array(z.object({ id: Id, title: z.string() })),
+});
 export type ThreadDetail = z.infer<typeof ThreadDetail>;
 
 export const NotebookList = z.object({ notebooks: z.array(Notebook) });
@@ -95,8 +129,27 @@ export const AskRequest = z.object({
 });
 export type AskRequest = z.infer<typeof AskRequest>;
 
+/**
+ * Open a branch from a passage and ask its first question, in one request.
+ * The server computes the quote from the stored revision; the client only
+ * says which message and which offsets.
+ */
+export const CreateBranchRequest = z.object({
+  id: Id,
+  anchor: z.object({
+    messageId: Id,
+    start: z.number().int().nonnegative(),
+    end: z.number().int().positive(),
+  }),
+  question: AskRequest,
+});
+export type CreateBranchRequest = z.infer<typeof CreateBranchRequest>;
+
 export const AskResponse = z.object({ user: Message, assistant: Message });
 export type AskResponse = z.infer<typeof AskResponse>;
+
+export const CreateBranchResponse = z.object({ thread: Thread, user: Message, assistant: Message });
+export type CreateBranchResponse = z.infer<typeof CreateBranchResponse>;
 
 export const StopResponse = z.object({ stopping: z.boolean(), message: Message });
 export type StopResponse = z.infer<typeof StopResponse>;

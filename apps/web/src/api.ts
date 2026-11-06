@@ -5,6 +5,8 @@ import {
   ApiError,
   AskResponse,
   CLIENT_HEADER,
+  CreateBranchResponse,
+  type CreateBranchRequest,
   CLIENT_HEADER_VALUE,
   Health,
   type Message,
@@ -24,7 +26,9 @@ import {
   ThreadList,
   type UpdateModelSettingsRequest,
 } from '@noema/core';
-import type { z } from 'zod';
+import { z } from 'zod';
+
+const Ok = z.object({ ok: z.literal(true) });
 
 export class ApiFailure extends Error {
   override name = 'ApiFailure';
@@ -80,6 +84,9 @@ export const api = {
   ask: (threadId: string, id: string, content: string) =>
     call(AskResponse, 'POST', `/api/threads/${threadId}/messages`, { id, content }),
   stop: (messageId: string) => call(StopResponse, 'POST', `/api/messages/${messageId}/stop`, {}),
+  createBranch: (parentThreadId: string, body: CreateBranchRequest) =>
+    call(CreateBranchResponse, 'POST', `/api/threads/${parentThreadId}/branches`, body),
+  returnFromBranch: (threadId: string) => call(Ok, 'POST', `/api/threads/${threadId}/return`, {}),
   search: (q: string) => call(SearchResponse, 'GET', `/api/search?q=${encodeURIComponent(q)}`),
   modelSettings: () => call(ModelSettingsView, 'GET', '/api/settings/model'),
   saveModelSettings: (body: UpdateModelSettingsRequest) =>

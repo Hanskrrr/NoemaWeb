@@ -161,9 +161,12 @@ export class Generations {
       const provider = this.models.current();
       if (!provider.configured) throw new ProviderError('not_configured', 'the model provider is not configured');
       const notebook = this.repo.getNotebook(args.notebookId);
+      const origin = this.repo.originOf(args.threadId);
       const { messages, manifest } = assembleContext({
         system: SYSTEM_PROMPT,
         aboutMe: notebook?.aboutMe ?? '',
+        inherited: this.repo.inheritedHistory(args.threadId),
+        ...(origin ? { origin: { quote: origin.anchor.exact } } : {}),
         history: this.repo.history(args.threadId, args.question.seq),
         question: { id: args.question.id, content: args.question.content },
         budgetTokens: this.config.contextBudgetTokens,

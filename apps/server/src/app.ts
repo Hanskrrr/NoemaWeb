@@ -4,6 +4,7 @@
 import { createServer, type Server } from 'node:http';
 import {
   AskRequest,
+  CreateBranchRequest,
   CreateThreadRequest,
   describeError,
   isLive,
@@ -20,7 +21,7 @@ import { serveStatic } from './http/static.ts';
 import { ProviderError } from './llm/provider.ts';
 import type { ModelSettings } from './llm/settings.ts';
 import type { Logger } from './log.ts';
-import { ConflictError, type Repo } from './store/repo.ts';
+import { type AskPair, ConflictError, InvalidError, type Repo } from './store/repo.ts';
 
 export const VERSION = '0.1.0-m0';
 
@@ -114,24 +115,49 @@ export function createApp(deps: AppDeps): App {
   router.on('GET', '/api/threads/:id', ({ res, params }) => {
     const thread = repo.getThread(params.id as string);
     if (!thread) throw notFound('thread');
-    sendJson(res, 200, { thread, messages: repo.listMessages(thread.id).map(current) });
+    sendJson(res, 200, {
+      thread,
+      messages: repo.listMessages(thread.id).map(current),
+      branches: repo.branchesOf(thread.id),
+      origin: repo.originOf(thread.id),
+      path: repo.pathOf(thread.id),
+    });
   });
+
+  const answer = (notebookId: string, threadId: string, pair: AskPair) =>
+    generations.start({
+      threadId,
+      notebookId,
+      messageId: pair.assistant.id,
+      revisionId: pair.assistant.revisionId,
+      question: { id: pair.user.id, content: pair.user.content, seq: pair.user.seq },
+    });
 
   router.on('POST', '/api/threads/:id/messages', async (ctx) => {
     const thread = repo.getThread(ctx.params.id as string);
     if (!thread) throw notFound('thread');
     const body = await ctx.body(AskRequest);
     const { pair, created } = repo.createAsk(thread.id, body.id, body.content);
-    if (created) {
-      generations.start({
-        threadId: thread.id,
-        notebookId: thread.notebookId,
-        messageId: pair.assistant.id,
-        revisionId: pair.assistant.revisionId,
-        question: { id: pair.user.id, content: pair.user.content, seq: pair.user.seq },
-      });
-    }
+    if (created) answer(thread.notebookId, thread.id, pair);
     sendJson(ctx.res, created ? 201 : 200, { user: pair.user, assistant: current(pair.assistant) });
+  });
+
+  // Ask in a branch: open a side thread from a passage and ask its first question.
+  router.on('POST', '/api/threads/:id/branches', async (ctx) => {
+    const parent = repo.getThread(ctx.params.id as string);
+    if (!parent) throw notFound('thread');
+    const body = await ctx.body(CreateBranchRequest);
+    const { thread, pair, created } = repo.createBranch(parent.id, body.id, body.anchor, body.question);
+    if (created) answer(thread.notebookId, thread.id, pair);
+    sendJson(ctx.res, created ? 201 : 200, { thread, user: pair.user, assistant: current(pair.assistant) });
+  });
+
+  // Back from a branch. Recorded so returns can be counted (prototype brief §11).
+  router.on('POST', '/api/threads/:id/return', ({ res, params }) => {
+    const thread = repo.getThread(params.id as string);
+    if (!thread) throw notFound('thread');
+    repo.logEvent('branch.returned', thread.id, { to: thread.parentThreadId });
+    sendJson(res, 200, { ok: true });
   });
 
   router.on('GET', '/api/messages/:id/events', ({ res, params }) => {
@@ -203,6 +229,8 @@ export function createApp(deps: AppDeps): App {
         sendError(res, err.status, err.code, err.message);
       } else if (err instanceof ConflictError) {
         sendError(res, 409, 'conflict', err.message);
+      } else if (err instanceof InvalidError) {
+        sendError(res, 400, 'invalid_request', err.message);
       } else {
         log.error('request failed', { method: req.method, path: url.pathname, err });
         sendError(res, 500, 'internal', 'something went wrong; see the server log');

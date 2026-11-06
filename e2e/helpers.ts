@@ -59,3 +59,19 @@ export async function doubleClickWord(page: Page, word: string): Promise<void> {
   if (!box) throw new Error(`"${word}" is not in the answer`);
   await page.mouse.dblclick(box.x, box.y);
 }
+
+/** The text currently painted by a CSS custom highlight, or null if there is none. */
+export async function highlighted(page: Page, name: string): Promise<string | null> {
+  return page.evaluate((n) => {
+    const registry = (CSS as unknown as { highlights?: Map<string, Set<Range>> }).highlights;
+    const h = registry?.get(n);
+    return h ? [...h].map((r) => r.toString()).join('|') : null;
+  }, name);
+}
+
+/** The id in the URL, #/t/<id>. */
+export function currentThreadId(page: Page): string {
+  const m = /#\/t\/([0-9A-Z]{26})/.exec(page.url());
+  if (!m?.[1]) throw new Error(`not on a thread: ${page.url()}`);
+  return m[1];
+}

@@ -15,7 +15,7 @@ function fresh(path = ':memory:') {
 
 test('migrations apply once and record the schema version', () => {
   const { db } = fresh();
-  assert.equal(db.version, 1);
+  assert.equal(db.version, 2);
   assert.equal(db.migrate(), 0);
   db.close();
 });

@@ -2,7 +2,10 @@
 // never write SQL themselves.
 
 import {
+  type AnchorRef,
+  type BranchSummary,
   type ContextManifest,
+  createAnchor,
   type ErrorKind,
   ftsQuery,
   type HistoryItem,
@@ -12,6 +15,7 @@ import {
   type MessageStatus,
   makeSnippet,
   type Notebook,
+  type Origin,
   type SearchHit,
   searchText,
   type Thread,
@@ -37,6 +41,7 @@ function toThread(r: Row): Thread {
   return {
     id: r.id as string,
     notebookId: r.notebook_id as string,
+    parentThreadId: (r.parent_thread_id as string | null) ?? null,
     title: r.title as string,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
@@ -69,6 +74,22 @@ const MESSAGE_SELECT = `
 
 export class ConflictError extends Error {
   override name = 'ConflictError';
+}
+
+export class InvalidError extends Error {
+  override name = 'InvalidError';
+}
+
+function toAnchor(r: Row): AnchorRef {
+  return {
+    messageId: r.message_id as string,
+    revisionId: r.revision_id as string,
+    start: r.start_offset as number,
+    end: r.end_offset as number,
+    exact: r.exact as string,
+    prefix: r.prefix as string,
+    suffix: r.suffix as string,
+  };
 }
 
 export interface AskPair {
@@ -165,7 +186,7 @@ export class Repo {
         .run(id, notebookId, title, t, t);
       if (title) this.index('thread', id, id, title);
       this.logEvent('thread.created', id, { notebookId });
-      return { thread: { id, notebookId, title, createdAt: t, updatedAt: t }, created: true };
+      return { thread: { id, notebookId, parentThreadId: null, title, createdAt: t, updatedAt: t }, created: true };
     });
   }
 
@@ -235,6 +256,132 @@ export class Repo {
       if (!pair) throw new Error('ask was not stored');
       return { pair, created: true };
     });
+  }
+
+  // Branches ----------------------------------------------------------------
+
+  /**
+   * Open a branch from a passage of a message in `parentThreadId` and ask its
+   * first question, in one transaction. The quote is computed here from the
+   * stored revision, never taken from the client. Idempotent on the branch id.
+   */
+  createBranch(
+    parentThreadId: string,
+    threadId: string,
+    at: { messageId: string; start: number; end: number },
+    question: { id: string; content: string },
+  ): { thread: Thread; pair: AskPair; created: boolean } {
+    return this.db.tx(() => {
+      const existing = this.getThread(threadId);
+      if (existing) {
+        if (existing.parentThreadId !== parentThreadId) throw new ConflictError('thread id already used');
+        const { pair, created } = this.createAsk(threadId, question.id, question.content);
+        return { thread: this.getThread(threadId) as Thread, pair, created };
+      }
+      const parent = this.getThread(parentThreadId);
+      if (!parent) throw new InvalidError('parent thread not found');
+      const message = this.getMessage(at.messageId);
+      if (!message || message.threadId !== parentThreadId) throw new InvalidError('that message is not in this thread');
+      if (isLive(message.status)) throw new ConflictError('wait for the answer to finish before branching from it');
+      let anchor: ReturnType<typeof createAnchor>;
+      try {
+        anchor = createAnchor(message.revisionId, message.content, at.start, at.end);
+      } catch {
+        throw new InvalidError('the selected range is outside the message');
+      }
+      const t = now();
+      const anchorId = ulid();
+      this.db.sql
+        .prepare(
+          `INSERT INTO anchor (id, message_id, revision_id, exact, prefix, suffix, start_offset, end_offset, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          anchorId,
+          message.id,
+          message.revisionId,
+          anchor.quote.exact,
+          anchor.quote.prefix,
+          anchor.quote.suffix,
+          anchor.position.start,
+          anchor.position.end,
+          t,
+        );
+      this.db.sql
+        .prepare(
+          `INSERT INTO thread (id, notebook_id, parent_thread_id, origin_anchor_id, title, created_at, updated_at)
+           VALUES (?, ?, ?, ?, '', ?, ?)`,
+        )
+        .run(threadId, parent.notebookId, parentThreadId, anchorId, t, t);
+      this.db.sql.prepare('UPDATE thread SET updated_at = ? WHERE id = ?').run(t, parentThreadId);
+      this.logEvent('branch.opened', threadId, {
+        parentThreadId,
+        messageId: message.id,
+        chars: anchor.quote.exact.length,
+      });
+      const { pair } = this.createAsk(threadId, question.id, question.content);
+      return { thread: this.getThread(threadId) as Thread, pair, created: true };
+    });
+  }
+
+  /** Branches that start in this thread's messages, oldest first. */
+  branchesOf(threadId: string): BranchSummary[] {
+    const rows = this.db.sql
+      .prepare(
+        `SELECT t.id AS thread_id, t.title, t.created_at AS thread_created_at, a.*
+         FROM thread t JOIN anchor a ON a.id = t.origin_anchor_id
+         WHERE t.parent_thread_id = ? ORDER BY t.created_at`,
+      )
+      .all(threadId) as Row[];
+    return rows.map((r) => ({
+      threadId: r.thread_id as string,
+      title: r.title as string,
+      createdAt: r.thread_created_at as string,
+      anchor: toAnchor(r),
+    }));
+  }
+
+  originOf(threadId: string): Origin | null {
+    const row = this.db.sql
+      .prepare(
+        `SELECT p.id AS parent_id, p.title AS parent_title, a.*
+         FROM thread t JOIN anchor a ON a.id = t.origin_anchor_id JOIN thread p ON p.id = t.parent_thread_id
+         WHERE t.id = ?`,
+      )
+      .get(threadId) as Row | undefined;
+    return row
+      ? { parentThreadId: row.parent_id as string, parentTitle: row.parent_title as string, anchor: toAnchor(row) }
+      : null;
+  }
+
+  /** Ancestors of a thread, outermost first. */
+  pathOf(threadId: string): Array<{ id: string; title: string }> {
+    const path: Array<{ id: string; title: string }> = [];
+    let current = this.getThread(threadId);
+    const seen = new Set<string>();
+    while (current?.parentThreadId && !seen.has(current.parentThreadId)) {
+      seen.add(current.parentThreadId);
+      const parent = this.getThread(current.parentThreadId);
+      if (!parent) break;
+      path.unshift({ id: parent.id, title: parent.title });
+      current = parent;
+    }
+    return path;
+  }
+
+  /**
+   * What a branch inherits: the visible conversation of every ancestor up to
+   * the point where the branch left (the answer containing the passage, or
+   * the question and its answer). Later messages of the parent are not
+   * included: the branch was asked before they existed.
+   */
+  inheritedHistory(threadId: string): HistoryItem[] {
+    const origin = this.originOf(threadId);
+    if (!origin) return [];
+    const at = this.getMessage(origin.anchor.messageId);
+    if (!at) return this.inheritedHistory(origin.parentThreadId);
+    const through = at.role === 'assistant' ? at.seq : at.seq + 1;
+    return [...this.inheritedHistory(origin.parentThreadId), ...this.history(origin.parentThreadId, through + 1)];
   }
 
   /** The finished conversation before `beforeSeq`, as question/answer pairs only. */
@@ -423,6 +570,7 @@ export class Repo {
       notebooks: all('notebook'),
       threads: all('thread'),
       messages: all('message'),
+      anchors: all('anchor'),
       revisions: all('message_revision'),
       modelCalls: all('model_call'),
       events: all('event'),

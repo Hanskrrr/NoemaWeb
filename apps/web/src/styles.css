@@ -1,4 +1,4 @@
-/* Noema M0 shell. Quiet chrome, a readable page, the answer in front. */
+/* Noema. Quiet chrome, a readable page, the answer in front. */
 
 :root {
   --paper: #faf8f3;
@@ -14,6 +14,8 @@
   --warn: #8a5a00;
   --bad: #a33a2c;
   --pin: rgba(240, 186, 60, 0.45);
+  --branch-mark: rgba(47, 93, 138, 0.1);
+  --sidebar: #f3f0e8;
   --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --serif:
     "Iowan Old Style", "Palatino Linotype", Palatino, "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", Georgia,
@@ -37,6 +39,8 @@
     --warn: #e0b45c;
     --bad: #ef8b7c;
     --pin: rgba(240, 186, 60, 0.32);
+    --branch-mark: rgba(143, 180, 224, 0.14);
+    --sidebar: #191b1f;
     color-scheme: dark;
   }
 }
@@ -106,10 +110,10 @@ button.quiet:hover {
   top: 0;
   z-index: 5;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.7rem max(1rem, calc((100vw - 46rem) / 2));
+  padding: 0.6rem 1rem;
   background: color-mix(in srgb, var(--paper) 92%, transparent);
   backdrop-filter: blur(6px);
   border-bottom: 1px solid var(--rule);
@@ -337,7 +341,14 @@ button.quiet:hover {
   color: var(--ink-soft);
 }
 
-::highlight(noema-pin) {
+/* Where branches left (soft), and the passage Back returned to (strong). */
+::highlight(noema-branches) {
+  background-color: var(--branch-mark);
+  text-decoration: underline 1px var(--accent);
+  text-underline-offset: 3px;
+}
+
+::highlight(noema-return) {
   background-color: var(--pin);
 }
 
@@ -396,91 +407,196 @@ button.quiet:hover {
   flex: 1;
 }
 
-/* Anchor spike ------------------------------------------------------------ */
+/* Sidebar and branches ---------------------------------------------------- */
 
-.pins {
-  width: 100%;
-  max-width: 46rem;
-  margin: 0 auto 2rem;
-  padding: 0 1rem;
+.layout {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar {
+  width: 16rem;
+  flex-shrink: 0;
+  position: sticky;
+  top: 3.1rem;
+  align-self: flex-start;
+  max-height: calc(100vh - 3.1rem);
+  overflow-y: auto;
+  padding: 0.9rem 0.6rem 2rem;
+  background: var(--sidebar);
+  border-right: 1px solid var(--rule);
+  min-height: calc(100vh - 3.1rem);
   font-size: 0.9rem;
 }
 
-.pins h2 {
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--ink-faint);
-  margin: 0 0 0.3rem;
-}
-
-.pins-hint,
-.pins-empty {
-  color: var(--ink-faint);
-  margin: 0 0 0.6rem;
-}
-
-.pins ol {
+.sidebar ul {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
 }
 
-.pins li {
+.sidebar ul ul {
+  padding-left: 0.8rem;
+  border-left: 1px solid var(--rule);
+  margin-left: 0.6rem;
+}
+
+.new-thread {
+  width: 100%;
+  margin-bottom: 0.8rem;
+}
+
+.thread-link {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--ink-soft);
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-link:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.thread-link.active {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.thread-link.is-branch {
+  font-size: 0.85rem;
+}
+
+.sidebar-empty {
+  color: var(--ink-faint);
+  padding: 0 0.5rem;
+}
+
+.sidebar-toggle {
+  display: none;
+  font-size: 1.1rem;
+}
+
+@media (max-width: 899px) {
+  .sidebar-toggle {
+    display: inline-block;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .sidebar.open {
+    display: block;
+    position: fixed;
+    z-index: 8;
+    top: 3.1rem;
+    left: 0;
+    bottom: 0;
+    width: min(18rem, 85vw);
+    max-height: none;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  }
+}
+
+.origin {
   border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
   border-radius: 8px;
-  padding: 0.5rem 0.7rem;
   background: var(--sheet);
+  padding: 0.6rem 0.9rem 0.7rem;
 }
 
-.pins blockquote {
-  margin: 0 0 0.3rem;
+.origin-top {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: var(--ink-faint);
+}
+
+.origin-top .back {
+  padding: 0.2rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.origin-from,
+.crumbs {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crumbs button {
+  padding: 0 0.1rem;
+  font-size: 0.85rem;
+}
+
+.origin blockquote {
+  margin: 0.5rem 0 0;
   font-family: var(--serif);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-height: 6.5em;
-  overflow: hidden;
+  max-height: 9em;
+  overflow: auto;
 }
 
-.pin-meta {
+.branch-links {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
   gap: 0.4rem;
+}
+
+.branch-link {
+  font-size: 0.82rem;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 999px;
+  padding: 0.15rem 0.7rem;
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-link:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.85rem;
   color: var(--ink-faint);
-  font: 12px var(--mono);
+  text-align: center;
 }
 
-.pin-meta span {
-  flex: 1;
-}
-
-.pin-meta button {
-  font: 12px var(--sans);
-  padding: 0.15rem 0.5rem;
-}
-
-.pin-button {
+.selection-button {
   position: fixed;
   z-index: 10;
   transform: translateX(-50%);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
   font-size: 0.85rem;
-}
-
-@media (min-width: 1240px) {
-  .pins {
-    position: fixed;
-    top: 4.2rem;
-    right: 1.5rem;
-    width: 18rem;
-    max-height: calc(100vh - 6rem);
-    overflow-y: auto;
-    padding: 0;
-    margin: 0;
-  }
 }
 
 /* Connecting a model ------------------------------------------------------ */

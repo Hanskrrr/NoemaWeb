@@ -24,6 +24,7 @@ export async function startServer(
   db.migrate();
   const repo = new Repo(db);
   repo.interruptLive();
+  repo.failGeneratingNotes();
   const models = new ModelSettings({
     env: { provider: 'fake', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: '' },
     filePath: null,

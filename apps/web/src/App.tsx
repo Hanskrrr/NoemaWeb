@@ -1,11 +1,14 @@
-// The app shell: start-up, the connect screen, the header, the thread
-// sidebar, and which view fills the page.
-// Still to come: sources (M3), the Notebook view and search UI (M4).
+// The app shell: start-up, the connect screen, the header, the sidebar of
+// threads and notes, and which view fills the page (a thread, the map of a
+// thread tree, or a note).
+// Still to come: sources (M3) and the search UI (M4).
 
-import type { Health, Notebook, Thread } from '@noema/core';
+import type { Health, Notebook, NoteSummary, Thread } from '@noema/core';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { api } from './api.ts';
+import { MapView } from './MapView.tsx';
 import { ConnectScreen, ModelDialog } from './ModelSettings.tsx';
+import { NoteView } from './NoteView.tsx';
 import { useRoute } from './route.ts';
 import { Sidebar } from './Sidebar.tsx';
 import { type BranchDraft, DraftView, type Focus, ThreadView } from './ThreadView.tsx';
@@ -66,6 +69,7 @@ function NotebookView({
 }) {
   const [route, navigate] = useRoute();
   const [threads, setThreads] = useState<Thread[] | null>(null);
+  const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [draft, setDraft] = useState<BranchDraft | null>(null);
   const [focus, setFocus] = useState<Focus | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -73,9 +77,11 @@ function NotebookView({
 
   const refresh = useCallback(async () => {
     try {
-      setThreads((await api.threads(notebook.id)).threads);
+      const [t, n] = await Promise.all([api.threads(notebook.id), api.notes(notebook.id)]);
+      setThreads(t.threads);
+      setNotes(n.notes);
     } catch {
-      // keep the list we have; the thread view reports connection problems
+      // keep the lists we have; the views report connection problems
     }
   }, [notebook.id]);
 
@@ -92,22 +98,20 @@ function NotebookView({
     navigate(recent ? { kind: 'thread', id: recent.id } : { kind: 'new' }, { replace: true });
   }, [route, threads, navigate]);
 
-  const open = useCallback(
-    (id: string, from?: string) => {
+  const go = useCallback(
+    (next: Parameters<typeof navigate>[0]) => {
       setDraft(null);
       setFocus(null);
       setSidebarOpen(false);
-      navigate({ kind: 'thread', id, from });
+      navigate(next);
     },
     [navigate],
   );
+  const open = useCallback((id: string, from?: string) => go({ kind: 'thread', id, from }), [go]);
+  const toMessage = useCallback((id: string, message: string) => go({ kind: 'thread', id, message }), [go]);
+  const openNote = useCallback((id: string) => go({ kind: 'note', id }), [go]);
 
-  const startNew = () => {
-    setDraft(null);
-    setFocus(null);
-    setSidebarOpen(false);
-    navigate({ kind: 'new' });
-  };
+  const startNew = () => go({ kind: 'new' });
 
   const onRefresh = useCallback(() => void refresh(), [refresh]);
   const showDraft = draft && route?.kind === 'thread' && route.id === draft.parentThreadId ? draft : null;
@@ -143,17 +147,34 @@ function NotebookView({
   } else if (route?.kind === 'thread') {
     main = (
       <ThreadView
-        key={`${route.id}:${route.from ?? ''}`}
+        key={`${route.id}:${route.from ?? ''}:${route.message ?? ''}`}
         threadId={route.id}
         returningFrom={route.from}
+        message={route.message}
         focus={focus}
         onNavigate={open}
         onBranch={setDraft}
         onChanged={onRefresh}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenMap={(id) => go({ kind: 'map', id })}
+        onOpenNote={openNote}
       />
     );
+  } else if (route?.kind === 'map') {
+    main = (
+      <MapView
+        key={route.id}
+        threadId={route.id}
+        toMessage={toMessage}
+        toPassage={(parent, branch) => open(parent, branch)}
+        toThread={(id) => open(id)}
+      />
+    );
+  } else if (route?.kind === 'note') {
+    main = <NoteView key={route.id} noteId={route.id} onCite={toMessage} onOpenThread={(id) => open(id)} onChanged={onRefresh} />;
   }
+
+  const activeId = showDraft || !route || route.kind === 'new' ? null : route.id;
 
   return (
     <div className="shell">
@@ -193,9 +214,12 @@ function NotebookView({
       <div className="layout">
         <Sidebar
           threads={threads ?? []}
-          activeId={!showDraft && route?.kind === 'thread' ? route.id : null}
+          notes={notes}
+          activeId={activeId}
           open={sidebarOpen}
           onOpen={(id) => open(id)}
+          onJump={(branch) => branch.parentThreadId && open(branch.parentThreadId, branch.id)}
+          onOpenNote={openNote}
           onNew={startNew}
         />
         <div className="main">{main}</div>

@@ -9,10 +9,14 @@ import {
   describeError,
   isLive,
   type Message,
+  RenameThreadRequest,
+  RewriteRequest,
   UpdateModelSettingsRequest,
+  UpdateNoteRequest,
   UpdateNotebookRequest,
 } from '@noema/core';
 import { Generations } from './chat/generation.ts';
+import { NoteWriter } from './chat/notes.ts';
 import { Titler } from './chat/titles.ts';
 import type { Config } from './config.ts';
 import { checkRequest, SECURITY_HEADERS } from './http/guard.ts';
@@ -24,7 +28,7 @@ import type { ModelSettings } from './llm/settings.ts';
 import type { Logger } from './log.ts';
 import { type AskPair, ConflictError, InvalidError, type Repo } from './store/repo.ts';
 
-export const VERSION = '0.1.0-m0';
+export const VERSION = '0.1.0-m2';
 
 export interface AppDeps {
   repo: Repo;
@@ -37,6 +41,7 @@ export interface App {
   server: Server;
   generations: Generations;
   titler: Titler;
+  notes: NoteWriter;
   /** Stop live answers (stored as interrupted) and close the server. */
   close(): Promise<void>;
 }
@@ -45,6 +50,7 @@ export function createApp(deps: AppDeps): App {
   const { repo, models, log } = deps;
   const titler = new Titler({ repo, models, log });
   const generations = new Generations({ repo, models, titler, config: deps.config, log });
+  const notes = new NoteWriter({ repo, models, maxOutputTokens: deps.config.maxOutputTokens, log });
   const router = new Router();
 
   const notFound = (what: string) => new HttpError(404, 'not_found', `${what} not found`);
@@ -156,6 +162,66 @@ export function createApp(deps: AppDeps): App {
   });
 
   // Back from a branch. Recorded so returns can be counted (prototype brief §11).
+  // Rename: the learner's title is kept from now on; the AI never replaces it.
+  router.on('PATCH', '/api/threads/:id', async (ctx) => {
+    const thread = repo.getThread(ctx.params.id as string);
+    if (!thread) throw notFound('thread');
+    const { title } = await ctx.body(RenameThreadRequest);
+    repo.setTitle(thread.id, title, 'user');
+    repo.logEvent('thread.renamed', thread.id);
+    sendJson(ctx.res, 200, repo.getThread(thread.id));
+  });
+
+  // The whole journey from the root thread: exchanges in order, branches where they left.
+  router.on('GET', '/api/threads/:id/map', ({ res, params }) => {
+    const thread = repo.getThread(params.id as string);
+    if (!thread) throw notFound('thread');
+    sendJson(res, 200, repo.mapOf(thread.id));
+  });
+
+  // Rewrite a thread and its branches as a note. Idempotent on the note id.
+  router.on('POST', '/api/threads/:id/notes', async (ctx) => {
+    const thread = repo.getThread(ctx.params.id as string);
+    if (!thread) throw notFound('thread');
+    const { id } = await ctx.body(RewriteRequest);
+    const { note, created } = repo.startNote(id, thread.notebookId, thread.id, thread.title || 'Untitled');
+    if (created) notes.start(note.id, thread.id);
+    sendJson(ctx.res, created ? 201 : 200, note);
+  });
+
+  router.on('GET', '/api/notebooks/:id/notes', ({ res, params }) => {
+    if (!repo.getNotebook(params.id as string)) throw notFound('notebook');
+    sendJson(res, 200, { notes: repo.listNotes(params.id as string).map(({ content: _c, refs: _r, ...rest }) => rest) });
+  });
+
+  router.on('GET', '/api/notes/:id', ({ res, params }) => {
+    const note = repo.getNote(params.id as string);
+    if (!note) throw notFound('note');
+    sendJson(res, 200, note);
+  });
+
+  router.on('GET', '/api/notes/:id/history', ({ res, params }) => {
+    if (!repo.getNote(params.id as string)) throw notFound('note');
+    sendJson(res, 200, { revisions: repo.noteHistory(params.id as string) });
+  });
+
+  router.on('PATCH', '/api/notes/:id', async (ctx) => {
+    const patch = await ctx.body(UpdateNoteRequest);
+    const note = repo.editNote(ctx.params.id as string, patch);
+    if (!note) throw notFound('note');
+    sendJson(ctx.res, 200, note);
+  });
+
+  // Write it again from the thread as it is now; the previous version stays in the history.
+  router.on('POST', '/api/notes/:id/rewrite', ({ res, params }) => {
+    const note = repo.getNote(params.id as string);
+    if (!note) throw notFound('note');
+    if (!note.threadId) throw new HttpError(409, 'conflict', 'the thread this note came from was deleted');
+    const restarted = repo.restartNote(note.id);
+    if (restarted?.status === 'generating' && !notes.isWriting(note.id)) notes.start(note.id, note.threadId);
+    sendJson(res, 202, restarted);
+  });
+
   router.on('POST', '/api/threads/:id/return', ({ res, params }) => {
     const thread = repo.getThread(params.id as string);
     if (!thread) throw notFound('thread');
@@ -256,8 +322,9 @@ export function createApp(deps: AppDeps): App {
     server,
     generations,
     titler,
+    notes,
     async close() {
-      await generations.shutdown();
+      await Promise.all([generations.shutdown(), notes.shutdown()]);
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
         server.closeAllConnections();

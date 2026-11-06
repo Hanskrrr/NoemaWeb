@@ -14,6 +14,9 @@ import {
   type MessageStatus,
   ModelSettingsResponse,
   ModelSettingsView,
+  Note,
+  NoteHistory,
+  NoteList,
   Notebook,
   NotebookList,
   SearchResponse,
@@ -24,7 +27,9 @@ import {
   Thread,
   ThreadDetail,
   ThreadList,
+  ThreadMap,
   type UpdateModelSettingsRequest,
+  type UpdateNoteRequest,
 } from '@noema/core';
 import { z } from 'zod';
 
@@ -92,6 +97,15 @@ export const api = {
   saveModelSettings: (body: UpdateModelSettingsRequest) =>
     call(ModelSettingsResponse, 'PUT', '/api/settings/model', body),
   forgetModelSettings: () => call(ModelSettingsResponse, 'DELETE', '/api/settings/model'),
+  renameThread: (threadId: string, title: string) => call(Thread, 'PATCH', `/api/threads/${threadId}`, { title }),
+  threadMap: (threadId: string) => call(ThreadMap, 'GET', `/api/threads/${threadId}/map`),
+  rewriteAsNote: (threadId: string, noteId: string) =>
+    call(Note, 'POST', `/api/threads/${threadId}/notes`, { id: noteId }),
+  notes: (notebookId: string) => call(NoteList, 'GET', `/api/notebooks/${notebookId}/notes`),
+  note: (noteId: string) => call(Note, 'GET', `/api/notes/${noteId}`),
+  noteHistory: (noteId: string) => call(NoteHistory, 'GET', `/api/notes/${noteId}/history`),
+  editNote: (noteId: string, patch: UpdateNoteRequest) => call(Note, 'PATCH', `/api/notes/${noteId}`, patch),
+  rewriteNoteAgain: (noteId: string) => call(Note, 'POST', `/api/notes/${noteId}/rewrite`, {}),
 };
 
 export interface StreamHandlers {

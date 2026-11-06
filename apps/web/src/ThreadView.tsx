@@ -110,15 +110,22 @@ function rangesFor(branches: BranchSummary[], byId: Map<string, Message>): Range
 export function ThreadView({
   threadId,
   returningFrom,
+  message: focusMessage,
   focus,
   onNavigate,
   onBranch,
   onChanged,
   onOpenSettings,
+  onOpenMap,
+  onOpenNote,
 }: {
   threadId: string;
   returningFrom?: string | undefined;
+  /** Scroll to this exact message and flash it (from the map, a note citation or search). */
+  message?: string | undefined;
   focus?: Focus | null;
+  onOpenMap: (threadId: string) => void;
+  onOpenNote: (noteId: string) => void;
   onNavigate: (threadId: string, from?: string) => void;
   onBranch: (draft: BranchDraft) => void;
   onChanged: () => void;
@@ -147,11 +154,16 @@ export function ThreadView({
         end: () => {
           watchers.current.delete(id);
           onChanged();
+          // The first answer may have given the thread its AI title.
+          api.thread(threadId).then(
+            (d) => setThread(d.thread),
+            () => {},
+          );
         },
       });
       watchers.current.set(id, close);
     },
-    [onChanged],
+    [threadId, onChanged],
   );
 
   const deliver = useCallback(
@@ -213,7 +225,7 @@ export function ThreadView({
   const lastContentLength = messages.at(-1)?.content.length ?? 0;
 
   // Follow the answer as it grows, unless the learner has scrolled up to read.
-  const stick = useRef(!returningFrom && !focus);
+  const stick = useRef(!returningFrom && !focus && !focusMessage);
   useEffect(() => {
     const onScroll = () => {
       stick.current = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 160;
@@ -234,8 +246,16 @@ export function ThreadView({
   // Back from a branch: scroll to the passage it left from and highlight it.
   const returned = useRef(false);
   useEffect(() => {
-    if (!loaded || returned.current || (!returningFrom && !focus)) return;
+    if (!loaded || returned.current || (!returningFrom && !focus && !focusMessage)) return;
     returned.current = true;
+    if (focusMessage) {
+      const article = document.querySelector(`[data-message-id="${focusMessage}"]`)?.closest('article');
+      if (!article) return;
+      article.scrollIntoView({ block: 'center' });
+      article.classList.add('flash');
+      setTimeout(() => article.classList.remove('flash'), 2400);
+      return;
+    }
     let range: Range | undefined;
     if (returningFrom) {
       const branch = branches.find((b) => b.threadId === returningFrom);
@@ -249,7 +269,7 @@ export function ThreadView({
     highlight('noema-return', range);
     const target = range.startContainer.parentElement;
     target?.scrollIntoView({ block: 'center' });
-  }, [loaded, returningFrom, focus, branches, byId]);
+  }, [loaded, returningFrom, focus, focusMessage, branches, byId]);
   useEffect(() => () => void highlight('noema-return', null), []);
 
   // Select a passage in a finished message to ask about it in a branch.
@@ -313,6 +333,26 @@ export function ThreadView({
     }
   };
 
+  const rename = async (title: string) => {
+    try {
+      setThread(await api.renameThread(threadId, title));
+      onChanged();
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
+
+  const rewrite = async () => {
+    const noteId = ulid();
+    try {
+      await api.rewriteAsNote(threadId, noteId);
+      onChanged();
+      onOpenNote(noteId);
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
+
   const back = () => {
     if (!origin) return;
     void api.returnFromBranch(threadId).catch(() => {});
@@ -339,6 +379,15 @@ export function ThreadView({
   return (
     <>
       <main className="thread" aria-busy={!loaded}>
+        {thread && (
+          <ThreadHeader
+            title={thread.title}
+            canRewrite={messages.some((m) => m.role === 'assistant' && m.status === 'done')}
+            onRename={rename}
+            onOpenMap={() => onOpenMap(threadId)}
+            onRewrite={() => void rewrite()}
+          />
+        )}
         {origin && (
           <OriginCard
             parentTitle={origin.parentTitle}
@@ -408,6 +457,84 @@ export function ThreadView({
 }
 
 // ---------------------------------------------------------------------------
+
+function ThreadHeader({
+  title,
+  canRewrite,
+  onRename,
+  onOpenMap,
+  onRewrite,
+}: {
+  title: string;
+  canRewrite: boolean;
+  onRename: (title: string) => Promise<void>;
+  onOpenMap: () => void;
+  onRewrite: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(title);
+
+  const save = async () => {
+    const next = draft.trim();
+    setEditing(false);
+    if (next && next !== title) await onRename(next);
+  };
+
+  return (
+    <header className="thread-head">
+      {editing ? (
+        <input
+          className="title-input"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={() => void save()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) void save();
+            if (e.key === 'Escape') setEditing(false);
+          }}
+          aria-label="Thread title"
+          maxLength={200}
+          // biome-ignore lint/a11y/noAutofocus: the field appears because the learner asked to rename
+          autoFocus
+          data-testid="title-input"
+        />
+      ) : (
+        <h1>
+          <button
+            type="button"
+            className="title-button"
+            onClick={() => {
+              setDraft(title);
+              setEditing(true);
+            }}
+            title="Rename"
+            data-testid="rename"
+          >
+            {title || 'Untitled'}
+            <span className="pencil" aria-hidden>
+              ✎
+            </span>
+          </button>
+        </h1>
+      )}
+      <div className="thread-actions">
+        <button type="button" className="quiet" onClick={onOpenMap} data-testid="open-map">
+          Map
+        </button>
+        <button
+          type="button"
+          className="quiet"
+          onClick={onRewrite}
+          disabled={!canRewrite}
+          title="Rewrite this thread and its branches as a study note"
+          data-testid="rewrite"
+        >
+          Rewrite as note
+        </button>
+      </div>
+    </header>
+  );
+}
 
 function OriginCard({
   parentTitle,

@@ -1,27 +1,49 @@
 // Where the learner is, kept in the URL hash so reload, Back/Forward and
 // bookmarks work:
 //   #/t/<threadId>                  a thread or branch
-//   #/t/<threadId>/from/<branchId>  a thread, returning from one of its branches
+//   #/t/<threadId>/from/<branchId>  a thread, returning from one of its branches (highlights the passage)
+//   #/t/<threadId>/m/<messageId>    a thread, scrolled to one exact message
+//   #/map/<threadId>                the map of the whole thread tree around a thread
+//   #/note/<noteId>                 a note
 //   #/new                           a new thread, before its first question
 
 import { isUlid } from '@noema/core';
 import { useCallback, useEffect, useState } from 'react';
 
-export type Route = { kind: 'thread'; id: string; from?: string | undefined } | { kind: 'new' };
+export type Route =
+  | { kind: 'thread'; id: string; from?: string | undefined; message?: string | undefined }
+  | { kind: 'map'; id: string }
+  | { kind: 'note'; id: string }
+  | { kind: 'new' };
 
 export function parseHash(hash: string): Route | null {
   const parts = hash.replace(/^#\/?/, '').split('/');
-  if (parts[0] === 'new') return { kind: 'new' };
-  if (parts[0] === 't' && isUlid(parts[1])) {
-    const from = parts[2] === 'from' && isUlid(parts[3]) ? parts[3] : undefined;
-    return { kind: 'thread', id: parts[1], from };
+  const [head, id, sub, subId] = parts;
+  if (head === 'new') return { kind: 'new' };
+  if (!isUlid(id)) return null;
+  if (head === 'map') return { kind: 'map', id };
+  if (head === 'note') return { kind: 'note', id };
+  if (head === 't') {
+    if (sub === 'from' && isUlid(subId)) return { kind: 'thread', id, from: subId };
+    if (sub === 'm' && isUlid(subId)) return { kind: 'thread', id, message: subId };
+    return { kind: 'thread', id };
   }
   return null;
 }
 
 export function toHash(route: Route): string {
-  if (route.kind === 'new') return '#/new';
-  return route.from ? `#/t/${route.id}/from/${route.from}` : `#/t/${route.id}`;
+  switch (route.kind) {
+    case 'new':
+      return '#/new';
+    case 'map':
+      return `#/map/${route.id}`;
+    case 'note':
+      return `#/note/${route.id}`;
+    case 'thread':
+      if (route.from) return `#/t/${route.id}/from/${route.from}`;
+      if (route.message) return `#/t/${route.id}/m/${route.message}`;
+      return `#/t/${route.id}`;
+  }
 }
 
 export function useRoute(): [Route | null, (route: Route, options?: { replace?: boolean }) => void] {

@@ -6,10 +6,49 @@
 // http(s) and mailto, images are not loaded. KaTeX is the only HTML we
 // inject, and it runs with trust: false.
 
+import { type CiteRefs, splitCitations } from '@noema/core';
 import katex from 'katex';
 import type { Nodes, Parents } from 'mdast';
-import { type ReactNode, useMemo } from 'react';
+import { createContext, type ReactNode, useContext, useMemo } from 'react';
 import { codeRegion, nodeRange, parseMarkdown } from './parse.ts';
+
+/**
+ * Citations: in a note, [E3] labels become buttons that open the exact
+ * message they cite. Notes provide this; in chat there is none and [E3] is
+ * just text.
+ */
+export interface Cites {
+  refs: CiteRefs;
+  go: (threadId: string, messageId: string) => void;
+}
+export const CiteContext = createContext<Cites | null>(null);
+
+function withCites(key: string | number, text: string, cites: Cites): ReactNode {
+  const parts = splitCitations(text, (label) => label in cites.refs);
+  if (parts.length === 1 && typeof parts[0] === 'string') return text;
+  return (
+    <span key={key}>
+      {parts.map((part, i) => {
+        if (typeof part === 'string') return part;
+        const ref = cites.refs[part.label];
+        if (!ref) return null;
+        return (
+          <button
+            // biome-ignore lint/suspicious/noArrayIndexKey: parts of one fixed string
+            key={i}
+            type="button"
+            className="cite"
+            onClick={() => cites.go(ref.threadId, ref.messageId)}
+            title="Open the exchange this comes from"
+            data-testid="cite"
+          >
+            {part.label}
+          </button>
+        );
+      })}
+    </span>
+  );
+}
 
 const mathCache = new Map<string, string>();
 
@@ -48,31 +87,32 @@ function leafSpan(key: string | number, start: number, end: number, text: string
   );
 }
 
-function children(node: Parents, source: string): ReactNode[] {
-  return (node.children as Nodes[]).map((child, i) => render(child, source, i));
+function children(node: Parents, source: string, cites: Cites | null): ReactNode[] {
+  return (node.children as Nodes[]).map((child, i) => render(child, source, i, cites));
 }
 
-function render(node: Nodes, source: string, index: number): ReactNode {
+function render(node: Nodes, source: string, index: number, cites: Cites | null): ReactNode {
   const r = nodeRange(node);
   const key = r ? `${node.type}:${r.start}` : `${node.type}#${index}`;
   switch (node.type) {
     case 'root':
-      return children(node, source);
+      return children(node, source, cites);
     case 'paragraph':
-      return <p key={key}>{children(node, source)}</p>;
+      return <p key={key}>{children(node, source, cites)}</p>;
     case 'heading': {
       const Tag = `h${Math.min(6, node.depth + 1)}` as 'h2';
-      return <Tag key={key}>{children(node, source)}</Tag>;
+      return <Tag key={key}>{children(node, source, cites)}</Tag>;
     }
     case 'text':
+      if (cites && node.value.includes('[E')) return withCites(key, node.value, cites);
       return r ? leafSpan(key, r.start, r.end, node.value) : node.value;
     case 'html':
       // Shown, never executed.
       return r ? leafSpan(key, r.start, r.end, node.value) : node.value;
     case 'emphasis':
-      return <em key={key}>{children(node, source)}</em>;
+      return <em key={key}>{children(node, source, cites)}</em>;
     case 'strong':
-      return <strong key={key}>{children(node, source)}</strong>;
+      return <strong key={key}>{children(node, source, cites)}</strong>;
     case 'inlineCode':
       return <code key={key}>{r ? leafSpan('v', r.start, r.end, node.value) : node.value}</code>;
     case 'code': {
@@ -108,7 +148,7 @@ function render(node: Nodes, source: string, index: number): ReactNode {
         />
       );
     case 'list': {
-      const items = children(node, source);
+      const items = children(node, source, cites);
       const cls = node.spread ? 'spread' : 'tight';
       return node.ordered ? (
         <ol key={key} start={node.start ?? undefined} className={cls}>
@@ -125,13 +165,13 @@ function render(node: Nodes, source: string, index: number): ReactNode {
         return (
           <li key={key} className="task">
             <input type="checkbox" checked={node.checked} disabled readOnly aria-label={node.checked ? 'done' : 'not done'} />
-            {children(node, source)}
+            {children(node, source, cites)}
           </li>
         );
       }
-      return <li key={key}>{children(node, source)}</li>;
+      return <li key={key}>{children(node, source, cites)}</li>;
     case 'delete':
-      return <del key={key}>{children(node, source)}</del>;
+      return <del key={key}>{children(node, source, cites)}</del>;
     case 'table': {
       const [head, ...rows] = node.children;
       const align = (i: number) => {
@@ -146,7 +186,7 @@ function render(node: Nodes, source: string, index: number): ReactNode {
                 <tr>
                   {head.children.map((cell, i) => (
                     <th key={`h${nodeRange(cell)?.start ?? i}`} style={align(i)}>
-                      {children(cell, source)}
+                      {children(cell, source, cites)}
                     </th>
                   ))}
                 </tr>
@@ -158,7 +198,7 @@ function render(node: Nodes, source: string, index: number): ReactNode {
                   <tr key={`r${nodeRange(row)?.start ?? r}`}>
                     {row.children.map((cell, i) => (
                       <td key={`c${nodeRange(cell)?.start ?? i}`} style={align(i)}>
-                        {children(cell, source)}
+                        {children(cell, source, cites)}
                       </td>
                     ))}
                   </tr>
@@ -179,11 +219,11 @@ function render(node: Nodes, source: string, index: number): ReactNode {
       return (
         <div key={key} className="footnote">
           <span className="fn-label">[{node.label ?? node.identifier}]</span>
-          {children(node, source)}
+          {children(node, source, cites)}
         </div>
       );
     case 'blockquote':
-      return <blockquote key={key}>{children(node, source)}</blockquote>;
+      return <blockquote key={key}>{children(node, source, cites)}</blockquote>;
     case 'thematicBreak':
       return <hr key={key} />;
     case 'break':
@@ -192,11 +232,11 @@ function render(node: Nodes, source: string, index: number): ReactNode {
       const href = safeHref(node.url);
       return href ? (
         <a key={key} href={href} target="_blank" rel="noreferrer noopener">
-          {children(node, source)}
+          {children(node, source, cites)}
         </a>
       ) : (
         <span key={key} className="link-disabled">
-          {children(node, source)}
+          {children(node, source, cites)}
         </span>
       );
     }
@@ -210,7 +250,7 @@ function render(node: Nodes, source: string, index: number): ReactNode {
     case 'yaml':
       return null;
     default:
-      if ('children' in node) return <span key={key}>{children(node as Parents, source)}</span>;
+      if ('children' in node) return <span key={key}>{children(node as Parents, source, cites)}</span>;
       if ('value' in node && typeof node.value === 'string')
         return r ? leafSpan(key, r.start, r.end, node.value) : node.value;
       return null;
@@ -219,5 +259,6 @@ function render(node: Nodes, source: string, index: number): ReactNode {
 
 export function Markdown({ source }: { source: string }) {
   const tree = useMemo(() => parseMarkdown(source), [source]);
-  return <div className="md">{render(tree, source, 0)}</div>;
+  const cites = useContext(CiteContext);
+  return <div className="md">{render(tree, source, 0, cites)}</div>;
 }

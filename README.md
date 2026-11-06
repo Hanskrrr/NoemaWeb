@@ -4,7 +4,7 @@ A learning notebook for studying hard material with an AI. Ask in a normal chat;
 
 This repository is the working prototype (v0.1). The product thinking (PARADIGM, interviews, the prototype brief) lives in the `NoemaLearningNote` workspace, not here.
 
-**Status: M2 done.** Threads in a sidebar with titles the model writes; ask about any selected passage in a side branch that keeps its exact origin, and go Back to that passage, highlighted. Answers stream and survive reloads and crashes, with tables, math and code; the model is connected with your own key. Sources, the Notebook view and search come next. See [the latest handoff](docs/handoffs/2026-11-05-titles-and-tables.md).
+**Status: M2 done, plus the first notebook features.** Threads in a sidebar with titles the model writes and you can change; ask about any selected passage in a side branch that keeps its exact origin, and go Back to that passage, highlighted. The sidebar shows the passage each branch came from, and a Map shows the whole thread tree on one page; both jump to the exact spot. Rewrite a thread as an editable study note whose citations open the exchanges they came from. Answers stream and survive reloads and crashes, with tables, math and code; the model is connected with your own key. Sources and search come next. See [the latest handoff](docs/handoffs/2026-11-05-notebook-map-notes.md).
 
 ## Run it
 

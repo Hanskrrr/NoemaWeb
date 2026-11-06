@@ -14,7 +14,10 @@ import {
   type MessageError,
   type MessageStatus,
   makeSnippet,
+  type MapExchange,
+  type MapNode,
   type Notebook,
+  type Note,
   type Origin,
   type SearchHit,
   searchText,
@@ -37,15 +40,54 @@ function toNotebook(r: Row): Notebook {
   };
 }
 
+function shorten(text: string, max: number): string {
+  const chars = Array.from(text.replace(/\s+/g, ' ').trim());
+  return chars.length > max ? `${chars.slice(0, max).join('')}…` : chars.join('');
+}
+
 function toThread(r: Row): Thread {
+  const exact = r.origin_exact as string | null | undefined;
   return {
     id: r.id as string,
     notebookId: r.notebook_id as string,
     parentThreadId: (r.parent_thread_id as string | null) ?? null,
+    originQuote: exact ? shorten(exact, 160) : null,
     title: r.title as string,
+    titleSource: ((r.title_source as string | undefined) ?? 'question') as Thread['titleSource'],
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };
+}
+
+const THREAD_SELECT = `SELECT t.*, a.exact AS origin_exact FROM thread t LEFT JOIN anchor a ON a.id = t.origin_anchor_id`;
+
+function toNote(r: Row): Note {
+  return {
+    id: r.id as string,
+    notebookId: r.notebook_id as string,
+    threadId: (r.thread_id as string | null) ?? null,
+    title: r.title as string,
+    content: r.content as string,
+    refs: JSON.parse((r.refs as string | undefined) ?? '{}') as Note['refs'],
+    status: r.status as Note['status'],
+    error: (r.error as string | null) ?? null,
+    author: r.author as Note['author'],
+    revision: r.revision as number,
+    createdAt: r.created_at as string,
+    updatedAt: r.updated_at as string,
+  };
+}
+
+/** Markdown to a plain one-line gist for the map. */
+export function gistOf(markdown: string, max = 140): string {
+  const plain = markdown
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\$\$[\s\S]*?\$\$/g, ' ')
+    .replace(/^\s*\|.*\|\s*$/gm, ' ')
+    .replace(/^#+\s*/gm, '')
+    .replace(/[*_`>#~]/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+  return shorten(plain, max);
 }
 
 function toMessage(r: Row): Message {
@@ -162,13 +204,13 @@ export class Repo {
   listThreads(notebookId: string): Thread[] {
     return (
       this.db.sql
-        .prepare('SELECT * FROM thread WHERE notebook_id = ? ORDER BY updated_at DESC')
+        .prepare(`${THREAD_SELECT} WHERE t.notebook_id = ? ORDER BY t.updated_at DESC`)
         .all(notebookId) as Row[]
     ).map(toThread);
   }
 
   getThread(id: string): Thread | null {
-    const row = this.db.sql.prepare('SELECT * FROM thread WHERE id = ?').get(id) as Row | undefined;
+    const row = this.db.sql.prepare(`${THREAD_SELECT} WHERE t.id = ?`).get(id) as Row | undefined;
     return row ? toThread(row) : null;
   }
 
@@ -186,7 +228,17 @@ export class Repo {
         .run(id, notebookId, title, t, t);
       if (title) this.index('thread', id, id, title);
       this.logEvent('thread.created', id, { notebookId });
-      return { thread: { id, notebookId, parentThreadId: null, title, createdAt: t, updatedAt: t }, created: true };
+      const thread: Thread = {
+        id,
+        notebookId,
+        parentThreadId: null,
+        originQuote: null,
+        title,
+        titleSource: 'question',
+        createdAt: t,
+        updatedAt: t,
+      };
+      return { thread, created: true };
     });
   }
 
@@ -295,6 +347,191 @@ export class Repo {
       )
       .all(limit) as Array<{ id: string }>;
     return rows.map((r) => r.id);
+  }
+
+  // Map ---------------------------------------------------------------------
+
+  /** The outermost thread above this one. */
+  rootOf(threadId: string): string {
+    const path = this.pathOf(threadId);
+    return path[0]?.id ?? threadId;
+  }
+
+  /**
+   * The whole journey from the root thread down: each exchange in order with
+   * the start of its answer, and every branch hung on the message it left from.
+   */
+  mapOf(threadId: string): { root: MapNode; focusThreadId: string } {
+    const build = (id: string, depth: number): MapNode => {
+      const thread = this.getThread(id);
+      const origin = this.originOf(id);
+      const messages = this.listMessages(id);
+      const answers = new Map(messages.filter((m) => m.role === 'assistant').map((m) => [m.replyTo, m]));
+      const byMessage = new Map<string, string[]>();
+      for (const b of this.branchesOf(id)) {
+        const list = byMessage.get(b.anchor.messageId) ?? [];
+        list.push(b.threadId);
+        byMessage.set(b.anchor.messageId, list);
+      }
+      const kids = (messageId: string | undefined) =>
+        depth < 20 && messageId ? (byMessage.get(messageId) ?? []).map((b) => build(b, depth + 1)) : [];
+      const exchanges: MapExchange[] = messages
+        .filter((m) => m.role === 'user')
+        .map((q, i) => {
+          const a = answers.get(q.id);
+          return {
+            index: i + 1,
+            questionId: q.id,
+            question: shorten(q.content, 200),
+            answerId: a?.id ?? null,
+            gist: a ? gistOf(a.content) : '',
+            status: a?.status ?? q.status,
+            branches: [...kids(q.id), ...kids(a?.id)],
+          };
+        });
+      return {
+        threadId: id,
+        title: thread?.title ?? '',
+        origin: origin ? { messageId: origin.anchor.messageId, exact: shorten(origin.anchor.exact, 200) } : null,
+        exchanges,
+      };
+    };
+    return { root: build(this.rootOf(threadId), 0), focusThreadId: threadId };
+  }
+
+  // Notes -------------------------------------------------------------------
+
+  getNote(id: string): Note | null {
+    const row = this.db.sql.prepare('SELECT * FROM note WHERE id = ?').get(id) as Row | undefined;
+    return row ? toNote(row) : null;
+  }
+
+  listNotes(notebookId: string): Note[] {
+    return (
+      this.db.sql.prepare('SELECT * FROM note WHERE notebook_id = ? ORDER BY updated_at DESC').all(notebookId) as Row[]
+    ).map(toNote);
+  }
+
+  /** Start an AI note for a thread. Idempotent on the note id. */
+  startNote(id: string, notebookId: string, threadId: string, title: string): { note: Note; created: boolean } {
+    return this.db.tx(() => {
+      const existing = this.getNote(id);
+      if (existing) {
+        if (existing.threadId !== threadId) throw new ConflictError('note id already used');
+        return { note: existing, created: false };
+      }
+      const t = now();
+      this.db.sql
+        .prepare(
+          `INSERT INTO note (id, notebook_id, thread_id, title, content, status, author, revision, created_at, updated_at)
+           VALUES (?, ?, ?, ?, '', 'generating', 'ai', 0, ?, ?)`,
+        )
+        .run(id, notebookId, threadId, title, t, t);
+      this.logEvent('note.requested', id, { threadId });
+      return { note: this.getNote(id) as Note, created: true };
+    });
+  }
+
+  /** Write it again: the current version stays in the history. */
+  restartNote(id: string): Note | null {
+    const result = this.db.sql
+      .prepare(
+        `UPDATE note SET status = 'generating', content = '', error = NULL, author = 'ai', updated_at = ?
+         WHERE id = ? AND status <> 'generating'`,
+      )
+      .run(now(), id);
+    if (Number(result.changes) > 0) this.logEvent('note.rewrite_requested', id);
+    return this.getNote(id);
+  }
+
+  /** The labels the writer will cite, set before it starts so they work while the note streams in. */
+  setNoteRefs(id: string, refs: Note['refs']): void {
+    this.db.sql.prepare("UPDATE note SET refs = ? WHERE id = ? AND status = 'generating'").run(JSON.stringify(refs), id);
+  }
+
+  saveNoteContent(id: string, content: string): void {
+    this.db.sql
+      .prepare("UPDATE note SET content = ?, updated_at = ? WHERE id = ? AND status = 'generating'")
+      .run(content, now(), id);
+  }
+
+  /**
+   * The writer is done (or gave up). `title` is the model's title for the
+   * note; it replaces the thread's title, never one the learner chose.
+   */
+  finishNote(id: string, content: string, status: 'done' | 'failed', error: string | null, title?: string | null): void {
+    this.db.tx(() => {
+      const note = this.getNote(id);
+      if (!note || note.status !== 'generating') return;
+      const t = now();
+      const n = status === 'done' ? note.revision + 1 : note.revision;
+      const source = this.db.sql.prepare('SELECT title_source FROM note WHERE id = ?').get(id)?.title_source;
+      const named = status === 'done' && Boolean(title) && source !== 'user';
+      const name = named ? (title as string) : note.title;
+      this.db.sql
+        .prepare(
+          `UPDATE note SET title = ?, title_source = CASE WHEN ? THEN 'model' ELSE title_source END,
+             content = ?, status = ?, error = ?, revision = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(name, named ? 1 : 0, content, status, error, n, t, id);
+      if (status === 'done') this.addNoteRevision(id, n, { title: name, content, refs: note.refs }, 'ai', t);
+      this.logEvent(`note.${status}`, id, { chars: content.length });
+    });
+  }
+
+  /** A learner's edit: saved as a new version, and the note is marked as edited. */
+  editNote(id: string, patch: { title?: string | undefined; content?: string | undefined }): Note | null {
+    return this.db.tx(() => {
+      const note = this.getNote(id);
+      if (!note) return null;
+      if (note.status === 'generating') throw new ConflictError('wait for the note to finish before editing it');
+      const title = patch.title ?? note.title;
+      const content = patch.content ?? note.content;
+      const author = note.author === 'user' ? 'user' : 'ai+user';
+      const renamed = title !== note.title;
+      const t = now();
+      const n = note.revision + 1;
+      this.db.sql
+        .prepare(
+          `UPDATE note SET title = ?, title_source = CASE WHEN ? THEN 'user' ELSE title_source END,
+             content = ?, author = ?, revision = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(title, renamed ? 1 : 0, content, author, n, t, id);
+      this.addNoteRevision(id, n, { title, content, refs: note.refs }, 'user', t);
+      this.logEvent('note.edited', id, { chars: content.length });
+      return this.getNote(id);
+    });
+  }
+
+  noteHistory(id: string): Array<{ n: number; author: string; createdAt: string; chars: number }> {
+    return (
+      this.db.sql
+        .prepare('SELECT n, author, created_at, length(content) AS chars FROM note_revision WHERE note_id = ? ORDER BY n')
+        .all(id) as Row[]
+    ).map((r) => ({ n: r.n as number, author: r.author as string, createdAt: r.created_at as string, chars: r.chars as number }));
+  }
+
+  /** At boot: a note that was still being written was cut off. */
+  failGeneratingNotes(): number {
+    const live = this.db.sql.prepare("SELECT id, content FROM note WHERE status = 'generating'").all() as Row[];
+    for (const r of live) {
+      this.finishNote(r.id as string, r.content as string, 'failed', 'The server stopped before this note was finished.');
+    }
+    return live.length;
+  }
+
+  private addNoteRevision(
+    noteId: string,
+    n: number,
+    v: { title: string; content: string; refs: Note['refs'] },
+    author: string,
+    at: string,
+  ): void {
+    this.db.sql
+      .prepare(
+        'INSERT INTO note_revision (id, note_id, n, title, content, refs, author, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(ulid(), noteId, n, v.title, v.content, JSON.stringify(v.refs), author, at);
   }
 
   // Branches ----------------------------------------------------------------
@@ -610,6 +847,8 @@ export class Repo {
       threads: all('thread'),
       messages: all('message'),
       anchors: all('anchor'),
+      notes: all('note'),
+      noteRevisions: all('note_revision'),
       revisions: all('message_revision'),
       modelCalls: all('model_call'),
       events: all('event'),

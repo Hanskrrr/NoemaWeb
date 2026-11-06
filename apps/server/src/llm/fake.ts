@@ -54,6 +54,29 @@ export class FakeProvider implements ModelProvider {
   async *stream(req: StreamRequest): AsyncIterable<StreamEvent> {
     const question = [...req.messages].reverse().find((m) => m.role === 'user')?.content ?? '';
     yield { type: 'attempt', n: 1 };
+    if (req.purpose === 'note') {
+      // A predictable note that cites the first two exchanges, so tests can follow the links.
+      const labels = [...question.matchAll(/^\[(E\d+)\] Question:/gm)].map((m) => m[1]);
+      const cite = (i: number) => (labels[i] ? `[${labels[i]}]` : '');
+      const text = [
+        '# Study note',
+        '',
+        `The main idea, from the first question ${cite(0)}.`,
+        '',
+        `- A detail that came from a side question ${cite(1)}.`,
+        '- Inline math still works: $a^2 + b^2 = c^2$.',
+        '',
+        '## Open questions',
+        '',
+        '- None yet.',
+      ].join('\n');
+      for (const part of text.match(/[\s\S]{1,12}/g) ?? []) {
+        await sleep(this.delayMs, req.signal);
+        yield { type: 'text', text: part };
+      }
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
     if (req.purpose === 'title') {
       // A predictable title: "About" plus the question, so tests can tell it was written.
       const asked = /Question:\n(.*)/.exec(question)?.[1] ?? 'this';

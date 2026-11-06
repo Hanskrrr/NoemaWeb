@@ -32,6 +32,7 @@ const db = new Db(config.dbPath);
 const applied = db.migrate();
 const repo = new Repo(db);
 const interrupted = repo.interruptLive();
+repo.failGeneratingNotes();
 repo.ensureDefaultNotebook();
 
 let backupTimer: NodeJS.Timeout | null = null;

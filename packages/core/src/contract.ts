@@ -47,7 +47,11 @@ export const Thread = z.object({
   notebookId: Id,
   /** Set for a branch: the thread it was asked from. */
   parentThreadId: Id.nullable(),
+  /** For a branch: the passage it started from, shortened. */
+  originQuote: z.string().nullable(),
   title: z.string(),
+  /** question: the first question; model: written by the AI; user: renamed by the learner. */
+  titleSource: z.enum(['question', 'model', 'user']),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -115,6 +119,87 @@ export const ThreadList = z.object({ threads: z.array(Thread) });
 
 export const CreateThreadRequest = z.object({ id: Id, title: z.string().max(200).default('') });
 export type CreateThreadRequest = z.infer<typeof CreateThreadRequest>;
+
+export const RenameThreadRequest = z.object({ title: z.string().trim().min(1).max(200) });
+export type RenameThreadRequest = z.infer<typeof RenameThreadRequest>;
+
+// The map of a thread: every exchange in order, with the branches that left
+// from it hung on the exact message and passage, nested. Built from stored
+// content only; no model involved.
+export interface MapExchange {
+  index: number;
+  questionId: string;
+  question: string;
+  answerId: string | null;
+  /** The start of the answer, as plain text. */
+  gist: string;
+  status: MessageStatus;
+  branches: MapNode[];
+}
+export interface MapNode {
+  threadId: string;
+  title: string;
+  /** For a branch: where it left from. */
+  origin: { messageId: string; exact: string } | null;
+  exchanges: MapExchange[];
+}
+const MapExchangeSchema: z.ZodType<MapExchange> = z.lazy(() =>
+  z.object({
+    index: z.number().int(),
+    questionId: Id,
+    question: z.string(),
+    answerId: Id.nullable(),
+    gist: z.string(),
+    status: MessageStatus,
+    branches: z.array(MapNodeSchema),
+  }),
+);
+export const MapNodeSchema: z.ZodType<MapNode> = z.lazy(() =>
+  z.object({
+    threadId: Id,
+    title: z.string(),
+    origin: z.object({ messageId: Id, exact: z.string() }).nullable(),
+    exchanges: z.array(MapExchangeSchema),
+  }),
+);
+export const ThreadMap = z.object({ root: MapNodeSchema, focusThreadId: Id });
+export type ThreadMap = z.infer<typeof ThreadMap>;
+
+// Notes: an editable document the AI writes from a thread on request.
+// It never replaces the chat; every version is kept.
+export const NoteStatus = z.enum(['generating', 'done', 'failed']);
+/** Where a citation label in a note ([E3]) points: the exact message it came from. */
+export const CiteRef = z.object({ threadId: Id, messageId: Id });
+export const CiteRefs = z.record(z.string().regex(/^E\d{1,4}$/), CiteRef);
+export type CiteRefs = z.infer<typeof CiteRefs>;
+export const Note = z.object({
+  id: Id,
+  notebookId: Id,
+  threadId: Id.nullable(),
+  title: z.string(),
+  content: z.string(),
+  /** Citation labels in the content and the exchanges they point at. */
+  refs: CiteRefs,
+  status: NoteStatus,
+  error: z.string().nullable(),
+  /** ai: as written by the model; user: written by the learner; ai+user: AI draft the learner edited. */
+  author: z.enum(['ai', 'user', 'ai+user']),
+  revision: z.number().int().nonnegative(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type Note = z.infer<typeof Note>;
+export const NoteSummary = Note.omit({ content: true, refs: true });
+export type NoteSummary = z.infer<typeof NoteSummary>;
+export const NoteList = z.object({ notes: z.array(NoteSummary) });
+export const RewriteRequest = z.object({ id: Id });
+export const UpdateNoteRequest = z
+  .object({ title: z.string().trim().min(1).max(200), content: z.string().max(400_000) })
+  .partial()
+  .refine((v) => Object.keys(v).length > 0, 'nothing to update');
+export type UpdateNoteRequest = z.infer<typeof UpdateNoteRequest>;
+export const NoteRevision = z.object({ n: z.number().int(), author: z.string(), createdAt: z.string(), chars: z.number().int() });
+export const NoteHistory = z.object({ revisions: z.array(NoteRevision) });
 
 export const UpdateNotebookRequest = z
   .object({ title: z.string().min(1).max(200), aboutMe: z.string().max(4000) })

@@ -1,6 +1,7 @@
 // All SQL lives here. Routes and the generation loop call these methods and
 // never write SQL themselves.
 
+import { createHash } from 'node:crypto';
 import type { SQLInputValue } from 'node:sqlite';
 import {
   type AnchorRef,
@@ -28,6 +29,13 @@ import {
   type Notebook,
   type OpenBranch,
   type Origin,
+  type Source,
+  type SourceDetail,
+  type SourceOrigin,
+  type SourcePassage,
+  type SourceVersion,
+  sourceBlocks,
+  sourceSection,
   type Trash,
   plainText,
   parseQuery,
@@ -70,6 +78,9 @@ function toThread(r: Row): Thread {
     mergedIntoId: (r.merged_into as string | null | undefined) ?? null,
     continuedFromId: (r.continued_from as string | null | undefined) ?? null,
     deletedAt: (r.deleted_at as string | null | undefined) ?? null,
+    sourceId: (r.source_id as string | null | undefined) ?? null,
+    sourceVersionId: (r.source_version_id as string | null | undefined) ?? null,
+    sourceQuote: r.source_exact ? shorten(r.source_exact as string, 160) : null,
     title: r.title as string,
     titleSource: ((r.title_source as string | undefined) ?? 'question') as Thread['titleSource'],
     createdAt: r.created_at as string,
@@ -77,10 +88,12 @@ function toThread(r: Row): Thread {
   };
 }
 
-const THREAD_SELECT = `SELECT t.*, a.exact AS origin_exact,
+const THREAD_SELECT = `SELECT t.*, a.exact AS origin_exact, sa.exact AS source_exact, sv.source_id AS source_id, sa.version_id AS source_version_id,
   (SELECT m.target_thread_id FROM thread_merge m WHERE m.source_thread_id = t.id AND m.status = 'merged'
    ORDER BY m.merged_at DESC LIMIT 1) AS merged_into
-  FROM thread t LEFT JOIN anchor a ON a.id = t.origin_anchor_id`;
+  FROM thread t LEFT JOIN anchor a ON a.id = t.origin_anchor_id
+  LEFT JOIN source_anchor sa ON sa.id = t.source_anchor_id
+  LEFT JOIN source_version sv ON sv.id = sa.version_id`;
 
 function toBlock(r: Row): NoteBlock {
   const status = r.proposal_status as NonNullable<NoteBlock['proposal']>['status'] | null;
@@ -286,6 +299,9 @@ export class Repo {
         mergedIntoId: null,
         continuedFromId: null,
         deletedAt: null,
+        sourceId: null,
+        sourceVersionId: null,
+        sourceQuote: null,
         title,
         titleSource: 'question',
         createdAt: t,
@@ -422,6 +438,300 @@ export class Repo {
     });
   }
 
+  // Sources -------------------------------------------------------------------
+  //
+  // What the learner reads. The text shown is an immutable Markdown version:
+  // fetching again adds a version only when the text changed, and a passage
+  // asked about stays anchored to the version that was shown. A thread asked
+  // about a passage is a thread of its own that starts there.
+
+  getSource(id: string): Source | null {
+    const r = this.db.sql
+      .prepare(
+        `SELECT s.*,
+           (SELECT id FROM source_version v WHERE v.source_id = s.id ORDER BY seq DESC LIMIT 1) AS latest,
+           (SELECT count(*) FROM source_version v WHERE v.source_id = s.id) AS versions,
+           (SELECT count(*) FROM thread t JOIN source_anchor a ON a.id = t.source_anchor_id
+              JOIN source_version v ON v.id = a.version_id
+            WHERE v.source_id = s.id AND t.deleted_at IS NULL) AS threads
+         FROM source s WHERE s.id = ?`,
+      )
+      .get(id) as Row | undefined;
+    if (!r || !r.latest) return null;
+    return {
+      id: r.id as string,
+      notebookId: r.notebook_id as string,
+      title: r.title as string,
+      url: (r.url as string | null) ?? null,
+      latestVersionId: r.latest as string,
+      versions: r.versions as number,
+      threads: r.threads as number,
+      deletedAt: (r.deleted_at as string | null) ?? null,
+      createdAt: r.created_at as string,
+      updatedAt: r.updated_at as string,
+    };
+  }
+
+  listSources(notebookId: string): Source[] {
+    const ids = this.db.sql
+      .prepare('SELECT id FROM source WHERE notebook_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC')
+      .all(notebookId) as Row[];
+    return ids.map((r) => this.getSource(r.id as string)).filter((x): x is Source => x !== null);
+  }
+
+  private getVersion(id: string): (SourceVersion & { hash: string }) | null {
+    const r = this.db.sql.prepare('SELECT * FROM source_version WHERE id = ?').get(id) as Row | undefined;
+    return r
+      ? {
+          id: r.id as string,
+          sourceId: r.source_id as string,
+          seq: r.seq as number,
+          content: r.content as string,
+          origin: r.origin as SourceVersion['origin'],
+          fetchedUrl: (r.fetched_url as string | null) ?? null,
+          createdAt: r.created_at as string,
+          hash: r.content_hash as string,
+        }
+      : null;
+  }
+
+  /** A new source with its first version. Idempotent on the id. */
+  createSource(
+    id: string,
+    notebookId: string,
+    init: { title: string; url: string | null; version: NewSourceVersion },
+  ): { source: Source; created: boolean } {
+    return this.db.tx(() => {
+      const existing = this.getSource(id);
+      if (existing) {
+        if (existing.notebookId !== notebookId) throw new ConflictError('source id already used');
+        return { source: existing, created: false };
+      }
+      if (!init.version.content.trim()) throw new InvalidError('there is no text to read in it');
+      const t = now();
+      this.db.sql
+        .prepare('INSERT INTO source (id, notebook_id, title, url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(id, notebookId, init.title.trim() || 'Untitled source', init.url, t, t);
+      this.insertVersion(id, 1, init.version, t);
+      this.indexSource(id);
+      this.logEvent('source.added', id, { origin: init.version.origin, chars: init.version.content.length });
+      return { source: this.getSource(id) as Source, created: true };
+    });
+  }
+
+  /** Fetched again: a new version only if the text changed. */
+  addSourceVersion(sourceId: string, version: NewSourceVersion): { source: Source; changed: boolean } {
+    return this.db.tx(() => {
+      const source = this.getSource(sourceId);
+      if (!source) throw new NotFoundError('source');
+      if (source.deletedAt) throw new ConflictError('this source is in the Trash: restore it first');
+      const latest = this.getVersion(source.latestVersionId) as SourceVersion & { hash: string };
+      if (latest.hash === contentHash(version.content) || !version.content.trim()) {
+        return { source, changed: false };
+      }
+      const t = now();
+      this.insertVersion(sourceId, latest.seq + 1, version, t);
+      this.db.sql.prepare('UPDATE source SET updated_at = ? WHERE id = ?').run(t, sourceId);
+      this.indexSource(sourceId);
+      this.logEvent('source.refetched', sourceId, { seq: latest.seq + 1 });
+      return { source: this.getSource(sourceId) as Source, changed: true };
+    });
+  }
+
+  private insertVersion(sourceId: string, seq: number, v: NewSourceVersion, t: string): void {
+    this.db.sql
+      .prepare(
+        `INSERT INTO source_version (id, source_id, seq, content, content_hash, origin, fetched_url, raw, extractor, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(ulid(), sourceId, seq, v.content, contentHash(v.content), v.origin, v.fetchedUrl, v.raw, v.extractor, t);
+  }
+
+  renameSource(id: string, title: string): Source {
+    const r = this.db.sql.prepare('UPDATE source SET title = ? WHERE id = ?').run(title, id);
+    if (Number(r.changes) === 0) throw new NotFoundError('source');
+    this.indexSource(id);
+    return this.getSource(id) as Source;
+  }
+
+  /** To the Trash: threads asked about it stay. */
+  deleteSource(id: string): boolean {
+    const r = this.db.sql.prepare('UPDATE source SET deleted_at = coalesce(deleted_at, ?) WHERE id = ?').run(now(), id);
+    if (Number(r.changes) > 0) this.logEvent('source.deleted', id);
+    return Number(r.changes) > 0;
+  }
+
+  restoreSource(id: string): Source {
+    const r = this.db.sql.prepare('UPDATE source SET deleted_at = NULL WHERE id = ?').run(id);
+    if (Number(r.changes) === 0) throw new NotFoundError('source');
+    this.logEvent('source.restored', id);
+    return this.getSource(id) as Source;
+  }
+
+  /** A version of a source (the latest by default), with the threads asked about its passages. */
+  sourceDetail(id: string, versionId?: string): SourceDetail | null {
+    const source = this.getSource(id);
+    if (!source) return null;
+    const version = this.getVersion(versionId ?? source.latestVersionId);
+    if (!version || version.sourceId !== id) return null;
+    const { hash: _hash, ...shown } = version;
+    const versions = (
+      this.db.sql
+        .prepare('SELECT id, seq, created_at FROM source_version WHERE source_id = ? ORDER BY seq DESC')
+        .all(id) as Row[]
+    ).map((r) => ({ id: r.id as string, seq: r.seq as number, createdAt: r.created_at as string }));
+    const threads = (
+      this.db.sql
+        .prepare(
+          `WITH RECURSIVE family(root, id) AS (
+             SELECT t.id, t.id FROM thread t JOIN source_anchor a ON a.id = t.source_anchor_id
+              WHERE a.version_id = ? AND t.deleted_at IS NULL
+             UNION
+             SELECT f.root, c.id FROM thread c JOIN family f ON c.parent_thread_id = f.id OR c.continued_from = f.id
+              WHERE c.deleted_at IS NULL AND c.source_anchor_id IS NULL
+           )
+           SELECT t.id AS thread_id, t.title, t.created_at AS thread_created_at, a.*,
+             (SELECT count(*) FROM family f JOIN message m ON m.thread_id = f.id
+               WHERE f.root = t.id AND m.role = 'user') AS questions
+           FROM thread t JOIN source_anchor a ON a.id = t.source_anchor_id
+           WHERE a.version_id = ? AND t.deleted_at IS NULL ORDER BY t.created_at`,
+        )
+        .all(version.id, version.id) as Row[]
+    ).map((r) => ({
+      threadId: r.thread_id as string,
+      title: r.title as string,
+      createdAt: r.thread_created_at as string,
+      passage: toPassage(r),
+      questions: Number(r.questions),
+    }));
+    const elsewhere = this.db.sql
+      .prepare(
+        `SELECT count(*) AS n FROM thread t JOIN source_anchor a ON a.id = t.source_anchor_id
+         JOIN source_version v ON v.id = a.version_id
+         WHERE v.source_id = ? AND a.version_id <> ? AND t.deleted_at IS NULL`,
+      )
+      .get(id, version.id) as { n: number };
+    return { source, version: shown, versions, threads, elsewhere: elsewhere.n };
+  }
+
+  /** A thread asked about a passage of a source, with its first question, in one step. Idempotent on the thread id. */
+  createSourceThread(
+    sourceId: string,
+    threadId: string,
+    at: { versionId: string; start: number; end: number },
+    question: { id: string; content: string },
+  ): { thread: Thread; pair: AskPair; created: boolean } {
+    return this.db.tx(() => {
+      const existing = this.getThread(threadId);
+      if (existing) {
+        if (existing.sourceId !== sourceId) throw new ConflictError('thread id already used');
+        const { pair, created } = this.createAsk(threadId, question.id, question.content);
+        return { thread: this.getThread(threadId) as Thread, pair, created };
+      }
+      const source = this.getSource(sourceId);
+      if (!source) throw new NotFoundError('source');
+      if (source.deletedAt) throw new ConflictError('this source is in the Trash: restore it first');
+      const version = this.getVersion(at.versionId);
+      if (!version || version.sourceId !== sourceId) throw new InvalidError('that version is not of this source');
+      let anchor: ReturnType<typeof createAnchor>;
+      try {
+        anchor = createAnchor(version.id, version.content, at.start, at.end);
+      } catch {
+        throw new InvalidError('the selected range is outside the source');
+      }
+      const t = now();
+      const anchorId = ulid();
+      this.db.sql
+        .prepare(
+          `INSERT INTO source_anchor (id, version_id, exact, prefix, suffix, start_offset, end_offset, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          anchorId,
+          version.id,
+          anchor.quote.exact,
+          anchor.quote.prefix,
+          anchor.quote.suffix,
+          anchor.position.start,
+          anchor.position.end,
+          t,
+        );
+      this.db.sql
+        .prepare(
+          `INSERT INTO thread (id, notebook_id, source_anchor_id, title, created_at, updated_at)
+           VALUES (?, ?, ?, '', ?, ?)`,
+        )
+        .run(threadId, source.notebookId, anchorId, t, t);
+      this.db.sql.prepare('UPDATE source SET updated_at = ? WHERE id = ?').run(t, sourceId);
+      this.logEvent('source.asked', threadId, { sourceId, versionId: version.id, chars: anchor.quote.exact.length });
+      const { pair } = this.createAsk(threadId, question.id, question.content);
+      return { thread: this.getThread(threadId) as Thread, pair, created: true };
+    });
+  }
+
+  /** For a thread asked about a passage of a source: which source, version and passage. */
+  sourceOriginOf(threadId: string): SourceOrigin | null {
+    const r = this.db.sql
+      .prepare(
+        `SELECT a.*, v.source_id, s.title AS source_title, s.url AS source_url, s.deleted_at AS source_deleted
+         FROM thread t JOIN source_anchor a ON a.id = t.source_anchor_id
+         JOIN source_version v ON v.id = a.version_id JOIN source s ON s.id = v.source_id
+         WHERE t.id = ?`,
+      )
+      .get(threadId) as Row | undefined;
+    if (!r) return null;
+    const source = this.getSource(r.source_id as string) as Source;
+    return {
+      sourceId: r.source_id as string,
+      sourceTitle: r.source_title as string,
+      url: (r.source_url as string | null) ?? null,
+      passage: toPassage(r),
+      latestVersionId: source.latestVersionId,
+      deleted: r.source_deleted !== null,
+    };
+  }
+
+  /**
+   * What the model is told about the source a thread (or the thread it came
+   * from) was asked about: its title and address, and the section around the
+   * passage. Side questions and threads split off keep the reading in view.
+   */
+  sourceContextFor(threadId: string): { title: string; url: string | null; section: string; passage: string } | null {
+    const seen = new Set<string>();
+    for (let id: string | null = threadId; id && !seen.has(id); ) {
+      seen.add(id);
+      const origin = this.sourceOriginOf(id);
+      if (origin) {
+        const version = this.getVersion(origin.passage.versionId);
+        if (!version) return null;
+        return {
+          title: origin.sourceTitle,
+          url: origin.url,
+          section: sourceSection(version.content, origin.passage.start, origin.passage.end),
+          passage: origin.passage.exact,
+        };
+      }
+      const row = this.db.sql.prepare('SELECT parent_thread_id, continued_from FROM thread WHERE id = ?').get(id) as
+        | Row
+        | undefined;
+      id = (row?.parent_thread_id as string | null) ?? (row?.continued_from as string | null) ?? null;
+    }
+    return null;
+  }
+
+  /** The latest version's title and passages, as search rows. */
+  private indexSource(sourceId: string): void {
+    this.db.sql.prepare("DELETE FROM search WHERE thread_id = ? AND kind IN ('source', 'passage')").run(sourceId);
+    const row = this.db.sql.prepare('SELECT title FROM source WHERE id = ?').get(sourceId) as Row | undefined;
+    const source = this.getSource(sourceId);
+    if (!row || !source) return;
+    this.insertIndex('source', sourceId, sourceId, row.title as string);
+    const version = this.getVersion(source.latestVersionId);
+    for (const b of sourceBlocks(version?.content ?? '')) {
+      this.insertIndex('passage', `${source.latestVersionId}:${b.start}`, sourceId, plainText(b.text));
+    }
+  }
+
   // Trash ---------------------------------------------------------------------
   //
   // Deleting a thread hides it, and the side questions asked from it (and
@@ -510,6 +820,11 @@ export class Repo {
     const notes = this.db.sql
       .prepare('SELECT id, title, deleted_at FROM note WHERE notebook_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC')
       .all(notebookId) as Row[];
+    const sources = this.db.sql
+      .prepare(
+        'SELECT id, title, deleted_at FROM source WHERE notebook_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC',
+      )
+      .all(notebookId) as Row[];
     return {
       threads: threads.map((r) => ({
         threadId: r.id as string,
@@ -518,6 +833,11 @@ export class Repo {
         sideQuestions: r.along as number,
       })),
       notes: notes.map((r) => ({ noteId: r.id as string, title: r.title as string, deletedAt: r.deleted_at as string })),
+      sources: sources.map((r) => ({
+        sourceId: r.id as string,
+        title: r.title as string,
+        deletedAt: r.deleted_at as string,
+      })),
     };
   }
 
@@ -2014,6 +2334,8 @@ export class Repo {
       }
       const notes = this.db.sql.prepare('SELECT id FROM note').all() as Row[];
       for (const n of notes) this.indexNote(n.id as string);
+      const sources = this.db.sql.prepare('SELECT id FROM source').all() as Row[];
+      for (const r of sources) this.indexSource(r.id as string);
       this.db.sql
         .prepare("INSERT INTO meta (key, value) VALUES ('search_index', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
         .run(String(SEARCH_INDEX_VERSION));
@@ -2047,7 +2369,17 @@ export class Repo {
       }
       return p;
     };
-    const none = { threadId: null, messageId: null, noteId: null, blockId: null, role: null, headline: null };
+    const none = {
+      threadId: null,
+      messageId: null,
+      noteId: null,
+      blockId: null,
+      sourceId: null,
+      versionId: null,
+      offset: null,
+      role: null,
+      headline: null,
+    };
     for (const r of rows) {
       if (r.kind === 'thread' || r.kind === 'message') {
         const thread = this.getThread(r.thread_id);
@@ -2080,6 +2412,26 @@ export class Repo {
           at: m.createdAt,
           ...snippetFields(s),
         });
+      } else if (r.kind === 'source' || r.kind === 'passage') {
+        const src = this.getSource(r.thread_id);
+        if (!src || src.deletedAt) continue;
+        const base = { ...none, sourceId: src.id, versionId: src.latestVersionId, title: src.title, path: [], at: src.updatedAt };
+        if (r.kind === 'source') {
+          hits.push({ ...base, kind: 'source', offset: 0, ...snippetFields(makeSnippet(src.title, query)) });
+          continue;
+        }
+        const [versionId, at] = r.target_id.split(':');
+        if (versionId !== src.latestVersionId) continue;
+        const v = this.db.sql.prepare('SELECT content FROM source_version WHERE id = ?').get(versionId) as Row | undefined;
+        const start = Number(at);
+        const block = v ? sourceBlocks(v.content as string).find((b) => b.start === start) : undefined;
+        if (!block) continue;
+        hits.push({
+          ...base,
+          kind: 'passage',
+          offset: start,
+          ...snippetFields(makeSnippet(plainText(block.text), query)),
+        });
       } else {
         const note = this.db.sql
           .prepare('SELECT id, title, updated_at FROM note WHERE id = ? AND deleted_at IS NULL')
@@ -2102,10 +2454,15 @@ export class Repo {
       }
     }
     // A title is only worth its own line when nothing inside matched.
-    const inside = new Set(hits.filter((h) => h.kind === 'message' || h.kind === 'block').map((h) => h.threadId ?? h.noteId));
+    const ownerOf = (h: SearchHit) => h.threadId ?? h.noteId ?? h.sourceId;
+    const inside = new Set(
+      hits.filter((h) => h.kind === 'message' || h.kind === 'block' || h.kind === 'passage').map(ownerOf),
+    );
     return {
       terms,
-      hits: hits.filter((h) => !((h.kind === 'thread' || h.kind === 'note') && inside.has(h.threadId ?? h.noteId))).slice(0, limit),
+      hits: hits
+        .filter((h) => !((h.kind === 'thread' || h.kind === 'note' || h.kind === 'source') && inside.has(ownerOf(h))))
+        .slice(0, limit),
     };
   }
 
@@ -2180,10 +2537,36 @@ export class Repo {
   }
 }
 
-type SearchKind = 'thread' | 'message' | 'note' | 'block';
+/** A version as it is stored: the Markdown shown, and what it came from. */
+export interface NewSourceVersion {
+  content: string;
+  origin: 'paste' | 'url';
+  fetchedUrl: string | null;
+  /** The original HTML or text, kept so the text can be extracted again later. */
+  raw: string | null;
+  /** Which converter made `content` from `raw`. */
+  extractor: string;
+}
+
+function contentHash(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+function toPassage(r: Row): SourcePassage {
+  return {
+    versionId: r.version_id as string,
+    start: r.start_offset as number,
+    end: r.end_offset as number,
+    exact: r.exact as string,
+    prefix: r.prefix as string,
+    suffix: r.suffix as string,
+  };
+}
+
+type SearchKind = 'thread' | 'message' | 'note' | 'block' | 'source' | 'passage';
 
 /** Raise when what goes into the index changes; the index is rebuilt at the next start. */
-const SEARCH_INDEX_VERSION = 2;
+const SEARCH_INDEX_VERSION = 3;
 
 /** What is indexed for a message: its text, and an answer's headline. */
 function messageText(content: string, headline: string | null): string {

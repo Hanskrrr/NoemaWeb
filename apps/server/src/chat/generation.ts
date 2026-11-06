@@ -170,11 +170,19 @@ export class Generations {
       if (!provider.configured) throw new ProviderError('not_configured', 'the model provider is not configured');
       const notebook = this.repo.getNotebook(args.notebookId);
       const origin = this.repo.originOf(args.threadId);
+      // What the learner is reading, when this thread (or the one it came from) was asked about a source.
+      const reading = this.repo.sourceContextFor(args.threadId);
+      const fromSource = this.repo.sourceOriginOf(args.threadId);
       const { messages, manifest } = assembleContext({
         system: SYSTEM_PROMPT,
         aboutMe: notebook?.aboutMe ?? '',
+        ...(reading ? { source: { title: reading.title, url: reading.url, section: reading.section } } : {}),
         inherited: this.repo.inheritedHistory(args.threadId),
-        ...(origin ? { origin: { quote: origin.anchor.exact } } : {}),
+        ...(origin
+          ? { origin: { quote: origin.anchor.exact } }
+          : fromSource
+            ? { origin: { quote: fromSource.passage.exact, from: 'source' as const } }
+            : {}),
         history: this.repo.history(args.threadId, args.question.seq),
         mergedNow: this.repo.pendingMerges(args.threadId, args.question.seq),
         question: { id: args.question.id, content: args.question.content },

@@ -20,6 +20,9 @@ import {
   RenameThreadRequest,
   RewriteRequest,
   SearchOpenedRequest,
+  CreateSourceRequest,
+  RenameSourceRequest,
+  SourceThreadRequest,
   SplitOffRequest,
   SplitThreadRequest,
   StartMergeRequest,
@@ -38,12 +41,13 @@ import { checkRequest, SECURITY_HEADERS } from './http/guard.ts';
 import { HttpError, Router, sendError, sendJson } from './http/router.ts';
 import { SseStream } from './http/sse.ts';
 import { serveStatic } from './http/static.ts';
+import { EXTRACTOR, FetchProblem, importPage } from './ingest/fetch.ts';
 import { ProviderError } from './llm/provider.ts';
 import type { ModelSettings } from './llm/settings.ts';
 import type { Logger } from './log.ts';
 import { type AskPair, ConflictError, InvalidError, NotFoundError, type Repo } from './store/repo.ts';
 
-export const VERSION = '0.1.0-m4.0';
+export const VERSION = '0.1.0-m4.1';
 
 export interface AppDeps {
   repo: Repo;
@@ -154,6 +158,7 @@ export function createApp(deps: AppDeps): App {
       merges: repo.mergesInto(thread.id),
       outgoing: repo.outgoingOf(thread.id),
       ...repo.continuationOf(thread.id),
+      sourceOrigin: repo.sourceOriginOf(thread.id),
     });
   });
 
@@ -275,6 +280,88 @@ export function createApp(deps: AppDeps): App {
     const { note, created } = repo.startNote(id, thread.notebookId, thread.id, thread.title || 'Untitled');
     if (created) notes.start(note.id, thread.id);
     sendJson(ctx.res, created ? 201 : 200, note);
+  });
+
+  // Sources: what the learner reads. Pasted text, or a page read from its address.
+  router.on('GET', '/api/notebooks/:id/sources', ({ res, params }) => {
+    if (!repo.getNotebook(params.id as string)) throw notFound('notebook');
+    sendJson(res, 200, { sources: repo.listSources(params.id as string) });
+  });
+
+  router.on('POST', '/api/notebooks/:id/sources', async (ctx) => {
+    const notebookId = ctx.params.id as string;
+    if (!repo.getNotebook(notebookId)) throw notFound('notebook');
+    const body = await ctx.body(CreateSourceRequest);
+    const existing = repo.getSource(body.id);
+    if (existing) {
+      if (existing.notebookId !== notebookId) throw new HttpError(409, 'conflict', 'source id already used');
+      sendJson(ctx.res, 200, existing);
+      return;
+    }
+    if (body.url !== undefined) {
+      const page = await readPage(body.url);
+      const { source } = repo.createSource(body.id, notebookId, {
+        title: body.title || page.title || new URL(page.fetchedUrl).hostname,
+        url: body.url,
+        version: { content: page.markdown, origin: 'url', fetchedUrl: page.fetchedUrl, raw: page.raw, extractor: EXTRACTOR },
+      });
+      sendJson(ctx.res, 201, source);
+      return;
+    }
+    const text = (body.text ?? '').replace(/\r\n?/g, '\n').trim();
+    const { source } = repo.createSource(body.id, notebookId, {
+      title: body.title || pastedTitle(text),
+      url: null,
+      version: { content: text, origin: 'paste', fetchedUrl: null, raw: null, extractor: 'pasted' },
+    });
+    sendJson(ctx.res, 201, source);
+  });
+
+  router.on('GET', '/api/sources/:id', ({ res, params, url }) => {
+    const detail = repo.sourceDetail(params.id as string, url.searchParams.get('version') ?? undefined);
+    if (!detail) throw notFound('source');
+    sendJson(res, 200, detail);
+  });
+
+  router.on('PATCH', '/api/sources/:id', async (ctx) => {
+    const { title } = await ctx.body(RenameSourceRequest);
+    sendJson(ctx.res, 200, repo.renameSource(ctx.params.id as string, title));
+  });
+
+  // Read it again: a new version only if its text changed; passages already asked about stay on theirs.
+  router.on('POST', '/api/sources/:id/refetch', async (ctx) => {
+    const source = repo.getSource(ctx.params.id as string);
+    if (!source) throw notFound('source');
+    if (!source.url) throw new HttpError(400, 'invalid', 'pasted text has no address to read again');
+    const page = await readPage(source.url);
+    sendJson(
+      ctx.res,
+      200,
+      repo.addSourceVersion(source.id, {
+        content: page.markdown,
+        origin: 'url',
+        fetchedUrl: page.fetchedUrl,
+        raw: page.raw,
+        extractor: EXTRACTOR,
+      }),
+    );
+  });
+
+  router.on('DELETE', '/api/sources/:id', ({ res, params }) => {
+    if (!repo.deleteSource(params.id as string)) throw notFound('source');
+    sendJson(res, 200, { ok: true });
+  });
+
+  router.on('POST', '/api/sources/:id/restore', ({ res, params }) => {
+    sendJson(res, 200, repo.restoreSource(params.id as string));
+  });
+
+  // Ask about a passage: a thread of its own that starts there, with its first question.
+  router.on('POST', '/api/sources/:id/threads', async (ctx) => {
+    const body = await ctx.body(SourceThreadRequest);
+    const { thread, pair, created } = repo.createSourceThread(ctx.params.id as string, body.id, body.passage, body.question);
+    if (created) answer(thread.notebookId, thread.id, pair);
+    sendJson(ctx.res, created ? 201 : 200, { thread, user: pair.user, assistant: current(pair.assistant) });
   });
 
   router.on('GET', '/api/notebooks/:id/notes', ({ res, params }) => {
@@ -536,4 +623,22 @@ export function createApp(deps: AppDeps): App {
       });
     },
   };
+}
+
+/** Read a page for a source, or a reason the learner can act on. */
+async function readPage(url: string) {
+  try {
+    return await importPage(url);
+  } catch (err) {
+    if (err instanceof FetchProblem) throw new HttpError(400, 'invalid', `That address could not be read: ${err.message}.`);
+    throw err;
+  }
+}
+
+/** A title for pasted text: its first heading, else its first line. */
+function pastedTitle(text: string): string {
+  const heading = /^#{1,6}\s+(.+)$/m.exec(text)?.[1];
+  const line = heading ?? text.split('\n').find((l) => l.trim() !== '') ?? '';
+  const plain = line.replace(/[*_`$\\]/g, '').trim();
+  return plain.length > 80 ? `${plain.slice(0, 79)}…` : plain || 'Pasted text';
 }

@@ -43,4 +43,6 @@ export const keys = {
   outbox: (threadId: string) => `noema:outbox:${threadId}`,
   /** Whether a merged card is open, as this reader left it. */
   mergeOpen: (mergeId: string) => `noema:merge-open:${mergeId}`,
+  /** The last thread, map or note open in this browser, and when: where Noema reopens. */
+  lastPlace: 'noema:last-place',
 };

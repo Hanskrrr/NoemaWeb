@@ -5,6 +5,7 @@
 //   #/t/<threadId>/m/<messageId>    a thread, scrolled to one exact message
 //   #/map/<threadId>                the map of the whole thread tree around a thread
 //   #/note/<noteId>                 a note
+//   #/note/<noteId>/b/<blockId>     a note, scrolled to one block
 //   #/new                           a new thread, before its first question
 
 import { isUlid } from '@noema/core';
@@ -13,7 +14,7 @@ import { useCallback, useEffect, useState } from 'react';
 export type Route =
   | { kind: 'thread'; id: string; from?: string | undefined; message?: string | undefined }
   | { kind: 'map'; id: string }
-  | { kind: 'note'; id: string }
+  | { kind: 'note'; id: string; block?: string | undefined }
   | { kind: 'new' };
 
 export function parseHash(hash: string): Route | null {
@@ -22,7 +23,7 @@ export function parseHash(hash: string): Route | null {
   if (head === 'new') return { kind: 'new' };
   if (!isUlid(id)) return null;
   if (head === 'map') return { kind: 'map', id };
-  if (head === 'note') return { kind: 'note', id };
+  if (head === 'note') return sub === 'b' && isUlid(subId) ? { kind: 'note', id, block: subId } : { kind: 'note', id };
   if (head === 't') {
     if (sub === 'from' && isUlid(subId)) return { kind: 'thread', id, from: subId };
     if (sub === 'm' && isUlid(subId)) return { kind: 'thread', id, message: subId };
@@ -38,7 +39,7 @@ export function toHash(route: Route): string {
     case 'map':
       return `#/map/${route.id}`;
     case 'note':
-      return `#/note/${route.id}`;
+      return route.block ? `#/note/${route.id}/b/${route.block}` : `#/note/${route.id}`;
     case 'thread':
       if (route.from) return `#/t/${route.id}/from/${route.from}`;
       if (route.message) return `#/t/${route.id}/m/${route.message}`;

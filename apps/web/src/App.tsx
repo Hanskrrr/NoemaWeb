@@ -1,16 +1,19 @@
-// The app shell: start-up, the connect screen, the header, the sidebar of
-// threads and notes, and which view fills the page (a thread, the map of a
-// thread tree, or a note).
-// Still to come: sources (M3) and the search UI (M4).
+// The app shell: start-up, the connect screen, the header with search, the
+// sidebar of threads and notes, and which view fills the page (a thread, the
+// map of a thread tree, or a note).
+// Still to come: sources (M3).
 
-import { type Health, type Notebook, type NoteSummary, type Thread, ulid } from '@noema/core';
+import { type Health, type Notebook, type NoteSummary, type OpenBranch, type SearchHit, type Thread, ulid } from '@noema/core';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { api } from './api.ts';
+import { expectFound } from './found.ts';
 import { MapView } from './MapView.tsx';
 import { ConnectScreen, ModelDialog } from './ModelSettings.tsx';
 import { NoteView } from './NoteView.tsx';
-import { useRoute } from './route.ts';
+import { parseHash, type Route, toHash, useRoute } from './route.ts';
+import { ComeBack, isTyping, SearchDialog, searchShortcut } from './Search.tsx';
 import { Sidebar } from './Sidebar.tsx';
+import { keys, storage } from './storage.ts';
 import { type BranchDraft, DraftView, type Focus, ThreadView } from './ThreadView.tsx';
 
 type Boot = { notebook: Notebook; health: Health } | { error: string } | null;
@@ -74,6 +77,12 @@ function NotebookView({
   const [focus, setFocus] = useState<Focus | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [searching, setSearching] = useState(false);
+  /** Bumped on every jump from search, so the same place opened twice is arrived at again. */
+  const [jump, setJump] = useState(0);
+  /** Opened fresh (nothing in the URL): the side questions left open, until hidden or one is opened. */
+  const [comeBack, setComeBack] = useState<OpenBranch[] | null>(null);
+  const [freshStart] = useState(() => route === null);
 
   const refresh = useCallback(async () => {
     try {
@@ -89,20 +98,60 @@ function NotebookView({
     void refresh();
   }, [refresh]);
 
-  // Nothing in the URL: open the most recent thread, or a new one.
+  // Remember the place (not the exact message) for the next time Noema opens.
+  useEffect(() => {
+    const place = placeOf(route);
+    if (place) storage.setJson(keys.lastPlace, { hash: toHash(place), at: new Date().toISOString() });
+  }, [route]);
+
+  // Nothing in the URL: open where you left off. That is the last place open
+  // in this browser, unless a thread has had something newer since (asked in
+  // another tab, say); then that thread. With nothing at all, a new thread.
   useEffect(() => {
     if (route || !threads) return;
-    const recent = threads
-      .filter((t) => !t.parentThreadId)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    const recent = [...threads].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    const last = storage.getJson<{ hash?: string; at?: string } | null>(keys.lastPlace, null);
+    const place = last?.hash ? parseHash(last.hash) : null;
+    const exists =
+      place !== null &&
+      (place.kind === 'note' ? notes.some((n) => n.id === place.id) : threads.some((t) => t.id === place.id));
+    if (place && exists && (!recent || (last?.at ?? '') >= recent.updatedAt)) {
+      navigate(place, { replace: true });
+      return;
+    }
     navigate(recent ? { kind: 'thread', id: recent.id } : { kind: 'new' }, { replace: true });
-  }, [route, threads, navigate]);
+  }, [route, threads, notes, navigate]);
+
+  useEffect(() => {
+    if (!freshStart) return;
+    api.openBranches(notebook.id).then(
+      (r) => setComeBack(r.branches.length > 0 ? r.branches : null),
+      () => {},
+    );
+  }, [freshStart, notebook.id]);
+
+  // ⌘K or Ctrl+K anywhere, or "/" when not typing, opens search.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setSearching(true);
+      } else if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !isTyping(e.target)) {
+        e.preventDefault();
+        setSearching(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const go = useCallback(
     (next: Parameters<typeof navigate>[0]) => {
       setDraft(null);
       setFocus(null);
       setSidebarOpen(false);
+      setSearching(false);
+      setComeBack(null);
       navigate(next);
     },
     [navigate],
@@ -110,6 +159,20 @@ function NotebookView({
   const open = useCallback((id: string, from?: string) => go({ kind: 'thread', id, from }), [go]);
   const toMessage = useCallback((id: string, message: string) => go({ kind: 'thread', id, message }), [go]);
   const openNote = useCallback((id: string) => go({ kind: 'note', id }), [go]);
+
+  const openHit = (hit: SearchHit, terms: string[], rank: number, queryChars: number) => {
+    void api.searchOpened({ kind: hit.kind, rank, queryChars }).catch(() => {});
+    const target = hit.messageId ?? hit.blockId;
+    if (target) expectFound(target, terms);
+    setJump((n) => n + 1);
+    if (hit.kind === 'message' && hit.threadId && hit.messageId) {
+      go({ kind: 'thread', id: hit.threadId, message: hit.messageId });
+    } else if (hit.kind === 'thread' && hit.threadId) {
+      go({ kind: 'thread', id: hit.threadId });
+    } else if (hit.noteId) {
+      go({ kind: 'note', id: hit.noteId, block: hit.blockId ?? undefined });
+    }
+  };
 
   const startNew = () => go({ kind: 'new' });
   const newNote = async () => {
@@ -157,7 +220,7 @@ function NotebookView({
   } else if (route?.kind === 'thread') {
     main = (
       <ThreadView
-        key={`${route.id}:${route.from ?? ''}:${route.message ?? ''}`}
+        key={`${route.id}:${route.from ?? ''}:${route.message ?? ''}:${jump}`}
         threadId={route.id}
         returningFrom={route.from}
         message={route.message}
@@ -186,8 +249,9 @@ function NotebookView({
   } else if (route?.kind === 'note') {
     main = (
       <NoteView
-        key={route.id}
+        key={`${route.id}:${route.block ?? ''}:${jump}`}
         noteId={route.id}
+        block={route.block}
         onCite={toMessage}
         onOpenThread={(id) => open(id)}
         onOpenNote={openNote}
@@ -202,6 +266,8 @@ function NotebookView({
   }
 
   const activeId = showDraft || !route || route.kind === 'new' ? null : route.id;
+  // Not the one already open (Noema may have reopened in it).
+  const leftOpen = comeBack?.filter((b) => b.threadId !== activeId) ?? [];
 
   return (
     <div className="shell">
@@ -222,6 +288,19 @@ function NotebookView({
         </div>
         <button
           type="button"
+          className="search-open"
+          onClick={() => setSearching(true)}
+          aria-keyshortcuts="Meta+K Control+K /"
+          data-testid="search-open"
+        >
+          <span className="search-glyph" aria-hidden>
+            ⌕
+          </span>
+          <span className="search-open-label">Search</span>
+          <kbd>{searchShortcut()}</kbd>
+        </button>
+        <button
+          type="button"
           className="model"
           onClick={() => setSettingsOpen(true)}
           title="Model settings"
@@ -230,6 +309,14 @@ function NotebookView({
           {health.model ?? 'Connect a model'}
         </button>
       </header>
+      {searching && (
+        <SearchDialog
+          notebookId={notebook.id}
+          onClose={() => setSearching(false)}
+          onOpen={openHit}
+          onOpenThread={(id) => open(id)}
+        />
+      )}
       {settingsOpen && (
         <ModelDialog
           onClose={() => setSettingsOpen(false)}
@@ -250,8 +337,33 @@ function NotebookView({
           onNew={startNew}
           onNewNote={() => void newNote()}
         />
-        <div className="main">{main}</div>
+        <div className="main">
+          {leftOpen.length > 0 && (
+            <ComeBack
+              branches={leftOpen}
+              onOpen={(id) => open(id)}
+              onHide={() => setComeBack(null)}
+              onSearch={() => setSearching(true)}
+            />
+          )}
+          {main}
+        </div>
       </div>
     </div>
   );
+}
+
+/** The place a route is in, without the exact message or block it was opened at. */
+function placeOf(route: Route | null): Route | null {
+  if (!route) return null;
+  switch (route.kind) {
+    case 'thread':
+      return { kind: 'thread', id: route.id };
+    case 'note':
+      return { kind: 'note', id: route.id };
+    case 'map':
+      return route;
+    case 'new':
+      return null;
+  }
 }

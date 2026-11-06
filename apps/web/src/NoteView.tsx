@@ -10,6 +10,7 @@ import { headingLevel, type Note, type NoteBlock, type NoteSummary, sectionOf, u
 import { type KeyboardEvent, type MouseEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { EditableTitle } from './EditableTitle.tsx';
+import { arrive, clearFound } from './found.ts';
 import { Outline, type OutlineItem, shortLabel } from './Outline.tsx';
 import { CiteContext, Markdown } from './markdown/Markdown.tsx';
 
@@ -57,6 +58,7 @@ function errorText(err: unknown): string {
 
 export function NoteView({
   noteId,
+  block: soughtBlock,
   onCite,
   onOpenThread,
   onOpenNote,
@@ -65,6 +67,8 @@ export function NoteView({
   onDeleted,
 }: {
   noteId: string;
+  /** Open at this block (from search): scrolled to, flashed, the words searched for marked. */
+  block?: string | undefined;
   /** The notebook's notes, to choose one to merge in. */
   notes: NoteSummary[];
   onCite: (threadId: string, messageId: string) => void;
@@ -135,6 +139,17 @@ export function NoteView({
       setError(errorText(err));
     }
   };
+
+  // Opened at one block: go there once it is on the page.
+  const sought = useRef(false);
+  useEffect(() => {
+    if (!soughtBlock || sought.current || !note) return;
+    const el = document.querySelector(`[data-block-id="${soughtBlock}"]`);
+    if (!el) return;
+    sought.current = true;
+    arrive(el, soughtBlock);
+  }, [soughtBlock, note]);
+  useEffect(() => () => clearFound(), []);
 
   if (error && !note) return <main className="thread note-page">{error}</main>;
   if (!note) return <main className="thread note-page" aria-busy />;

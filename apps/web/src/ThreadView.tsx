@@ -17,6 +17,7 @@ import {
 } from '@noema/core';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ApiFailure, api, watchMessage } from './api.ts';
+import { arrive, clearFound } from './found.ts';
 import { Composer } from './Composer.tsx';
 import { EditableTitle } from './EditableTitle.tsx';
 import { MergeCard, MergePicker, OPEN_MERGE_EVENT, OutgoingMerges } from './Merges.tsx';
@@ -335,10 +336,7 @@ export function ThreadView({
     returned.current = true;
     if (focusMessage) {
       const article = document.querySelector(`[data-message-id="${focusMessage}"]`)?.closest('article');
-      if (!article) return;
-      article.scrollIntoView({ block: 'center' });
-      article.classList.add('flash');
-      setTimeout(() => article.classList.remove('flash'), 2400);
+      if (article) arrive(article, focusMessage);
       return;
     }
     let range: Range | undefined;
@@ -356,6 +354,7 @@ export function ThreadView({
     target?.scrollIntoView({ block: 'center' });
   }, [loaded, returningFrom, focus, focusMessage, branches, byId]);
   useEffect(() => () => void highlight('noema-return', null), []);
+  useEffect(() => () => clearFound(), []);
 
   // Select a passage in a finished message to ask about it in a branch.
   const [selection, setSelection] = useState<{ messageId: string; start: number; end: number; rect: DOMRect } | null>(

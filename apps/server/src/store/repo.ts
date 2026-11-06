@@ -428,7 +428,9 @@ export class Repo {
       status: r.status as Merge['status'],
       error: (r.error as string | null) ?? null,
       afterMessageId: (r.after_message_id as string | null) ?? null,
-      quote: (r.quote as string | null) ?? null,
+      quote: null,
+      anchor: null,
+      replaces: null,
       createdAt: r.created_at as string,
       mergedAt: (r.merged_at as string | null) ?? null,
     };
@@ -445,7 +447,16 @@ export class Repo {
         .all(...args) as Row[]
     ).map((r) => {
       const m = this.toMerge(r);
-      return { ...m, quote: this.mergePlace(m.sourceThreadId, m.targetThreadId).quote };
+      const place = this.mergePlace(m.sourceThreadId, m.targetThreadId);
+      const earlier =
+        m.status === 'merged' || m.status === 'undone'
+          ? null
+          : (this.db.sql
+              .prepare(
+                "SELECT id FROM thread_merge WHERE source_thread_id = ? AND target_thread_id = ? AND status = 'merged' AND id <> ?",
+              )
+              .get(m.sourceThreadId, m.targetThreadId, m.id) as Row | undefined);
+      return { ...m, quote: place.anchor?.exact ?? null, anchor: place.anchor, replaces: (earlier?.id as string) ?? null };
     });
   }
 
@@ -487,17 +498,17 @@ export class Repo {
    * from, with its passage; anything else shows after the target's last
    * message at the time.
    */
-  private mergePlace(sourceId: string, targetId: string): { messageId: string | null; quote: string | null } {
+  private mergePlace(sourceId: string, targetId: string): { messageId: string | null; anchor: AnchorRef | null } {
     let current = sourceId;
     const seen = new Set<string>();
     while (!seen.has(current)) {
       seen.add(current);
       const origin = this.originOf(current);
       if (!origin) break;
-      if (origin.parentThreadId === targetId) return { messageId: origin.anchor.messageId, quote: origin.anchor.exact };
+      if (origin.parentThreadId === targetId) return { messageId: origin.anchor.messageId, anchor: origin.anchor };
       current = origin.parentThreadId;
     }
-    return { messageId: null, quote: null };
+    return { messageId: null, anchor: null };
   }
 
   private lastMessage(threadId: string): { id: string; seq: number } | null {
@@ -602,6 +613,13 @@ export class Repo {
       const last = this.lastMessage(m.targetThreadId);
       const place = this.mergePlace(m.sourceThreadId, m.targetThreadId);
       const t = now();
+      // Merged again: the newer version replaces the earlier one, so the target never carries both.
+      this.db.sql
+        .prepare(
+          `UPDATE thread_merge SET status = 'undone', undone_at = ?
+           WHERE source_thread_id = ? AND target_thread_id = ? AND status = 'merged' AND id <> ?`,
+        )
+        .run(t, m.sourceThreadId, m.targetThreadId, id);
       this.db.sql
         .prepare(
           "UPDATE thread_merge SET status = 'merged', after_seq = ?, after_message_id = ?, merged_at = ? WHERE id = ?",

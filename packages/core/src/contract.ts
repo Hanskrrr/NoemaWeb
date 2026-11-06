@@ -139,6 +139,10 @@ export const Merge = z.object({
   afterMessageId: Id.nullable(),
   /** For a side question merged back: the passage it came from. */
   quote: z.string().nullable(),
+  /** ...and where that passage is, so the card can sit right after it. */
+  anchor: AnchorRef.nullable(),
+  /** An earlier merge of the same thread into the same target, which accepting this one replaces. */
+  replaces: Id.nullable(),
   createdAt: z.string(),
   mergedAt: z.string().nullable(),
 });

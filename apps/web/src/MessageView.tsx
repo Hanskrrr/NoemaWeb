@@ -1,5 +1,5 @@
 import type { BranchSummary, Message } from '@noema/core';
-import { Markdown } from './markdown/Markdown.tsx';
+import { Markdown, type Slot } from './markdown/Markdown.tsx';
 
 const SETTINGS_ERRORS = new Set(['auth', 'quota', 'not_configured']);
 
@@ -15,13 +15,14 @@ export function MessageView({
   onStop,
   onOpenSettings,
   onOpenBranch,
-}: { message: Message; branches: BranchSummary[] } & MessageActions) {
+  slots,
+}: { message: Message; branches: BranchSummary[]; slots?: Slot[] } & MessageActions) {
   const { role, status } = message;
   return (
     <article className={`message message-${role}`} data-testid="message" data-role={role} data-status={status}>
       <div className="message-body" data-message-id={message.id}>
         {role === 'assistant' ? (
-          <Markdown source={message.content} />
+          <Markdown source={message.content} {...(slots ? { slots } : {})} />
         ) : (
           <p className="user-text">
             <span data-s={0} data-e={message.content.length}>

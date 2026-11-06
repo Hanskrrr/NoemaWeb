@@ -2,7 +2,7 @@ import { type APIRequestContext, expect, type Page } from '@playwright/test';
 
 const H = { 'x-noema-client': 'web' };
 
-function ulidish(): string {
+export function ulidish(): string {
   // Good enough for tests: a valid ULID made from the clock and Math.random.
   const A = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
   let t = Date.now();
@@ -47,6 +47,8 @@ export async function doubleClickWord(page: Page, word: string): Promise<void> {
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
       const i = n.textContent?.indexOf(w) ?? -1;
       if (i >= 0) {
+        // Bring it into view first: a click outside the window selects nothing useful.
+        n.parentElement?.scrollIntoView({ block: 'center' });
         const r = document.createRange();
         r.setStart(n, i);
         r.setEnd(n, i + w.length);

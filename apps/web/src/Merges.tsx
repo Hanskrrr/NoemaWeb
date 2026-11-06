@@ -152,6 +152,11 @@ function MergeDraft({
           {merge.mode === 'full' ? ' · the whole exchange' : ' · a summary by the AI'}
         </span>
       </p>
+      {merge.replaces && (
+        <p className="merge-explain" data-testid="merge-replaces">
+          This replaces the earlier merge of this thread there.
+        </p>
+      )}
       <p className="merge-explain">
         {merge.mode === 'full'
           ? 'These exchanges will go in front of the next question there.'

@@ -123,6 +123,36 @@ test('a side question merged back: drafted, edited, accepted, and carried from t
   assert.ok(s.repo.history(threadId, Number.MAX_SAFE_INTEGER).every((h) => !h.merged));
 });
 
+test('merging the same side question again replaces the earlier merge', async () => {
+  const { threadId, q1, b1 } = await journey();
+  const first = await start(b1.thread.id, threadId, 'full');
+  assert.equal(first.json.replaces, null);
+  await api(s, 'POST', `/api/merges/${first.json.id}/accept`);
+  // The card knows where the passage is, to sit right after it.
+  const merged = (await detail(threadId)).merges[0];
+  assert.deepEqual(
+    [merged?.anchor?.messageId, merged?.anchor?.exact, typeof merged?.anchor?.start],
+    [q1.assistant.id, 'offline fake model', 'number'],
+  );
+
+  await ask(b1.thread.id, 'One more side detail');
+  const second = await start(b1.thread.id, threadId, 'full');
+  assert.equal(second.json.replaces, first.json.id, 'the draft says what it will replace');
+  await api(s, 'POST', `/api/merges/${second.json.id}/accept`);
+  assert.equal(s.repo.getMerge(first.json.id)?.status, 'undone');
+  assert.deepEqual(
+    (await detail(threadId)).merges.map((m) => m.id),
+    [second.json.id],
+  );
+  assert.match((await detail(threadId)).merges[0]?.summary ?? '', /One more side detail/);
+  const next = await ask(threadId, 'Next');
+  assert.equal(
+    manifestOf(next.assistant.revisionId).parts.filter((p) => p.kind === 'merged').length,
+    1,
+    'only the newer version is carried',
+  );
+});
+
 test('the whole exchange instead of a summary, and drafting again', async () => {
   const { threadId, b1 } = await journey();
   const r = await start(b1.thread.id, threadId, 'full');

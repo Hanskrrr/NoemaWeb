@@ -257,8 +257,38 @@ function render(node: Nodes, source: string, index: number, cites: Cites | null)
   }
 }
 
-export function Markdown({ source }: { source: string }) {
+/**
+ * Something shown inside the text, after the top-level block (paragraph,
+ * list, table…) that holds raw offset `at`. Marked foreign, so selecting
+ * in it is never taken for a passage of this text.
+ */
+export interface Slot {
+  key: string;
+  at: number;
+  node: ReactNode;
+}
+
+export function Markdown({ source, slots }: { source: string; slots?: Slot[] }) {
   const tree = useMemo(() => parseMarkdown(source), [source]);
   const cites = useContext(CiteContext);
-  return <div className="md">{render(tree, source, 0, cites)}</div>;
+  if (!slots || slots.length === 0) return <div className="md">{render(tree, source, 0, cites)}</div>;
+  const blocks = tree.children as Nodes[];
+  const out: ReactNode[] = [];
+  blocks.forEach((block, i) => {
+    out.push(render(block, source, i, cites));
+    const from = i === 0 ? Number.NEGATIVE_INFINITY : (nodeRange(block)?.start ?? 0);
+    const next = blocks[i + 1];
+    const to = next ? (nodeRange(next)?.start ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
+    for (const slot of slots) {
+      if (slot.at >= from && slot.at < to) {
+        out.push(
+          <div key={`slot:${slot.key}`} className="md-slot" data-foreign="">
+            {slot.node}
+          </div>,
+        );
+      }
+    }
+  });
+  if (blocks.length === 0) for (const slot of slots) out.push(<div key={`slot:${slot.key}`}>{slot.node}</div>);
+  return <div className="md">{out}</div>;
 }

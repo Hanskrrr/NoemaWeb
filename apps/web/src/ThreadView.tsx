@@ -21,6 +21,7 @@ import { Composer } from './Composer.tsx';
 import { EditableTitle } from './EditableTitle.tsx';
 import { MergeCard, MergePicker, OutgoingMerges } from './Merges.tsx';
 import { MessageView } from './MessageView.tsx';
+import { Outline, type OutlineItem, scrollRangeIntoView, shortLabel } from './Outline.tsx';
 import { highlight, selectionToSource, sourceToRange } from './markdown/selection.ts';
 import { keys, storage } from './storage.ts';
 
@@ -106,6 +107,54 @@ function rangesFor(branches: BranchSummary[], byId: Map<string, Message>): Range
     if (range) ranges.push(range);
   }
   return ranges;
+}
+
+function branchRange(b: BranchSummary, byId: Map<string, Message>): Range | null {
+  return rangesFor([b], byId)[0] ?? null;
+}
+
+/** The catalog of a thread: each question, with the side questions and merges that start from it. */
+function outlineOf(
+  messages: Message[],
+  branchesByMessage: Map<string, BranchSummary[]>,
+  merges: Merge[],
+  byId: Map<string, Message>,
+): OutlineItem[] {
+  const items: OutlineItem[] = [];
+  for (const q of messages) {
+    if (q.role !== 'user') continue;
+    items.push({ id: q.id, label: shortLabel(q.content), level: 1, kind: 'question', target: `[data-message-id="${q.id}"]` });
+    const answer = messages.find((a) => a.role === 'assistant' && a.replyTo === q.id);
+    const here = [q.id, ...(answer ? [answer.id] : [])];
+    for (const b of here.flatMap((id) => branchesByMessage.get(id) ?? [])) {
+      items.push({
+        id: `side:${b.threadId}`,
+        label: `↳ ${b.title || 'Side question'}`,
+        level: 2,
+        kind: 'side',
+        target: `[data-message-id="${b.anchor.messageId}"]`,
+        go: () => scrollRangeIntoView(branchRange(b, byId)),
+      });
+    }
+    for (const x of merges.filter((m) => m.afterMessageId !== null && here.includes(m.afterMessageId))) {
+      items.push({
+        id: `merge:${x.id}`,
+        label: `⤶ ${x.sourceTitle || 'Merged'}`,
+        level: 2,
+        kind: 'merge',
+        target: `[data-merge-id="${x.id}"]`,
+      });
+    }
+  }
+  return items;
+}
+
+/** Where in an answer a merged side question's card goes: after the block holding its passage. */
+function mergeAt(merge: Merge, message: Message): number | null {
+  const a = merge.anchor;
+  if (!a || a.messageId !== message.id || message.revisionId !== a.revisionId) return null;
+  const r = resolveAnchor({ targetId: a.revisionId, quote: a, position: a }, message.content);
+  return r.status === 'unresolved' ? null : r.start;
 }
 
 // ---------------------------------------------------------------------------
@@ -455,6 +504,11 @@ export function ThreadView({
             onOpen={(id) => onNavigate(id)}
             split={Boolean(thread?.splitAt)}
             onSplit={(next) => void split(next)}
+            onBackToMain={
+              path.length >= 2 && path[0]
+                ? () => onNavigate((path[0] as { id: string }).id, path[1]?.id ?? threadId)
+                : undefined
+            }
             onMergeBack={
               messages.some((m) => m.role === 'assistant' && m.status === 'done') &&
               !outgoing.some((m) => m.targetThreadId === origin.parentThreadId && m.status !== 'merged')
@@ -493,33 +547,44 @@ export function ThreadView({
               onUndo={() => void undoMerged(x)}
             />
           ))}
-        {messages.map((m) => (
-          <div key={m.id} className="message-slot">
-            <MessageView
-              message={m}
-              branches={branchesByMessage.get(m.id) ?? []}
-              onStop={() => void stop(m.id)}
-              onOpenSettings={onOpenSettings}
-              onOpenBranch={(id) => onNavigate(id)}
+        {messages.map((m) => {
+          const card = (x: Merge) => (
+            <MergeCard
+              key={x.id}
+              merge={x}
+              onOpenSource={(id) => onNavigate(id)}
+              onCite={onCite}
+              onUndo={() => void undoMerged(x)}
             />
-            {merges
-              .filter((x) => x.afterMessageId === m.id)
-              .map((x) => (
-                <MergeCard
-                  key={x.id}
-                  merge={x}
-                  onOpenSource={(id) => onNavigate(id)}
-                  onCite={onCite}
-                  onUndo={() => void undoMerged(x)}
-                />
-              ))}
-          </div>
-        ))}
+          );
+          const mine = merges.filter((x) => x.afterMessageId === m.id);
+          const inline = mine.flatMap((x) => {
+            const at = mergeAt(x, m);
+            return at === null ? [] : [{ key: x.id, at, node: card(x) }];
+          });
+          const after = mine.filter((x) => !inline.some((i) => i.key === x.id));
+          return (
+            <div key={m.id} className="message-slot">
+              <MessageView
+                message={m}
+                branches={branchesByMessage.get(m.id) ?? []}
+                onStop={() => void stop(m.id)}
+                onOpenSettings={onOpenSettings}
+                onOpenBranch={(id) => onNavigate(id)}
+                {...(inline.length > 0 ? { slots: inline } : {})}
+              />
+              {after.map(card)}
+            </div>
+          );
+        })}
         {loaded && messages.length > 0 && branches.length === 0 && !origin && messages.length <= 2 && (
           <p className="hint">Tip: select any passage to ask about it in a side branch.</p>
         )}
         <div ref={bottom} />
       </main>
+      {messages.filter((m) => m.role === 'user').length >= 3 && (
+        <Outline items={outlineOf(messages, branchesByMessage, merges, byId)} label="Questions in this thread" />
+      )}
 
       {notice && (
         <div className="notice" role="status" data-testid="notice">
@@ -619,6 +684,7 @@ function OriginCard({
   split,
   onSplit,
   onMergeBack,
+  onBackToMain,
 }: {
   parentTitle: string;
   exact: string;
@@ -630,6 +696,8 @@ function OriginCard({
   onSplit?: (split: boolean) => void;
   /** Absent until there is an answer to merge, or while a merge back is being drafted. */
   onMergeBack?: (() => void) | undefined;
+  /** Two or more side questions deep: straight back to where the detours began. */
+  onBackToMain?: (() => void) | undefined;
 }) {
   const quote = exact.length > 600 ? `${exact.slice(0, 600)}…` : exact;
   return (
@@ -638,6 +706,17 @@ function OriginCard({
         <button type="button" className="back" onClick={onBack} data-testid="back">
           ← Back
         </button>
+        {onBackToMain && (
+          <button
+            type="button"
+            className="quiet"
+            onClick={onBackToMain}
+            title="Leave every side question and go back to the passage where they began"
+            data-testid="back-to-main"
+          >
+            ⇤ Back to the main thread
+          </button>
+        )}
         {path && path.length > 1 && onOpen ? (
           <nav className="crumbs" aria-label="Path">
             {path.map((p, i) => (

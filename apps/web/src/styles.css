@@ -595,6 +595,7 @@ button.quiet:hover {
 
 .origin-top {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem;
   flex-wrap: wrap;
@@ -1645,4 +1646,139 @@ button.quiet.inline.faint:hover {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* The catalog on the right edge ------------------------------------------- */
+
+.message-body,
+.merge-card,
+.nblock {
+  scroll-margin-top: 5.5rem;
+}
+
+.md-slot {
+  margin: 0.9rem 0;
+  font-family: var(--sans);
+}
+
+.outline {
+  position: fixed;
+  right: 0.6rem;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 15;
+  max-height: 72vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  padding: 0.4rem 0.3rem;
+  border-radius: 10px;
+  font-family: var(--sans);
+}
+
+.outline::-webkit-scrollbar {
+  display: none;
+}
+
+.outline ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.outline button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.22rem 0.2rem;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-soft);
+  text-align: right;
+}
+
+.outline-tick {
+  flex: none;
+  height: 2px;
+  width: 14px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--ink-faint) 70%, transparent);
+  transition: width 0.15s, background-color 0.15s;
+}
+
+.outline .level-2 .outline-tick {
+  width: 8px;
+}
+
+.outline .level-3 .outline-tick {
+  width: 5px;
+}
+
+.outline-side .outline-tick,
+.outline-merge .outline-tick {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.outline .active .outline-tick {
+  width: 20px;
+  background: var(--accent);
+}
+
+/* Labels open on hover or keyboard focus. */
+.outline-label {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0;
+  font-size: 0.8rem;
+  transition: opacity 0.12s;
+}
+
+.outline:hover,
+.outline:focus-within {
+  background: var(--sheet);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--rule);
+}
+
+.outline:hover .outline-label,
+.outline:focus-within .outline-label {
+  max-width: 17rem;
+  opacity: 1;
+}
+
+.outline .level-2 .outline-label {
+  font-size: 0.76rem;
+  color: var(--ink-faint);
+}
+
+.outline .level-3 .outline-label {
+  font-size: 0.74rem;
+}
+
+.outline .active .outline-label {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.outline button:hover {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.outline button:hover .outline-label {
+  color: var(--ink);
+}
+
+/* No room beside the text on narrow screens. */
+@media (max-width: 899px) {
+  .outline {
+    display: none;
+  }
 }

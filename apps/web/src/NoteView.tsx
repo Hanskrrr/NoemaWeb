@@ -10,6 +10,7 @@ import { headingLevel, type Note, type NoteBlock, type NoteSummary, sectionOf, u
 import { type KeyboardEvent, type MouseEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { EditableTitle } from './EditableTitle.tsx';
+import { Outline, type OutlineItem, shortLabel } from './Outline.tsx';
 import { CiteContext, Markdown } from './markdown/Markdown.tsx';
 
 const AUTHOR: Record<Note['author'], string> = {
@@ -28,6 +29,23 @@ const QUICK = ['Simpler', 'More detail', 'Add an example', 'Shorter'];
 
 type Editing = { id: string; draft: string; after: string | null; isNew: boolean };
 type Toast = { text: string; action?: { label: string; run: () => void; testId: string } };
+
+/** The catalog of a note: its headings, by level. */
+function headingsOf(blocks: NoteBlock[]): OutlineItem[] {
+  return blocks.flatMap((b) => {
+    const level = headingLevel(b.content);
+    if (level === null) return [];
+    return [
+      {
+        id: b.id,
+        label: shortLabel(b.content.replace(/^\s*#+\s*/, '').replace(/[\s#]+$/, '').replace(/(\*\*|__|`)(.+?)\1/g, '$2')),
+        level: Math.min(3, level) as 1 | 2 | 3,
+        kind: 'heading' as const,
+        target: `[data-block-id="${b.id}"]`,
+      },
+    ];
+  });
+}
 
 /** The AI is writing the note, or a suggestion in it. */
 const busy = (n: Note | null) =>
@@ -407,6 +425,8 @@ export function NoteView({
           </div>
         )}
       </CiteContext.Provider>
+
+      {!writing && headingsOf(blocks).length >= 2 && <Outline items={headingsOf(blocks)} label="Headings in this note" />}
 
       {toast && (
         <div className="toast" role="status" data-testid="toast">

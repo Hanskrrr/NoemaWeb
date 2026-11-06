@@ -3,8 +3,11 @@
 
 import { leafToSource, sourceToLeaf } from './parse.ts';
 
+/** The text's own spans: not those of something shown inside it (a merge card, say). */
 function spansIn(root: Element): HTMLElement[] {
-  return Array.from(root.querySelectorAll<HTMLElement>('[data-s][data-e]'));
+  return Array.from(root.querySelectorAll<HTMLElement>('[data-s][data-e]')).filter(
+    (span) => !span.closest('[data-foreign]'),
+  );
 }
 
 function rangeOf(span: HTMLElement): { s: number; e: number } {

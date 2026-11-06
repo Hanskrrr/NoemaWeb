@@ -44,9 +44,16 @@ test('a side question merged back: checked, merged, shown under its passage, car
   await expect(card).toHaveCount(1);
   await expect(card).toContainText('the same way every time');
   await expect(card).toContainText('offline');
-  const slot = page.locator('.message-slot').filter({ has: card });
-  await expect(slot.locator('[data-testid=message]')).toHaveAttribute('data-role', 'assistant');
-  await expect(slot.locator('[data-testid=message]')).toContainText('Tell me about optimisation');
+  // Inside the answer, right after the paragraph that holds the passage.
+  const inAnswer = page.locator('[data-testid=message][data-role=assistant] .md-slot [data-testid=merge-card]');
+  await expect(inAnswer).toHaveCount(1);
+  const before = page.locator('.md-slot').locator('xpath=preceding-sibling::*[1]');
+  await expect(before).toContainText('offline fake model');
+  await expect(page.locator('.md-slot').locator('xpath=following-sibling::*[1]')).toContainText('Inline math');
+  // Selecting inside the card is not a passage of the answer.
+  const word = card.getByText('every time', { exact: false });
+  await word.dblclick();
+  await expect(page.getByTestId('branch-button')).toHaveCount(0);
   // Its citation opens the side question's exchange.
   await card.getByTestId('cite').click();
   await expect(page).toHaveURL(new RegExp(`#/t/${side}/m/[0-9A-Z]{26}$`));

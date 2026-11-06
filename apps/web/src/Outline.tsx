@@ -13,7 +13,9 @@ export interface OutlineItem {
   /** The element this item stands for (for jumping and for "you are here"). */
   target: string;
   /** Jump somewhere more precise than the element's top, such as a passage. */
-  go?: () => void;
+  go?: (() => void) | undefined;
+  /** More about the item, shown on hover. */
+  hint?: string | undefined;
 }
 
 /** Below this line (from the top of the window) counts as "already read". */
@@ -72,6 +74,7 @@ export function Outline({ items, label }: { items: OutlineItem[]; label: string 
               type="button"
               onClick={() => jump(it)}
               aria-current={it.id === active ? 'location' : undefined}
+              title={it.hint ?? it.label}
               data-testid="outline-item"
               data-kind={it.kind}
             >

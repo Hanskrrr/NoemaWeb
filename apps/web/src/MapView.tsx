@@ -115,23 +115,47 @@ function ExchangeView({ node, exchange: e, go }: { node: MapNode; exchange: MapE
         {e.index}
       </span>
       <div className="map-body">
-        <button
-          type="button"
-          className="map-question"
-          onClick={() => go.toMessage(node.threadId, e.questionId)}
-          data-testid="map-question"
-        >
-          {e.question}
-        </button>
-        {e.answerId && e.gist && (
-          <button
-            type="button"
-            className="map-gist"
-            onClick={() => go.toMessage(node.threadId, e.answerId as string)}
-            data-testid="map-gist"
-          >
-            {e.gist}
-          </button>
+        {e.headline && e.answerId ? (
+          <>
+            {/* What the exchange established, in the model's line; the learner's own question beneath. */}
+            <button
+              type="button"
+              className="map-headline"
+              onClick={() => go.toMessage(node.threadId, e.answerId as string)}
+              data-testid="map-headline"
+            >
+              {e.headline}
+            </button>
+            <button
+              type="button"
+              className="map-asked"
+              onClick={() => go.toMessage(node.threadId, e.questionId)}
+              data-testid="map-question"
+            >
+              You asked: {e.question}
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="map-question"
+              onClick={() => go.toMessage(node.threadId, e.questionId)}
+              data-testid="map-question"
+            >
+              {e.question}
+            </button>
+            {e.answerId && e.gist && (
+              <button
+                type="button"
+                className="map-gist"
+                onClick={() => go.toMessage(node.threadId, e.answerId as string)}
+                data-testid="map-gist"
+              >
+                {e.gist}
+              </button>
+            )}
+          </>
         )}
         {e.status !== 'done' && e.answerId && <span className="map-status">{e.status}</span>}
         {e.branches.length > 0 && (

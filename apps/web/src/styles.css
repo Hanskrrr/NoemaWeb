@@ -1837,3 +1837,32 @@ button.quiet.inline.faint:hover {
 .merge-card:not(.open) {
   padding-block: 0.45rem;
 }
+
+/* The map leads with what each exchange established. */
+.map-headline,
+.map-asked {
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.map-headline {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.map-asked {
+  color: var(--ink-faint);
+  font-size: 0.85rem;
+}
+
+.map-headline:hover,
+.map-asked:hover {
+  text-decoration: underline 1px var(--accent);
+  text-underline-offset: 3px;
+}

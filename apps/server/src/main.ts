@@ -82,7 +82,8 @@ app.server.listen(config.port, config.host, () => {
   });
   if (!models.view().configured) log.info('no model connected yet: open the app and add an API key');
   // Give threads from before AI titles a proper name, quietly, one at a time.
-  void app.titler.backfill();
+  // Earlier threads get titles, then earlier answers their lines for the map; one call at a time.
+  void app.titler.backfill().then(() => app.headliner.backfill());
 });
 
 let closing = false;

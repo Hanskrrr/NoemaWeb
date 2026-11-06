@@ -135,6 +135,7 @@ function toMessage(r: Row): Message {
     status: r.status as MessageStatus,
     error: kind ? { kind, message: (r.error_message as string | null) ?? '' } : null,
     model: (r.model as string | null) ?? null,
+    headline: (r.headline as string | null | undefined) ?? null,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };
@@ -142,7 +143,8 @@ function toMessage(r: Row): Message {
 
 const MESSAGE_SELECT = `
   SELECT m.id, m.thread_id, m.role, m.seq, m.reply_to, m.created_at,
-         r.id AS revision_id, r.n, r.content, r.status, r.error_kind, r.error_message, r.model, r.updated_at
+         r.id AS revision_id, r.n, r.content, r.status, r.error_kind, r.error_message, r.model, r.updated_at,
+         r.headline
   FROM message m JOIN message_revision r ON r.id = m.current_revision_id`;
 
 export class ConflictError extends Error {
@@ -728,6 +730,7 @@ export class Repo {
             questionId: q.id,
             question: shorten(q.content, 200),
             answerId: a?.id ?? null,
+            headline: a?.headline ?? null,
             gist: a ? gistOf(a.content) : '',
             status: a?.status ?? q.status,
             branches: [...kids(q.id), ...kids(a?.id)],
@@ -1409,6 +1412,27 @@ export class Repo {
       if (here.length > 0) user.merged = here;
       return [user, { id: r.aid as string, role: 'assistant' as const, content: r.acontent as string }];
     });
+  }
+
+  /** The model's line for a finished answer. Only the current, finished revision takes it. */
+  setHeadline(revisionId: string, headline: string): boolean {
+    const r = this.db.sql
+      .prepare("UPDATE message_revision SET headline = ? WHERE id = ? AND status = 'done'")
+      .run(headline, revisionId);
+    return Number(r.changes) > 0;
+  }
+
+  /** Finished answers without a headline yet, oldest first. */
+  unheadlined(limit: number): string[] {
+    return (
+      this.db.sql
+        .prepare(
+          `SELECT m.id FROM message m JOIN message_revision r ON r.id = m.current_revision_id
+           WHERE m.role = 'assistant' AND r.status = 'done' AND r.content <> '' AND r.headline IS NULL
+           ORDER BY m.created_at LIMIT ?`,
+        )
+        .all(limit) as Row[]
+    ).map((row) => row.id as string);
   }
 
   revisionStatus(revisionId: string): MessageStatus | null {

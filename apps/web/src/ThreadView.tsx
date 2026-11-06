@@ -49,7 +49,8 @@ type Action =
   | { type: 'reset'; messages: Message[] }
   | { type: 'upsert'; message: Message }
   | { type: 'append'; id: string; text: string }
-  | { type: 'status'; id: string; status: MessageStatus; error: MessageError | null };
+  | { type: 'status'; id: string; status: MessageStatus; error: MessageError | null }
+  | { type: 'headlines'; messages: Message[] };
 
 function reducer(state: Message[], action: Action): Message[] {
   switch (action.type) {
@@ -63,6 +64,10 @@ function reducer(state: Message[], action: Action): Message[] {
       return state.map((m) => (m.id === action.id ? { ...m, content: m.content + action.text } : m));
     case 'status':
       return state.map((m) => (m.id === action.id ? { ...m, status: action.status, error: action.error } : m));
+    case 'headlines': {
+      const lines = new Map(action.messages.map((m) => [m.id, m.headline]));
+      return state.map((m) => (lines.has(m.id) && lines.get(m.id) !== m.headline ? { ...m, headline: lines.get(m.id) ?? null } : m));
+    }
   }
 }
 
@@ -85,6 +90,7 @@ function optimisticUser(threadId: string, id: string, content: string, seq: numb
     status: 'pending',
     error: null,
     model: null,
+    headline: null,
     createdAt: t,
     updatedAt: t,
   };
@@ -123,8 +129,16 @@ function outlineOf(
   const items: OutlineItem[] = [];
   for (const q of messages) {
     if (q.role !== 'user') continue;
-    items.push({ id: q.id, label: shortLabel(q.content), level: 1, kind: 'question', target: `[data-message-id="${q.id}"]` });
     const answer = messages.find((a) => a.role === 'assistant' && a.replyTo === q.id);
+    items.push({
+      id: q.id,
+      // What the exchange established, once the model has said; the question until then.
+      label: shortLabel(answer?.headline ?? q.content),
+      hint: answer?.headline ? `You asked: ${shortLabel(q.content, 200)}` : undefined,
+      level: 1,
+      kind: 'question',
+      target: `[data-message-id="${q.id}"]`,
+    });
     const here = [q.id, ...(answer ? [answer.id] : [])];
     for (const b of here.flatMap((id) => branchesByMessage.get(id) ?? [])) {
       items.push({
@@ -220,9 +234,12 @@ export function ThreadView({
         end: () => {
           watchers.current.delete(id);
           onChanged();
-          // The first answer may have given the thread its AI title.
+          // The first answer may have given the thread its AI title, and each answer its line for the catalog.
           api.thread(threadId).then(
-            (d) => setThread(d.thread),
+            (d) => {
+              setThread(d.thread);
+              dispatch({ type: 'headlines', messages: d.messages });
+            },
             () => {},
           );
         },

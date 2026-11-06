@@ -17,6 +17,7 @@ import type { ModelSource } from '../llm/settings.ts';
 import type { Logger } from '../log.ts';
 import type { Repo } from '../store/repo.ts';
 import { SYSTEM_PROMPT } from './prompt.ts';
+import type { Headliner } from './headlines.ts';
 import type { Titler } from './titles.ts';
 
 export const FLUSH_MS = 200;
@@ -52,6 +53,7 @@ export class Generations {
   private readonly repo: Repo;
   private readonly models: ModelSource;
   private readonly titler: Titler | null;
+  private readonly headliner: Headliner | null;
   private readonly config: Pick<Config, 'contextBudgetTokens' | 'maxOutputTokens'>;
   private readonly log: Logger;
 
@@ -59,12 +61,14 @@ export class Generations {
     repo: Repo;
     models: ModelSource;
     titler?: Titler;
+    headliner?: Headliner;
     config: Pick<Config, 'contextBudgetTokens' | 'maxOutputTokens'>;
     log: Logger;
   }) {
     this.repo = deps.repo;
     this.models = deps.models;
     this.titler = deps.titler ?? null;
+    this.headliner = deps.headliner ?? null;
     this.config = deps.config;
     this.log = deps.log;
   }
@@ -216,9 +220,12 @@ export class Generations {
     }
     this.repo.finishRevision(entry.revisionId, entry.content, final.status, final.error);
     this.setStatus(entry, final.status, final.error);
-    // Name the thread after its first answer, before telling watchers the
-    // answer has ended, so the sidebar they refresh shows the new title.
-    if (final.status === 'done' && this.titler && entry.stopReason === null) await this.titler.title(args.threadId);
+    // Name the thread after its first answer, and write the exchange's line
+    // for the map, before telling watchers the answer has ended, so what they
+    // refresh shows both. The answer is already marked done for them.
+    if (final.status === 'done' && entry.stopReason === null) {
+      await Promise.all([this.titler?.title(args.threadId), this.headliner?.headline(entry.messageId)]);
+    }
     this.emit(entry, (w) => w.end());
     this.live.delete(entry.messageId);
     this.log.info('answer finished', {

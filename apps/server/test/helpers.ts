@@ -13,6 +13,7 @@ export interface TestServer {
   db: Db;
   models: ModelSettings;
   titler: App['titler'];
+  headliner: App['headliner'];
   close(): Promise<void>;
 }
 
@@ -47,6 +48,7 @@ export async function startServer(
     db,
     models,
     titler: app.titler,
+    headliner: app.headliner,
     async close() {
       await app.close();
       db.close();

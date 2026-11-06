@@ -26,6 +26,12 @@ test('a long thread has a catalog: each question, its side questions, and where 
   const outline = page.getByTestId('outline');
   const items = outline.getByTestId('outline-item');
   await expect(outline.locator('[data-testid=outline-item][data-kind=question]')).toHaveCount(3);
+  // Labelled by what each exchange established, as soon as the answer ends.
+  await expect(outline.locator('[data-kind=question]').last()).toHaveText('In short: Third question about Adam');
+  await expect(outline.locator('[data-kind=question]').last()).toHaveAttribute(
+    'title',
+    'You asked: Third question about Adam',
+  );
   await expect(outline.locator('[data-kind=side]')).toContainText('↳');
 
   await page.evaluate(() => window.scrollTo(0, 0));

@@ -84,6 +84,13 @@ test('every thread has its own map, and every node leads back to its exact messa
   await expect(map.getByTestId('map-exchange')).toHaveCount(2);
   await expect(map.getByTestId('map-branch')).toHaveCount(1);
   await expect(map.getByTestId('map-passage')).toContainText('offline');
+  // Each exchange leads with what it established (the model's line), the question beneath.
+  const first = map.getByTestId('map-exchange').first();
+  await expect(first.getByTestId('map-headline').first()).toHaveText('In short: Tell me about optimisation');
+  await expect(first.getByTestId('map-question').first()).toHaveText('You asked: Tell me about optimisation');
+  await first.getByTestId('map-headline').first().click();
+  await expect(page.locator('[data-testid=message].flash')).toHaveAttribute('data-role', 'assistant');
+  await page.goBack();
 
   // The passage: back to the spot in the parent, highlighted.
   await map.getByTestId('map-passage').click();

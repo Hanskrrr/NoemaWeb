@@ -82,6 +82,11 @@ export const Message = z.object({
   status: MessageStatus,
   error: MessageError.nullable(),
   model: z.string().nullable(),
+  /**
+   * For a finished answer: one short line, written by the model, saying what
+   * the exchange established. Shown on the map and in the catalog; null until written.
+   */
+  headline: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -187,6 +192,8 @@ export interface MapExchange {
   questionId: string;
   question: string;
   answerId: string | null;
+  /** What the exchange established, in a line (the model's); null until written. */
+  headline: string | null;
   /** The start of the answer, as plain text. */
   gist: string;
   status: MessageStatus;
@@ -209,6 +216,7 @@ const MapExchangeSchema: z.ZodType<MapExchange> = z.lazy(() =>
     questionId: Id,
     question: z.string(),
     answerId: Id.nullable(),
+    headline: z.string().nullable(),
     gist: z.string(),
     status: MessageStatus,
     branches: z.array(MapNodeSchema),

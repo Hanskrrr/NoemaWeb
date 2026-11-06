@@ -77,6 +77,14 @@ export class FakeProvider implements ModelProvider {
       yield { type: 'finish', reason: 'stop' };
       return;
     }
+    if (req.purpose === 'headline') {
+      // A predictable line that says which question it read.
+      const asked = /Question:\n([\s\S]*?)\n\nAnswer:/.exec(question)?.[1] ?? '';
+      if (asked.includes('[[no-headline]]')) throw new ProviderError('unavailable', 'fake failure: unavailable');
+      yield { type: 'text', text: `In short: ${asked.replace(/\[\[[^\]]*\]\]/g, '').trim()}` };
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
     if (req.purpose === 'merge') {
       // A predictable summary that names what it read, so tests can follow it.
       const all = req.messages.map((m) => m.content).join('\n');

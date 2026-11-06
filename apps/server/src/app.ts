@@ -29,6 +29,7 @@ import {
 import { Generations } from './chat/generation.ts';
 import { fullTranscript, MergeWriter } from './chat/merges.ts';
 import { NoteWriter, Suggester } from './chat/notes.ts';
+import { Headliner } from './chat/headlines.ts';
 import { Titler } from './chat/titles.ts';
 import type { Config } from './config.ts';
 import { checkRequest, SECURITY_HEADERS } from './http/guard.ts';
@@ -53,6 +54,7 @@ export interface App {
   server: Server;
   generations: Generations;
   titler: Titler;
+  headliner: Headliner;
   notes: NoteWriter;
   suggestions: Suggester;
   merges: MergeWriter;
@@ -63,7 +65,8 @@ export interface App {
 export function createApp(deps: AppDeps): App {
   const { repo, models, log } = deps;
   const titler = new Titler({ repo, models, log });
-  const generations = new Generations({ repo, models, titler, config: deps.config, log });
+  const headliner = new Headliner({ repo, models, log });
+  const generations = new Generations({ repo, models, titler, headliner, config: deps.config, log });
   const notes = new NoteWriter({ repo, models, maxOutputTokens: deps.config.maxOutputTokens, log });
   const suggestions = new Suggester({ repo, models, maxOutputTokens: deps.config.maxOutputTokens, log });
   const merges = new MergeWriter({ repo, models, log });
@@ -466,6 +469,7 @@ export function createApp(deps: AppDeps): App {
     server,
     generations,
     titler,
+    headliner,
     notes,
     suggestions,
     merges,

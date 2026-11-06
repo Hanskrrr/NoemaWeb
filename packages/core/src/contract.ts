@@ -61,6 +61,10 @@ export const Thread = z.object({
   continuedFromId: Id.nullable(),
   /** In the Trash since then; restoring brings it back as it was. */
   deletedAt: z.string().nullable(),
+  /** Asked about a passage of a source: that source, the version it was asked about, and the passage, shortened. */
+  sourceId: Id.nullable(),
+  sourceVersionId: Id.nullable(),
+  sourceQuote: z.string().nullable(),
   title: z.string(),
   /** question: the first question; model: written by the AI; user: renamed by the learner. */
   titleSource: z.enum(['question', 'model', 'user']),
@@ -118,6 +122,105 @@ export type BranchSummary = z.infer<typeof BranchSummary>;
 
 export const Origin = z.object({ parentThreadId: Id, parentTitle: z.string(), anchor: AnchorRef });
 export type Origin = z.infer<typeof Origin>;
+
+// Sources: what the learner reads. Its text is an immutable Markdown version;
+// a passage is anchored into the version that was shown.
+
+/** A passage of one version of a source (W3C quote and position selectors). */
+export const SourcePassage = z.object({
+  versionId: Id,
+  start: z.number().int().nonnegative(),
+  end: z.number().int().positive(),
+  exact: z.string(),
+  prefix: z.string(),
+  suffix: z.string(),
+});
+export type SourcePassage = z.infer<typeof SourcePassage>;
+
+export const Source = z.object({
+  id: Id,
+  notebookId: Id,
+  title: z.string(),
+  /** Where it was fetched from (as the learner gave it), or null when pasted. */
+  url: z.string().nullable(),
+  latestVersionId: Id,
+  versions: z.number().int().positive(),
+  /** Threads asked about its passages (not in the Trash). */
+  threads: z.number().int().nonnegative(),
+  deletedAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type Source = z.infer<typeof Source>;
+
+export const SourceList = z.object({ sources: z.array(Source) });
+export type SourceList = z.infer<typeof SourceList>;
+
+export const SourceVersion = z.object({
+  id: Id,
+  sourceId: Id,
+  seq: z.number().int().positive(),
+  /** The Markdown shown and anchored into. Never changes. */
+  content: z.string(),
+  origin: z.enum(['paste', 'url']),
+  /** The address actually read (after redirects, or an arXiv paper's HTML), if fetched. */
+  fetchedUrl: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type SourceVersion = z.infer<typeof SourceVersion>;
+
+export const SourceDetail = z.object({
+  source: Source,
+  version: SourceVersion,
+  /** Every version, newest first. */
+  versions: z.array(z.object({ id: Id, seq: z.number().int(), createdAt: z.string() })),
+  /** Threads asked about passages of this version, in the order asked. */
+  threads: z.array(
+    z.object({
+      threadId: Id,
+      title: z.string(),
+      createdAt: z.string(),
+      passage: SourcePassage,
+      /** Questions asked in it and in its side questions: how hard the passage was. */
+      questions: z.number().int().nonnegative(),
+    }),
+  ),
+  /** Threads asked about other versions of it. */
+  elsewhere: z.number().int().nonnegative(),
+});
+export type SourceDetail = z.infer<typeof SourceDetail>;
+
+/** Paste text (Markdown, or HTML already turned into it), or give an address to fetch. */
+export const CreateSourceRequest = z
+  .object({
+    id: Id,
+    title: z.string().trim().max(300).optional(),
+    text: z.string().max(2_000_000).optional(),
+    url: z.string().trim().url().max(2000).optional(),
+  })
+  .refine((r) => (r.text !== undefined && r.text.trim() !== '') !== (r.url !== undefined), {
+    message: 'give either text or an address',
+  });
+export type CreateSourceRequest = z.infer<typeof CreateSourceRequest>;
+
+export const RenameSourceRequest = z.object({ title: z.string().trim().min(1).max(300) });
+
+/** Fetch a source again: a new version if its text changed. */
+export const RefetchResponse = z.object({ source: Source, changed: z.boolean() });
+export type RefetchResponse = z.infer<typeof RefetchResponse>;
+
+/** For a thread asked about a passage of a source: where, in which version. */
+export const SourceOrigin = z.object({
+  sourceId: Id,
+  sourceTitle: z.string(),
+  url: z.string().nullable(),
+  passage: SourcePassage,
+  /** The version shown now; when it differs, the passage was asked about an earlier one. */
+  latestVersionId: Id,
+  deleted: z.boolean(),
+});
+export type SourceOrigin = z.infer<typeof SourceOrigin>;
+
 
 /** Where a citation label in a note or a merge ([E3]) points: the exact message it came from. */
 export const CiteRef = z.object({ threadId: Id, messageId: Id });
@@ -193,6 +296,8 @@ export const ThreadDetail = z.object({
   continuedFrom: ContinuedFrom.nullable(),
   /** Threads split off from this one: they continue where it ends. */
   continuedIn: z.array(Continuation),
+  /** Asked about a passage of a source. */
+  sourceOrigin: SourceOrigin.nullable(),
 });
 export type ThreadDetail = z.infer<typeof ThreadDetail>;
 
@@ -328,6 +433,7 @@ export const Trash = z.object({
     z.object({ threadId: Id, title: z.string(), deletedAt: z.string(), sideQuestions: z.number().int().nonnegative() }),
   ),
   notes: z.array(z.object({ noteId: Id, title: z.string(), deletedAt: z.string() })),
+  sources: z.array(z.object({ sourceId: Id, title: z.string(), deletedAt: z.string() })),
 });
 export type Trash = z.infer<typeof Trash>;
 
@@ -385,6 +491,12 @@ export const AskRequest = z.object({
   content: z.string().trim().min(1).max(100_000),
 });
 export type AskRequest = z.infer<typeof AskRequest>;
+export const SourceThreadRequest = z.object({
+  id: Id,
+  passage: z.object({ versionId: Id, start: z.number().int().nonnegative(), end: z.number().int().positive() }),
+  question: AskRequest,
+});
+export type SourceThreadRequest = z.infer<typeof SourceThreadRequest>;
 
 /**
  * Open a branch from a passage and ask its first question, in one request.
@@ -413,11 +525,15 @@ export type StopResponse = z.infer<typeof StopResponse>;
 
 export const SearchHit = z.object({
   /** A thread's title, a question or answer, a note's title, or a block of a note. */
-  kind: z.enum(['message', 'thread', 'note', 'block']),
+  kind: z.enum(['message', 'thread', 'note', 'block', 'source', 'passage']),
   threadId: Id.nullable(),
   messageId: Id.nullable(),
   noteId: Id.nullable(),
   blockId: Id.nullable(),
+  /** For a source or a passage of it: the version, and where the passage starts in it. */
+  sourceId: Id.nullable(),
+  versionId: Id.nullable(),
+  offset: z.number().int().nonnegative().nullable(),
   /** For a message: the learner's question or the AI's answer. */
   role: z.enum(['user', 'assistant']).nullable(),
   /** The thread's or the note's title. */
@@ -435,7 +551,7 @@ export type SearchHit = z.infer<typeof SearchHit>;
 
 /** Logged when a search hit is opened: what kind, at what rank, how long the query was. Never its words. */
 export const SearchOpenedRequest = z.object({
-  kind: z.enum(['message', 'thread', 'note', 'block']),
+  kind: z.enum(['message', 'thread', 'note', 'block', 'source', 'passage']),
   rank: z.number().int().nonnegative().max(100),
   queryChars: z.number().int().nonnegative().max(200),
 });

@@ -1,0 +1,35 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Why scale by √d? — Some Blog</title>
+<meta property="og:title" content="Why scale by √d?">
+<script>window.analytics = {};</script></head>
+<body>
+<header class="site-header"><a href="/">Some Blog</a><nav><a href="/about">About</a></nav></header>
+<div class="cookie-banner">We use cookies. <button>OK</button></div>
+<main>
+<article>
+<header><h1>Why scale by √d?</h1><p class="byline">By A. Writer · 3 min read</p></header>
+<p>Dot products of <em>random</em> vectors grow with their dimension &mdash; <strong>roughly like √d</strong>. See <a href="/posts/variance">the variance post</a> &amp; <a href="#notes">notes</a>.</p>
+<h2>A quick check</h2>
+<pre><code class="language-python">import numpy as np
+q, k = np.random.randn(2, 512)
+
+print(q @ k)  # about sqrt(512) in size
+</code></pre>
+<p>Things to remember:</p>
+<ul>
+<li>Mean is 0.</li>
+<li>Variance is <code>d</code>.
+  <ul><li>So the std is √d.</li></ul>
+</li>
+</ul>
+<ol start="3"><li>Third</li><li>Fourth</li></ol>
+<blockquote><p>Softmax saturates when its inputs are large.</p></blockquote>
+<p>Prices like $5 and 2*3 and snake_case stay literal.</p>
+<p>Inline TeX from MathJax: \(\sqrt{d_k}\) and a display one: \[\sum_i q_i k_i\]</p>
+<p>1. Not a list, just a sentence that starts with a number.</p>
+<div class="share-buttons"><a href="https://twitter.com/x">Share</a></div>
+</article>
+<aside class="sidebar"><h3>Related</h3><ul><li>Other post</li></ul></aside>
+</main>
+<footer><p>© 2026 Some Blog</p></footer>
+</body></html>

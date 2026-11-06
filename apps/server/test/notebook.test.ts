@@ -5,6 +5,7 @@ import {
   type CreateBranchResponse,
   type Note,
   type Thread,
+  Thread as ThreadSchema,
   type ThreadMap,
   ulid,
 } from '@noema/core';
@@ -58,6 +59,18 @@ test('the learner can rename a thread, and the AI never renames it back', async 
   assert.equal((await api(s, 'PATCH', `/api/threads/${threadId}`, { title: '   ' })).status, 400);
 });
 
+test('every way of getting a thread answers in the contract’s shape', async () => {
+  const created = await api<{ id: string }>(s, 'POST', `/api/notebooks/${s.repo.ensureDefaultNotebook().id}/threads`, {
+    id: ulid(),
+  });
+  assert.equal(created.status, 201);
+  ThreadSchema.parse(created.json);
+  const { threadId, b1 } = await journey();
+  ThreadSchema.parse(s.repo.getThread(threadId));
+  ThreadSchema.parse(b1.thread);
+  ThreadSchema.parse((await api(s, 'POST', `/api/threads/${b1.thread.id}/split`, { split: true })).json);
+});
+
 test('the thread list carries each branch’s passage for the sidebar', async () => {
   const { threadId, b1 } = await journey();
   const list = await api<{ threads: Thread[] }>(s, 'GET', `/api/notebooks/${s.repo.getThread(threadId)?.notebookId}/threads`);
@@ -66,14 +79,11 @@ test('the thread list carries each branch’s passage for the sidebar', async ()
   assert.equal(list.json.threads.find((t) => t.id === threadId)?.originQuote, null);
 });
 
-test('the map shows the whole journey from the root, with branches on the exact message', async () => {
+test('every thread has its own map: the branches below it, and the way up', async () => {
   const { threadId, q1, q2, b1, b2 } = await journey();
-  // Asking for the map from deep inside still returns the whole tree.
-  const r = await api<ThreadMap>(s, 'GET', `/api/threads/${b2.thread.id}/map`);
-  assert.equal(r.status, 200);
-  assert.equal(r.json.focusThreadId, b2.thread.id);
-  const root = r.json.root;
-  assert.equal(root.threadId, threadId);
+  const whole = (await api<ThreadMap>(s, 'GET', `/api/threads/${threadId}/map`)).json;
+  assert.deepEqual([whole.root.threadId, whole.path, whole.parent], [threadId, [], null]);
+  const root = whole.root;
   assert.deepEqual(
     root.exchanges.map((e) => [e.index, e.question, e.questionId, e.answerId]),
     [
@@ -84,8 +94,8 @@ test('the map shows the whole journey from the root, with branches on the exact 
   assert.match(root.exchanges[0]?.gist ?? '', /^You asked: "What is backprop\?"/);
   const first = root.exchanges[0]?.branches ?? [];
   assert.deepEqual(
-    first.map((n) => [n.threadId, n.origin?.exact, n.origin?.messageId]),
-    [[b1.thread.id, 'offline fake model', q1.assistant.id]],
+    first.map((n) => [n.threadId, n.origin?.exact, n.origin?.messageId, n.split]),
+    [[b1.thread.id, 'offline fake model', q1.assistant.id, false]],
   );
   assert.equal(root.exchanges[1]?.branches.length, 0);
   const nested = first[0]?.exchanges[0]?.branches ?? [];
@@ -93,6 +103,17 @@ test('the map shows the whole journey from the root, with branches on the exact 
     nested.map((n) => [n.threadId, n.origin?.exact]),
     [[b2.thread.id, 'every question']],
   );
+
+  // From a branch: that branch and what is below it, with the way up.
+  const r = await api<ThreadMap>(s, 'GET', `/api/threads/${b1.thread.id}/map`);
+  assert.equal(r.status, 200);
+  assert.equal(r.json.root.threadId, b1.thread.id);
+  assert.deepEqual(r.json.root.exchanges.map((e) => e.question), ['Why offline?']);
+  assert.deepEqual(r.json.root.exchanges[0]?.branches.map((n) => n.threadId), [b2.thread.id]);
+  assert.deepEqual(r.json.path.map((p) => p.threadId), [threadId]);
+  assert.equal(r.json.parent?.threadId, threadId);
+  const deep = (await api<ThreadMap>(s, 'GET', `/api/threads/${b2.thread.id}/map`)).json;
+  assert.deepEqual(deep.path.map((p) => p.threadId), [threadId, b1.thread.id]);
 });
 
 test('the rewrite outline numbers every exchange, branches included, in reading order', async () => {
@@ -111,7 +132,7 @@ test('the rewrite outline numbers every exchange, branches included, in reading 
   assert.match(text, /Side question opened from E2, about the passage: "every question"/);
 });
 
-test('rewrite as a note: written by the server, cited, editable, with every version kept', async () => {
+test('rewrite as a note: written by the server, cited, in blocks, with every version kept', async () => {
   const { threadId, q1, b1 } = await journey();
   const id = ulid();
   const created = await api<Note>(s, 'POST', `/api/threads/${threadId}/notes`, { id });
@@ -126,30 +147,43 @@ test('rewrite as a note: written by the server, cited, editable, with every vers
   // The model's heading becomes the note's title and leaves the body.
   assert.equal(note.title, 'Study note');
   assert.ok(note.content.startsWith('The main idea'));
+  // The text is split into blocks, each written by the AI.
+  assert.deepEqual(
+    note.blocks.map((b) => [b.content.split('\n')[0], b.author]),
+    [
+      ['The main idea, from the first question [E1].', 'ai'],
+      ['- A detail that came from a side question [E2].', 'ai'],
+      ['## Open questions', 'ai'],
+      ['- None yet.', 'ai'],
+    ],
+  );
   // Citations stay plain labels in the text; the note maps each to its exact message.
-  assert.ok(note.content.includes('the first question [E1].'));
-  assert.ok(note.content.includes('a side question [E2].'));
   assert.deepEqual(note.refs.E1, { threadId, messageId: q1.assistant.id });
   assert.deepEqual(note.refs.E2, { threadId: b1.thread.id, messageId: b1.assistant.id });
   assert.equal(Object.keys(note.refs).length, 4);
 
-  const edited = await api<Note>(s, 'PATCH', `/api/notes/${id}`, { content: `${note.content}\n\nMy own line.` });
-  assert.deepEqual([edited.json.author, edited.json.revision], ['ai+user', 2]);
+  const renamed = await api<Note>(s, 'PATCH', `/api/notes/${id}`, { title: 'Chain rule, my way' });
+  assert.deepEqual([renamed.json.title, renamed.json.revision], ['Chain rule, my way', 2]);
+  assert.equal((await api(s, 'PATCH', `/api/notes/${id}`, { content: 'whole text' })).status, 400);
 
-  await api<Note>(s, 'PATCH', `/api/notes/${id}`, { title: 'Chain rule, my way' });
   const again = await api<Note>(s, 'POST', `/api/notes/${id}/rewrite`, {});
   assert.equal(again.status, 202);
+  assert.deepEqual(again.json.blocks, [], 'blocks are hidden while the whole note is rewritten');
   await waitFor(() => s.repo.getNote(id)?.status === 'done', 5000);
-  // Once the learner has edited the note, its title is theirs.
+  // The learner named it, so the title stays theirs.
   assert.equal(s.repo.getNote(id)?.title, 'Chain rule, my way');
-  const history = await api<{ revisions: Array<{ n: number; author: string }> }>(s, 'GET', `/api/notes/${id}/history`);
+  assert.equal(s.repo.getNote(id)?.blocks.length, 4);
+  const history = await api<{ revisions: Array<{ n: number; author: string; change: string }> }>(
+    s,
+    'GET',
+    `/api/notes/${id}/history`,
+  );
   assert.deepEqual(
-    history.json.revisions.map((r) => [r.n, r.author]),
+    history.json.revisions.map((r) => [r.n, r.author, r.change]),
     [
-      [1, 'ai'],
-      [2, 'user'],
-      [3, 'user'],
-      [4, 'ai'],
+      [1, 'ai', 'AI wrote the note'],
+      [2, 'user', 'renamed the note'],
+      [3, 'ai', 'AI wrote the note'],
     ],
   );
   const list = await api<{ notes: Array<{ id: string; threadId: string }> }>(
@@ -158,7 +192,7 @@ test('rewrite as a note: written by the server, cited, editable, with every vers
     `/api/notebooks/${note.notebookId}/notes`,
   );
   assert.ok(list.json.notes.some((n) => n.id === id && n.threadId === threadId));
-  assert.ok(list.json.notes.every((n) => !('content' in n) && !('refs' in n)));
+  assert.ok(list.json.notes.every((n) => !('content' in n) && !('refs' in n) && !('blocks' in n)));
 });
 
 test('a note title comes from the heading the model starts with', () => {
@@ -178,18 +212,20 @@ test('a note cut off by a restart is marked failed with its text kept', async ()
   const id = ulid();
   s.repo.startNote(id, s.repo.getThread(threadId)?.notebookId as string, threadId, 'T');
   s.repo.saveNoteContent(id, 'Half a note');
-  assert.equal(s.repo.failGeneratingNotes(), 1);
+  assert.equal(s.repo.recoverNotes().failed, 1);
   const note = s.repo.getNote(id);
   assert.deepEqual([note?.status, note?.content], ['failed', 'Half a note']);
+  // What arrived is kept as blocks, so it can be edited.
+  assert.deepEqual(note?.blocks.map((b) => b.content), ['Half a note']);
   assert.match(note?.error ?? '', /stopped before/);
 });
 
-test('a note cannot be edited while it is being written', async () => {
+test('a note cannot be changed while the AI writes it', async () => {
   const { threadId } = await newThread(s);
   await ask(threadId, 'Busy');
   const id = ulid();
   s.repo.startNote(id, s.repo.getThread(threadId)?.notebookId as string, threadId, 'T');
-  const r = await api(s, 'PATCH', `/api/notes/${id}`, { content: 'x' });
+  const r = await api(s, 'POST', `/api/notes/${id}/blocks`, { id: ulid(), after: null, content: 'x' });
   assert.equal(r.status, 409);
   s.repo.finishNote(id, '', 'failed', 'test');
 });

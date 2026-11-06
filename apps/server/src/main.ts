@@ -32,7 +32,7 @@ const db = new Db(config.dbPath);
 const applied = db.migrate();
 const repo = new Repo(db);
 const interrupted = repo.interruptLive();
-repo.failGeneratingNotes();
+const notes = repo.recoverNotes();
 repo.ensureDefaultNotebook();
 
 let backupTimer: NodeJS.Timeout | null = null;
@@ -70,6 +70,8 @@ app.server.listen(config.port, config.host, () => {
     db: config.dbPath,
     migrationsApplied: applied,
     interruptedAtBoot: interrupted,
+    notesCutOff: notes.failed,
+    notesMadeIntoBlocks: notes.blockified,
     provider: models.view().provider,
     model: models.view().model,
     modelSettings: models.view().source,

@@ -5,7 +5,14 @@
 // Like answers, notes are written by the server, saved as they arrive, and
 // survive the tab closing.
 
-import { type ChatMessage, describeError, normalizeCitations } from '@noema/core';
+import {
+  type ChatMessage,
+  type CiteRefs,
+  describeError,
+  joinBlocks,
+  type Note,
+  normalizeCitations,
+} from '@noema/core';
 import { ProviderError } from '../llm/provider.ts';
 import type { ModelSource } from '../llm/settings.ts';
 import type { Logger } from '../log.ts';
@@ -37,14 +44,22 @@ export interface Outline {
   refs: Map<string, { threadId: string; messageId: string }>;
 }
 
-/** The thread and every branch below it, as numbered exchanges, in reading order. */
-export function buildOutline(repo: Repo, threadId: string): Outline {
+/**
+ * The thread and every branch below it, as numbered exchanges, in reading
+ * order. Branches made their own thread are left out: they have their own
+ * notes. `keep`: labels a note already uses keep pointing at the same
+ * exchange, and new exchanges get new numbers, so a note's citations stay
+ * right when the AI is asked about it again later.
+ */
+export function buildOutline(repo: Repo, threadId: string, keep: CiteRefs = {}): Outline {
   const refs: Outline['refs'] = new Map();
   const lines: string[] = [];
-  let n = 0;
+  const known = new Map(Object.entries(keep).map(([label, ref]) => [ref.messageId, label]));
+  let n = Math.max(0, ...Object.keys(keep).map((l) => Number(l.slice(1)) || 0));
   let total = 0;
   const visit = (id: string, depth: number, from: string | null) => {
     if (depth > 20 || total > MAX_TOTAL) return;
+    if (depth > 0 && repo.getThread(id)?.splitAt) return;
     const thread = repo.getThread(id);
     const origin = repo.originOf(id);
     if (origin) {
@@ -61,10 +76,14 @@ export function buildOutline(repo: Repo, threadId: string): Outline {
         lines.push('(The conversation continues; the rest is left out for length.)');
         return;
       }
-      n += 1;
-      const label = `E${n}`;
       const a = answers.get(q.id);
-      refs.set(label, { threadId: id, messageId: a?.id ?? q.id });
+      const messageId = a?.id ?? q.id;
+      let label = known.get(messageId) ?? known.get(q.id);
+      if (!label) {
+        n += 1;
+        label = `E${n}`;
+      }
+      refs.set(label, { threadId: id, messageId });
       const block = [`[${label}] Question:`, clip(q.content, MAX_QUESTION), '', `[${label}] Answer:`, a?.content ? clip(a.content, MAX_ANSWER) : '(no answer)', ''];
       total += block.join('\n').length;
       lines.push(...block);
@@ -166,6 +185,148 @@ export class NoteWriter {
       if (!(err instanceof ProviderError)) this.log.error('note failed', { noteId, err });
       const message = signal.aborted ? 'The server stopped before this note was finished.' : describeError(kind);
       this.repo.finishNote(noteId, content, 'failed', message);
+    }
+  }
+}
+
+// Suggestions: the AI writes one block, a new version of a block or a new
+// block at a place, following the learner's instruction. The result waits
+// as a suggestion; the learner accepts or discards it.
+
+export const SUGGEST_PROMPT = [
+  "You help a learner edit their study note. The note is Markdown, made of blocks. You write exactly one block: either a new version of the block marked <<<REWRITE>>>, or a new block at the place marked <<<NEW BLOCK HERE>>>, following the learner's instruction.",
+  '- Reply with the Markdown of that one block only: no preamble, no explanation, no code fence around it, no markers.',
+  '- One block is usually one paragraph, list, table, formula or short worked example. Use several paragraphs only if the instruction asks for more.',
+  "- Write in the note's language unless the instruction asks otherwise. Fit the surrounding blocks: do not repeat them.",
+  '- When a point comes from the conversation, cite the exchange with its label, like [E3]. Keep citations that still apply. Use only labels that exist.',
+  '- Math as $...$ inline and $$...$$ on their own lines.',
+].join('\n');
+
+const NOTE_WINDOW = 40_000;
+
+/** The note with the place marked. Long notes are cut down to the blocks around it. */
+export function markedNote(note: Note, blockId: string, mode: 'rewrite' | 'insert'): string {
+  const blocks = note.blocks.filter((b) => b.content !== '' || b.id === blockId);
+  let i = blocks.findIndex((b) => b.id === blockId);
+  if (i < 0) i = blocks.length;
+  const parts = blocks.map((b, j) => {
+    if (j !== i) return b.content;
+    return mode === 'rewrite' ? `<<<REWRITE>>>\n${b.content}\n<<<END>>>` : '<<<NEW BLOCK HERE>>>';
+  });
+  let lo = 0;
+  let hi = parts.length;
+  while (joinBlocks(parts.slice(lo, hi)).length > NOTE_WINDOW && hi - lo > 1) {
+    if (i - lo > hi - 1 - i) lo += 1;
+    else hi -= 1;
+  }
+  const body = joinBlocks(parts.slice(lo, hi).filter((p) => p !== ''));
+  return [lo > 0 ? '(…earlier blocks left out)' : '', body, hi < parts.length ? '(…later blocks left out)' : '']
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+export function suggestRequest(args: {
+  outline: string | null;
+  note: string;
+  title: string;
+  instruction: string;
+}): ChatMessage[] {
+  const messages: ChatMessage[] = [{ role: 'system', content: SUGGEST_PROMPT }];
+  // The conversation first: it changes least, so the provider can cache it.
+  if (args.outline) messages.push({ role: 'user', content: `The conversation this note comes from:\n\n${args.outline}` });
+  messages.push({
+    role: 'user',
+    content: `The note "${args.title}":\n\n${args.note}\n\nInstruction: ${args.instruction}`,
+  });
+  return messages;
+}
+
+/** Models sometimes wrap the block in a code fence or echo the markers; take them off. */
+export function cleanSuggestion(text: string): string {
+  let t = text.trim();
+  const fenced = /^```(?:markdown|md)?[ \t]*\n([\s\S]*?)\n```$/.exec(t);
+  if (fenced) t = (fenced[1] as string).trim();
+  t = t.replace(/<<<(?:REWRITE|END|NEW BLOCK HERE)>>>/g, '').trim();
+  return normalizeCitations(t);
+}
+
+export class Suggester {
+  private readonly repo: Repo;
+  private readonly models: ModelSource;
+  private readonly maxOutputTokens: number | null;
+  private readonly log: Logger;
+  private readonly live = new Map<string, { controller: AbortController; done: Promise<void> }>();
+
+  constructor(deps: { repo: Repo; models: ModelSource; maxOutputTokens: number | null; log: Logger }) {
+    this.repo = deps.repo;
+    this.models = deps.models;
+    this.maxOutputTokens = deps.maxOutputTokens;
+    this.log = deps.log;
+  }
+
+  start(noteId: string, blockId: string, mode: 'rewrite' | 'insert', instruction: string): void {
+    if (this.live.has(blockId)) return;
+    const controller = new AbortController();
+    const done = this.run(noteId, blockId, mode, instruction, controller.signal)
+      .catch((err: unknown) => this.log.error('suggestion crashed', { noteId, blockId, err }))
+      .finally(() => this.live.delete(blockId));
+    this.live.set(blockId, { controller, done });
+  }
+
+  async shutdown(): Promise<void> {
+    const all = [...this.live.values()];
+    for (const w of all) w.controller.abort();
+    await Promise.all(all.map((w) => w.done));
+  }
+
+  private async run(
+    noteId: string,
+    blockId: string,
+    mode: 'rewrite' | 'insert',
+    instruction: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    let text = '';
+    let saved = 0;
+    const timer = setInterval(() => {
+      if (text.length === saved) return;
+      try {
+        this.repo.saveProposal(blockId, text);
+        saved = text.length;
+      } catch (err) {
+        this.log.error('suggestion flush failed', { blockId, err });
+      }
+    }, NOTE_FLUSH_MS);
+    try {
+      const provider = this.models.current();
+      if (!provider.configured) throw new ProviderError('not_configured', 'no model connected');
+      const note = this.repo.getNote(noteId);
+      if (!note) throw new ProviderError('bad_request', 'the note is gone');
+      let outline: string | null = null;
+      if (note.threadId && this.repo.getThread(note.threadId)) {
+        const o = buildOutline(this.repo, note.threadId, note.refs);
+        this.repo.mergeNoteRefs(noteId, Object.fromEntries(o.refs));
+        outline = o.text;
+      }
+      for await (const ev of provider.stream({
+        messages: suggestRequest({ outline, note: markedNote(note, blockId, mode), title: note.title, instruction }),
+        maxTokens: this.maxOutputTokens ?? undefined,
+        purpose: 'suggest',
+        signal,
+      })) {
+        if (ev.type === 'text') text += ev.text;
+      }
+      clearInterval(timer);
+      const clean = cleanSuggestion(text);
+      if (!clean) throw new ProviderError('bad_request', 'empty suggestion');
+      this.repo.finishProposal(blockId, clean, 'ready', null);
+      this.log.info('suggestion written', { noteId, blockId, chars: clean.length });
+    } catch (err) {
+      clearInterval(timer);
+      const kind = err instanceof ProviderError ? err.kind : 'internal';
+      if (!(err instanceof ProviderError)) this.log.error('suggestion failed', { blockId, err });
+      const message = signal.aborted ? 'The server stopped before this was finished.' : describeError(kind);
+      this.repo.finishProposal(blockId, text, 'failed', message);
     }
   }
 }

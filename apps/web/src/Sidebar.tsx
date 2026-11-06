@@ -1,7 +1,8 @@
 // Threads and their branches as a tree, then notes. Top-level threads are
 // newest first; branches sit under the thread they were asked from, in the
-// order opened. Each branch shows the passage it came from: click the
-// passage to jump to that exact spot, click the title to open the branch.
+// order opened. A branch made its own thread is listed at the top level.
+// Each branch shows the passage it came from: click the passage to jump to
+// that exact spot, click the title to open the branch.
 
 import type { NoteSummary, Thread } from '@noema/core';
 
@@ -10,7 +11,7 @@ function tree(threads: Thread[]): { roots: Thread[]; children: Map<string, Threa
   const known = new Set(threads.map((t) => t.id));
   const roots: Thread[] = [];
   for (const t of threads) {
-    if (t.parentThreadId && known.has(t.parentThreadId)) {
+    if (t.parentThreadId && !t.splitAt && known.has(t.parentThreadId)) {
       const list = children.get(t.parentThreadId) ?? [];
       list.push(t);
       children.set(t.parentThreadId, list);
@@ -32,6 +33,7 @@ export function Sidebar({
   onJump,
   onOpenNote,
   onNew,
+  onNewNote,
 }: {
   threads: Thread[];
   notes: NoteSummary[];
@@ -42,6 +44,7 @@ export function Sidebar({
   onJump: (branch: Thread) => void;
   onOpenNote: (noteId: string) => void;
   onNew: () => void;
+  onNewNote: () => void;
 }) {
   const { roots, children } = tree(threads);
 
@@ -59,6 +62,11 @@ export function Sidebar({
           data-thread-id={t.id}
         >
           {depth > 0 && <span aria-hidden>↳ </span>}
+          {depth === 0 && t.splitAt && (
+            <span aria-hidden title="Made its own thread from a side question">
+              ↗{' '}
+            </span>
+          )}
           {t.title || 'Untitled'}
         </button>
         {t.originQuote && t.parentThreadId && (
@@ -84,9 +92,14 @@ export function Sidebar({
         + New thread
       </button>
       {roots.length === 0 ? <p className="sidebar-empty">No threads yet.</p> : <ul>{roots.map((t) => item(t, 0))}</ul>}
-      {notes.length > 0 && (
-        <section className="sidebar-notes" aria-label="Notes">
+      <section className="sidebar-notes" aria-label="Notes">
+        <div className="sidebar-notes-head">
           <h2>Notes</h2>
+          <button type="button" className="quiet" onClick={onNewNote} data-testid="new-note">
+            + New note
+          </button>
+        </div>
+        {notes.length > 0 && (
           <ul>
             {notes.map((n) => (
               <li key={n.id}>
@@ -104,8 +117,8 @@ export function Sidebar({
               </li>
             ))}
           </ul>
-        </section>
-      )}
+        )}
+      </section>
     </nav>
   );
 }

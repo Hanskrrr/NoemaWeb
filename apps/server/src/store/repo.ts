@@ -17,11 +17,16 @@ import {
   type MapExchange,
   type MapNode,
   type Notebook,
+  headingLevel,
+  joinBlocks,
   type Note,
+  type NoteBlock,
   type Origin,
   type SearchHit,
   searchText,
+  splitBlocks,
   type Thread,
+  type ThreadMap,
   ulid,
 } from '@noema/core';
 import type { Db } from './db.ts';
@@ -52,6 +57,7 @@ function toThread(r: Row): Thread {
     notebookId: r.notebook_id as string,
     parentThreadId: (r.parent_thread_id as string | null) ?? null,
     originQuote: exact ? shorten(exact, 160) : null,
+    splitAt: (r.split_at as string | null | undefined) ?? null,
     title: r.title as string,
     titleSource: ((r.title_source as string | undefined) ?? 'question') as Thread['titleSource'],
     createdAt: r.created_at as string,
@@ -61,13 +67,31 @@ function toThread(r: Row): Thread {
 
 const THREAD_SELECT = `SELECT t.*, a.exact AS origin_exact FROM thread t LEFT JOIN anchor a ON a.id = t.origin_anchor_id`;
 
-function toNote(r: Row): Note {
+function toBlock(r: Row): NoteBlock {
+  const status = r.proposal_status as NonNullable<NoteBlock['proposal']>['status'] | null;
+  return {
+    id: r.id as string,
+    content: r.content as string,
+    author: r.author as NoteBlock['author'],
+    proposal: status
+      ? {
+          status,
+          text: (r.proposal as string | null) ?? '',
+          instruction: (r.proposal_instruction as string | null) ?? '',
+          error: (r.proposal_error as string | null) ?? null,
+        }
+      : null,
+  };
+}
+
+function toNote(r: Row, blocks: NoteBlock[]): Note {
   return {
     id: r.id as string,
     notebookId: r.notebook_id as string,
     threadId: (r.thread_id as string | null) ?? null,
     title: r.title as string,
     content: r.content as string,
+    blocks,
     refs: JSON.parse((r.refs as string | undefined) ?? '{}') as Note['refs'],
     status: r.status as Note['status'],
     error: (r.error as string | null) ?? null,
@@ -120,6 +144,13 @@ export class ConflictError extends Error {
 
 export class InvalidError extends Error {
   override name = 'InvalidError';
+}
+
+export class NotFoundError extends Error {
+  override name = 'NotFoundError';
+  constructor(what: string) {
+    super(`no such ${what}`);
+  }
 }
 
 function toAnchor(r: Row): AnchorRef {
@@ -233,6 +264,7 @@ export class Repo {
         notebookId,
         parentThreadId: null,
         originQuote: null,
+        splitAt: null,
         title,
         titleSource: 'question',
         createdAt: t,
@@ -349,22 +381,54 @@ export class Repo {
     return rows.map((r) => r.id);
   }
 
+  // Split -------------------------------------------------------------------
+
+  /**
+   * Make a branch its own thread, or put it back. A thread made its own is
+   * listed at the top level, has its own map and notes, and stops sending the
+   * parent conversation to the model; it keeps its origin, so Back still works.
+   */
+  setSplit(threadId: string, split: boolean): Thread | null {
+    return this.db.tx(() => {
+      const thread = this.getThread(threadId);
+      if (!thread) return null;
+      if (!thread.parentThreadId) throw new InvalidError('only a side question can be made its own thread');
+      if (Boolean(thread.splitAt) === split) return thread;
+      this.db.sql.prepare('UPDATE thread SET split_at = ?, updated_at = ? WHERE id = ?').run(split ? now() : null, now(), threadId);
+      this.logEvent(split ? 'thread.split' : 'thread.unsplit', threadId, { parentThreadId: thread.parentThreadId });
+      return this.getThread(threadId);
+    });
+  }
+
+  private isSplit(threadId: string): boolean {
+    const row = this.db.sql.prepare('SELECT split_at FROM thread WHERE id = ?').get(threadId) as Row | undefined;
+    return Boolean(row?.split_at);
+  }
+
   // Map ---------------------------------------------------------------------
 
-  /** The outermost thread above this one. */
+  /** The outermost thread above this one, stopping at a thread made its own. */
   rootOf(threadId: string): string {
     const path = this.pathOf(threadId);
     return path[0]?.id ?? threadId;
   }
 
   /**
-   * The whole journey from the root thread down: each exchange in order with
-   * the start of its answer, and every branch hung on the message it left from.
+   * The map of one thread and every branch below it: each exchange in order
+   * with the start of its answer, and every branch hung on the message it
+   * left from. A branch made its own thread appears as a link only.
    */
-  mapOf(threadId: string): { root: MapNode; focusThreadId: string } {
-    const build = (id: string, depth: number): MapNode => {
+  mapOf(threadId: string): ThreadMap {
+    const build = (id: string, depth: number, isRoot: boolean): MapNode => {
       const thread = this.getThread(id);
       const origin = this.originOf(id);
+      const node = {
+        threadId: id,
+        title: thread?.title ?? '',
+        origin: origin ? { messageId: origin.anchor.messageId, exact: shorten(origin.anchor.exact, 200) } : null,
+        split: !isRoot && Boolean(thread?.splitAt),
+      };
+      if (node.split) return { ...node, exchanges: [] };
       const messages = this.listMessages(id);
       const answers = new Map(messages.filter((m) => m.role === 'assistant').map((m) => [m.replyTo, m]));
       const byMessage = new Map<string, string[]>();
@@ -374,7 +438,7 @@ export class Repo {
         byMessage.set(b.anchor.messageId, list);
       }
       const kids = (messageId: string | undefined) =>
-        depth < 20 && messageId ? (byMessage.get(messageId) ?? []).map((b) => build(b, depth + 1)) : [];
+        depth < 20 && messageId ? (byMessage.get(messageId) ?? []).map((b) => build(b, depth + 1, false)) : [];
       const exchanges: MapExchange[] = messages
         .filter((m) => m.role === 'user')
         .map((q, i) => {
@@ -389,27 +453,44 @@ export class Repo {
             branches: [...kids(q.id), ...kids(a?.id)],
           };
         });
-      return {
-        threadId: id,
-        title: thread?.title ?? '',
-        origin: origin ? { messageId: origin.anchor.messageId, exact: shorten(origin.anchor.exact, 200) } : null,
-        exchanges,
-      };
+      return { ...node, exchanges };
     };
-    return { root: build(this.rootOf(threadId), 0), focusThreadId: threadId };
+    const origin = this.originOf(threadId);
+    return {
+      root: build(threadId, 0, true),
+      path: this.pathOf(threadId).map((p) => ({ threadId: p.id, title: p.title })),
+      parent: origin ? { threadId: origin.parentThreadId, title: origin.parentTitle } : null,
+    };
   }
 
   // Notes -------------------------------------------------------------------
 
+  private blocksOf(noteId: string): NoteBlock[] {
+    return (
+      this.db.sql
+        .prepare('SELECT * FROM note_block WHERE note_id = ? AND deleted_at IS NULL ORDER BY pos, created_at')
+        .all(noteId) as Row[]
+    ).map(toBlock);
+  }
+
+  private blockRow(noteId: string, blockId: string): Row | null {
+    return (
+      (this.db.sql.prepare('SELECT * FROM note_block WHERE id = ? AND note_id = ?').get(blockId, noteId) as Row | undefined) ??
+      null
+    );
+  }
+
   getNote(id: string): Note | null {
     const row = this.db.sql.prepare('SELECT * FROM note WHERE id = ?').get(id) as Row | undefined;
-    return row ? toNote(row) : null;
+    if (!row) return null;
+    // While the AI writes the whole note, the page shows the text as it comes.
+    return toNote(row, row.status === 'generating' ? [] : this.blocksOf(id));
   }
 
   listNotes(notebookId: string): Note[] {
     return (
       this.db.sql.prepare('SELECT * FROM note WHERE notebook_id = ? ORDER BY updated_at DESC').all(notebookId) as Row[]
-    ).map(toNote);
+    ).map((r) => toNote(r, []));
   }
 
   /** Start an AI note for a thread. Idempotent on the note id. */
@@ -432,12 +513,29 @@ export class Repo {
     });
   }
 
+  /** A note the learner starts from nothing. Idempotent on the note id. */
+  createNote(id: string, notebookId: string, title: string): { note: Note; created: boolean } {
+    return this.db.tx(() => {
+      const existing = this.getNote(id);
+      if (existing) return { note: existing, created: false };
+      const t = now();
+      this.db.sql
+        .prepare(
+          `INSERT INTO note (id, notebook_id, thread_id, title, title_source, content, status, author, revision, created_at, updated_at)
+           VALUES (?, ?, NULL, ?, 'user', '', 'done', 'user', 0, ?, ?)`,
+        )
+        .run(id, notebookId, title || 'Untitled note', t, t);
+      this.logEvent('note.created', id);
+      return { note: this.getNote(id) as Note, created: true };
+    });
+  }
+
   /** Write it again: the current version stays in the history. */
   restartNote(id: string): Note | null {
     const result = this.db.sql
       .prepare(
-        `UPDATE note SET status = 'generating', content = '', error = NULL, author = 'ai', updated_at = ?
-         WHERE id = ? AND status <> 'generating'`,
+        `UPDATE note SET status = 'generating', content = '', error = NULL, updated_at = ?
+         WHERE id = ? AND status <> 'generating' AND thread_id IS NOT NULL`,
       )
       .run(now(), id);
     if (Number(result.changes) > 0) this.logEvent('note.rewrite_requested', id);
@@ -449,6 +547,16 @@ export class Repo {
     this.db.sql.prepare("UPDATE note SET refs = ? WHERE id = ? AND status = 'generating'").run(JSON.stringify(refs), id);
   }
 
+  /** Add labels for exchanges the note did not cite before; existing labels keep their meaning. */
+  mergeNoteRefs(id: string, refs: Note['refs']): void {
+    this.db.tx(() => {
+      const note = this.getNote(id);
+      if (!note) return;
+      const merged = { ...refs, ...note.refs };
+      this.db.sql.prepare('UPDATE note SET refs = ? WHERE id = ?').run(JSON.stringify(merged), id);
+    });
+  }
+
   saveNoteContent(id: string, content: string): void {
     this.db.sql
       .prepare("UPDATE note SET content = ?, updated_at = ? WHERE id = ? AND status = 'generating'")
@@ -456,82 +564,364 @@ export class Repo {
   }
 
   /**
-   * The writer is done (or gave up). `title` is the model's title for the
-   * note; it replaces the thread's title, never one the learner chose.
+   * The writer is done (or gave up). Done: the text becomes the note's
+   * blocks, replacing earlier ones (they stay in the history). `title` is the
+   * model's title; it replaces the thread's title, never one the learner
+   * chose. Failed: a note that already had blocks keeps them; a new one keeps
+   * the text that arrived.
    */
   finishNote(id: string, content: string, status: 'done' | 'failed', error: string | null, title?: string | null): void {
     this.db.tx(() => {
-      const note = this.getNote(id);
-      if (!note || note.status !== 'generating') return;
+      const row = this.db.sql.prepare('SELECT * FROM note WHERE id = ?').get(id) as Row | undefined;
+      if (!row || row.status !== 'generating') return;
+      const named = status === 'done' && Boolean(title) && row.title_source !== 'user';
+      const name = named ? (title as string) : (row.title as string);
+      const hadBlocks = this.blocksOf(id).length > 0;
       const t = now();
-      const n = status === 'done' ? note.revision + 1 : note.revision;
-      const source = this.db.sql.prepare('SELECT title_source FROM note WHERE id = ?').get(id)?.title_source;
-      const named = status === 'done' && Boolean(title) && source !== 'user';
-      const name = named ? (title as string) : note.title;
       this.db.sql
         .prepare(
           `UPDATE note SET title = ?, title_source = CASE WHEN ? THEN 'model' ELSE title_source END,
-             content = ?, status = ?, error = ?, revision = ?, updated_at = ? WHERE id = ?`,
+             status = ?, error = ?, updated_at = ? WHERE id = ?`,
         )
-        .run(name, named ? 1 : 0, content, status, error, n, t, id);
-      if (status === 'done') this.addNoteRevision(id, n, { title: name, content, refs: note.refs }, 'ai', t);
+        .run(name, named ? 1 : 0, status, error, t, id);
+      if (status === 'done' || !hadBlocks) {
+        if (status === 'done') this.db.sql.prepare('DELETE FROM note_block WHERE note_id = ?').run(id);
+        splitBlocks(content).forEach((text, i) => this.insertBlockRow(id, ulid(), i, text, 'ai', t));
+      }
+      if (status === 'done') this.syncNote(id, 'ai', 'AI wrote the note');
+      else this.syncNote(id, null, null);
       this.logEvent(`note.${status}`, id, { chars: content.length });
     });
   }
 
-  /** A learner's edit: saved as a new version, and the note is marked as edited. */
-  editNote(id: string, patch: { title?: string | undefined; content?: string | undefined }): Note | null {
+  /** Rename. The AI never renames a note the learner named. */
+  renameNote(id: string, title: string): Note | null {
     return this.db.tx(() => {
       const note = this.getNote(id);
       if (!note) return null;
-      if (note.status === 'generating') throw new ConflictError('wait for the note to finish before editing it');
-      const title = patch.title ?? note.title;
-      const content = patch.content ?? note.content;
-      const author = note.author === 'user' ? 'user' : 'ai+user';
-      const renamed = title !== note.title;
-      const t = now();
-      const n = note.revision + 1;
+      if (title === note.title) return note;
       this.db.sql
-        .prepare(
-          `UPDATE note SET title = ?, title_source = CASE WHEN ? THEN 'user' ELSE title_source END,
-             content = ?, author = ?, revision = ?, updated_at = ? WHERE id = ?`,
-        )
-        .run(title, renamed ? 1 : 0, content, author, n, t, id);
-      this.addNoteRevision(id, n, { title, content, refs: note.refs }, 'user', t);
-      this.logEvent('note.edited', id, { chars: content.length });
+        .prepare("UPDATE note SET title = ?, title_source = 'user', updated_at = ? WHERE id = ?")
+        .run(title, now(), id);
+      this.syncNote(id, 'user', 'renamed the note');
       return this.getNote(id);
     });
   }
 
-  noteHistory(id: string): Array<{ n: number; author: string; createdAt: string; chars: number }> {
-    return (
-      this.db.sql
-        .prepare('SELECT n, author, created_at, length(content) AS chars FROM note_revision WHERE note_id = ? ORDER BY n')
-        .all(id) as Row[]
-    ).map((r) => ({ n: r.n as number, author: r.author as string, createdAt: r.created_at as string, chars: r.chars as number }));
+  deleteNote(id: string): boolean {
+    const result = this.db.sql.prepare('DELETE FROM note WHERE id = ?').run(id);
+    if (Number(result.changes) > 0) this.logEvent('note.deleted', id);
+    return Number(result.changes) > 0;
   }
 
-  /** At boot: a note that was still being written was cut off. */
-  failGeneratingNotes(): number {
-    const live = this.db.sql.prepare("SELECT id, content FROM note WHERE status = 'generating'").all() as Row[];
-    for (const r of live) {
-      this.finishNote(r.id as string, r.content as string, 'failed', 'The server stopped before this note was finished.');
-    }
-    return live.length;
+  private editable(noteId: string): Note {
+    const note = this.getNote(noteId);
+    if (!note) throw new NotFoundError('note');
+    if (note.status === 'generating') throw new ConflictError('wait for the note to finish before changing it');
+    return note;
   }
 
-  private addNoteRevision(
-    noteId: string,
-    n: number,
-    v: { title: string; content: string; refs: Note['refs'] },
-    author: string,
-    at: string,
-  ): void {
+  private insertBlockRow(noteId: string, id: string, pos: number, content: string, author: NoteBlock['author'], t: string): void {
     this.db.sql
       .prepare(
-        'INSERT INTO note_revision (id, note_id, n, title, content, refs, author, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO note_block (id, note_id, pos, content, author, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(ulid(), noteId, n, v.title, v.content, JSON.stringify(v.refs), author, at);
+      .run(id, noteId, pos, content, author, t, t);
+  }
+
+  /** Every block of a note in order, deleted ones included, so positions stay stable for undo. */
+  private allBlockIds(noteId: string): string[] {
+    return (
+      this.db.sql.prepare('SELECT id FROM note_block WHERE note_id = ? ORDER BY pos, created_at').all(noteId) as Row[]
+    ).map((r) => r.id as string);
+  }
+
+  private renumber(noteId: string, ids: string[]): void {
+    const stmt = this.db.sql.prepare('UPDATE note_block SET pos = ? WHERE id = ? AND note_id = ?');
+    ids.forEach((id, i) => stmt.run(i, id, noteId));
+  }
+
+  /**
+   * Add a block after `after` (null: at the top). With `content`, the
+   * learner's own text; with `ask`, an empty block whose AI suggestion the
+   * caller then starts. Idempotent on the block id.
+   */
+  insertBlock(
+    noteId: string,
+    req: { id: string; after: string | null; content?: string | undefined; ask?: string | undefined },
+  ): { block: NoteBlock; created: boolean } {
+    return this.db.tx(() => {
+      this.editable(noteId);
+      const existing = this.blockRow(noteId, req.id);
+      if (existing) return { block: toBlock(existing), created: false };
+      if (this.db.sql.prepare('SELECT 1 FROM note_block WHERE id = ?').get(req.id)) throw new ConflictError('block id already used');
+      const ids = this.allBlockIds(noteId);
+      if (req.after !== null && !ids.includes(req.after)) throw new InvalidError('no such block in this note');
+      const at = req.after === null ? 0 : ids.indexOf(req.after) + 1;
+      const t = now();
+      if (req.ask !== undefined) {
+        this.insertBlockRow(noteId, req.id, at, '', 'ai', t);
+        this.db.sql
+          .prepare(
+            "UPDATE note_block SET proposal = '', proposal_status = 'generating', proposal_instruction = ? WHERE id = ?",
+          )
+          .run(req.ask, req.id);
+      } else {
+        this.insertBlockRow(noteId, req.id, at, req.content ?? '', 'user', t);
+      }
+      ids.splice(at, 0, req.id);
+      this.renumber(noteId, ids);
+      if (req.ask === undefined) this.syncNote(noteId, 'user', 'wrote a block');
+      else this.logEvent('note.block_asked', noteId, { blockId: req.id });
+      return { block: toBlock(this.blockRow(noteId, req.id) as Row), created: true };
+    });
+  }
+
+  /** The learner's edit. Clearing a block deletes it. */
+  editBlock(noteId: string, blockId: string, content: string): Note {
+    return this.db.tx(() => {
+      this.editable(noteId);
+      const row = this.blockRow(noteId, blockId);
+      if (!row || row.deleted_at) throw new NotFoundError('block');
+      if (content.trim() === '') return this.deleteBlock(noteId, blockId);
+      if (content === row.content) return this.getNote(noteId) as Note;
+      const author = row.author === 'user' && row.content !== '' ? 'user' : row.content === '' ? 'user' : 'ai+user';
+      this.db.sql
+        .prepare('UPDATE note_block SET content = ?, author = ?, updated_at = ? WHERE id = ?')
+        .run(content, author, now(), blockId);
+      this.syncNote(noteId, 'user', 'edited a block');
+      return this.getNote(noteId) as Note;
+    });
+  }
+
+  deleteBlock(noteId: string, blockId: string): Note {
+    return this.db.tx(() => {
+      this.editable(noteId);
+      const row = this.blockRow(noteId, blockId);
+      if (!row) throw new NotFoundError('block');
+      if (!row.deleted_at) {
+        this.db.sql.prepare('UPDATE note_block SET deleted_at = ?, updated_at = ? WHERE id = ?').run(now(), now(), blockId);
+        this.syncNote(noteId, 'user', 'deleted a block');
+      }
+      return this.getNote(noteId) as Note;
+    });
+  }
+
+  /** Undo a delete: the block comes back where it was. */
+  restoreBlock(noteId: string, blockId: string): Note {
+    return this.db.tx(() => {
+      this.editable(noteId);
+      const row = this.blockRow(noteId, blockId);
+      if (!row) throw new NotFoundError('block');
+      if (row.deleted_at) {
+        this.db.sql.prepare('UPDATE note_block SET deleted_at = NULL, updated_at = ? WHERE id = ?').run(now(), blockId);
+        this.syncNote(noteId, 'user', 'restored a block');
+      }
+      return this.getNote(noteId) as Note;
+    });
+  }
+
+  /** Put a block after `after` (null: at the top). */
+  moveBlock(noteId: string, blockId: string, after: string | null): Note {
+    return this.db.tx(() => {
+      this.editable(noteId);
+      const ids = this.allBlockIds(noteId);
+      if (!ids.includes(blockId) || (after !== null && !ids.includes(after)) || after === blockId) {
+        throw new InvalidError('no such block in this note');
+      }
+      ids.splice(ids.indexOf(blockId), 1);
+      ids.splice(after === null ? 0 : ids.indexOf(after) + 1, 0, blockId);
+      this.renumber(noteId, ids);
+      this.syncNote(noteId, 'user', 'moved a block');
+      return this.getNote(noteId) as Note;
+    });
+  }
+
+  /** Start an AI suggestion for a block. Refused while one is being written. */
+  startProposal(noteId: string, blockId: string, instruction: string): NoteBlock {
+    return this.db.tx(() => {
+      this.editable(noteId);
+      const row = this.blockRow(noteId, blockId);
+      if (!row || row.deleted_at) throw new NotFoundError('block');
+      if (row.proposal_status === 'generating') throw new ConflictError('a suggestion for this block is still being written');
+      this.db.sql
+        .prepare(
+          `UPDATE note_block SET proposal = '', proposal_status = 'generating', proposal_instruction = ?,
+             proposal_error = NULL, updated_at = ? WHERE id = ?`,
+        )
+        .run(instruction, now(), blockId);
+      this.logEvent('note.suggestion_requested', noteId, { blockId });
+      return toBlock(this.blockRow(noteId, blockId) as Row);
+    });
+  }
+
+  saveProposal(blockId: string, text: string): void {
+    this.db.sql
+      .prepare("UPDATE note_block SET proposal = ? WHERE id = ? AND proposal_status = 'generating'")
+      .run(text, blockId);
+  }
+
+  finishProposal(blockId: string, text: string, status: 'ready' | 'failed', error: string | null): void {
+    this.db.sql
+      .prepare(
+        `UPDATE note_block SET proposal = ?, proposal_status = ?, proposal_error = ?, updated_at = ?
+         WHERE id = ? AND proposal_status = 'generating'`,
+      )
+      .run(text, status, error, now(), blockId);
+  }
+
+  /** The learner takes the suggestion: it replaces the block. */
+  acceptProposal(noteId: string, blockId: string): Note {
+    return this.db.tx(() => {
+      this.editable(noteId);
+      const row = this.blockRow(noteId, blockId);
+      if (!row || row.deleted_at) throw new NotFoundError('block');
+      const text = ((row.proposal as string | null) ?? '').trim();
+      if (row.proposal_status === 'generating') throw new ConflictError('the suggestion is still being written');
+      if (!text) throw new InvalidError('there is no suggestion to accept');
+      const author = row.content === '' || row.author === 'ai' ? 'ai' : 'ai+user';
+      this.db.sql
+        .prepare(
+          `UPDATE note_block SET content = ?, author = ?, proposal = NULL, proposal_status = NULL,
+             proposal_instruction = NULL, proposal_error = NULL, updated_at = ? WHERE id = ?`,
+        )
+        .run(text, author, now(), blockId);
+      this.syncNote(noteId, 'ai', row.content === '' ? 'added an AI block' : 'accepted an AI suggestion');
+      return this.getNote(noteId) as Note;
+    });
+  }
+
+  /** The learner drops the suggestion. A block that only held a suggestion goes away. */
+  discardProposal(noteId: string, blockId: string): Note {
+    return this.db.tx(() => {
+      const row = this.blockRow(noteId, blockId);
+      if (!row) throw new NotFoundError('block');
+      if (row.content === '') this.db.sql.prepare('DELETE FROM note_block WHERE id = ?').run(blockId);
+      else {
+        this.db.sql
+          .prepare(
+            `UPDATE note_block SET proposal = NULL, proposal_status = NULL, proposal_instruction = NULL,
+               proposal_error = NULL, updated_at = ? WHERE id = ?`,
+          )
+          .run(now(), blockId);
+      }
+      return this.getNote(noteId) as Note;
+    });
+  }
+
+  /**
+   * Move blocks out into a new note: a section, or everything from one block
+   * down. The new note keeps the thread and the citation labels. Idempotent
+   * on the new note's id.
+   */
+  moveOut(noteId: string, newId: string, blockIds: string[]): { note: Note; created: boolean } {
+    return this.db.tx(() => {
+      const done = this.getNote(newId);
+      if (done) return { note: done, created: false };
+      const note = this.editable(noteId);
+      const live = new Map(note.blocks.map((b) => [b.id, b]));
+      const moving = note.blocks.filter((b) => blockIds.includes(b.id));
+      if (moving.length !== new Set(blockIds).size || blockIds.some((id) => !live.has(id))) {
+        throw new InvalidError('no such block in this note');
+      }
+      const first = moving[0]?.content ?? '';
+      const heading = headingLevel(first) !== null ? first.replace(/^\s*#+\s*/, '').replace(/[\s#]+$/, '') : '';
+      const title = shorten(heading.replace(/(\*\*|__|`)(.+?)\1/g, '$2'), 200) || `${note.title} (part)`;
+      const t = now();
+      this.db.sql
+        .prepare(
+          `INSERT INTO note (id, notebook_id, thread_id, title, title_source, content, refs, status, author, revision, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'user', '', ?, 'done', 'user', 0, ?, ?)`,
+        )
+        .run(newId, note.notebookId, note.threadId, title, JSON.stringify(note.refs), t, t);
+      const move = this.db.sql.prepare('UPDATE note_block SET note_id = ?, pos = ?, updated_at = ? WHERE id = ?');
+      moving.forEach((b, i) => move.run(newId, i, t, b.id));
+      this.syncNote(newId, 'user', `moved here from “${note.title}”`);
+      this.syncNote(noteId, 'user', `moved ${moving.length} ${moving.length === 1 ? 'block' : 'blocks'} to “${title}”`);
+      this.logEvent('note.split', noteId, { into: newId, blocks: moving.length });
+      return { note: this.getNote(newId) as Note, created: true };
+    });
+  }
+
+  /**
+   * After a change: the note's text, its author (from its blocks) and a new
+   * version with what changed. `who` null: no new version (a failed write).
+   */
+  private syncNote(noteId: string, who: 'ai' | 'user' | null, change: string | null): void {
+    const row = this.db.sql.prepare('SELECT * FROM note WHERE id = ?').get(noteId) as Row;
+    const blocks = this.blocksOf(noteId).filter((b) => b.content !== '');
+    const content = joinBlocks(blocks.map((b) => b.content));
+    const authors = new Set(blocks.map((b) => b.author));
+    const author =
+      authors.size === 0 ? (row.author as string) : authors.size === 1 ? (blocks[0] as NoteBlock).author : 'ai+user';
+    const t = now();
+    const n = who ? (row.revision as number) + 1 : (row.revision as number);
+    this.db.sql
+      .prepare('UPDATE note SET content = ?, author = ?, revision = ?, updated_at = ? WHERE id = ?')
+      .run(content, author, n, t, noteId);
+    if (!who || !change) return;
+    this.db.sql
+      .prepare(
+        `INSERT INTO note_revision (id, note_id, n, title, content, refs, author, change, blocks, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        ulid(),
+        noteId,
+        n,
+        row.title as string,
+        content,
+        row.refs as string,
+        who,
+        change,
+        JSON.stringify(blocks.map((b) => ({ id: b.id, content: b.content, author: b.author }))),
+        t,
+      );
+  }
+
+  noteHistory(id: string): Array<{ n: number; author: string; change: string; createdAt: string; chars: number }> {
+    return (
+      this.db.sql
+        .prepare(
+          'SELECT n, author, change, created_at, length(content) AS chars FROM note_revision WHERE note_id = ? ORDER BY n',
+        )
+        .all(id) as Row[]
+    ).map((r) => ({
+      n: r.n as number,
+      author: r.author as string,
+      change: r.change as string,
+      createdAt: r.created_at as string,
+      chars: r.chars as number,
+    }));
+  }
+
+  /**
+   * At boot: notes and suggestions still being written were cut off, and
+   * notes from before blocks existed get their blocks.
+   */
+  recoverNotes(): { failed: number; blockified: number } {
+    const cut = 'The server stopped before this was finished.';
+    const live = this.db.sql.prepare("SELECT id, content FROM note WHERE status = 'generating'").all() as Row[];
+    for (const r of live) this.finishNote(r.id as string, r.content as string, 'failed', cut);
+    this.db.sql
+      .prepare("UPDATE note_block SET proposal_status = 'failed', proposal_error = ? WHERE proposal_status = 'generating'")
+      .run(cut);
+    const old = this.db.sql
+      .prepare(
+        `SELECT n.id, n.content, n.author FROM note n
+         WHERE n.content <> '' AND NOT EXISTS (SELECT 1 FROM note_block b WHERE b.note_id = n.id)`,
+      )
+      .all() as Row[];
+    for (const r of old) {
+      this.db.tx(() => {
+        const t = now();
+        splitBlocks(r.content as string).forEach((text, i) =>
+          this.insertBlockRow(r.id as string, ulid(), i, text, r.author as NoteBlock['author'], t),
+        );
+        this.syncNote(r.id as string, null, null);
+      });
+    }
+    return { failed: live.length, blockified: old.length };
   }
 
   // Branches ----------------------------------------------------------------
@@ -635,7 +1025,8 @@ export class Repo {
     const path: Array<{ id: string; title: string }> = [];
     let current = this.getThread(threadId);
     const seen = new Set<string>();
-    while (current?.parentThreadId && !seen.has(current.parentThreadId)) {
+    // A thread made its own is the top of its own path.
+    while (current?.parentThreadId && !current.splitAt && !seen.has(current.parentThreadId)) {
       seen.add(current.parentThreadId);
       const parent = this.getThread(current.parentThreadId);
       if (!parent) break;
@@ -652,6 +1043,8 @@ export class Repo {
    * included: the branch was asked before they existed.
    */
   inheritedHistory(threadId: string): HistoryItem[] {
+    // A branch made its own thread keeps only its passage, not the parent conversation.
+    if (this.isSplit(threadId)) return [];
     const origin = this.originOf(threadId);
     if (!origin) return [];
     const at = this.getMessage(origin.anchor.messageId);
@@ -848,6 +1241,7 @@ export class Repo {
       messages: all('message'),
       anchors: all('anchor'),
       notes: all('note'),
+      noteBlocks: all('note_block'),
       noteRevisions: all('note_revision'),
       revisions: all('message_revision'),
       modelCalls: all('model_call'),

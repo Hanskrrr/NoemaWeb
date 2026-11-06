@@ -49,6 +49,12 @@ export const Thread = z.object({
   parentThreadId: Id.nullable(),
   /** For a branch: the passage it started from, shortened. */
   originQuote: z.string().nullable(),
+  /**
+   * When a branch was made its own thread: it is listed at the top level, has
+   * its own map and notes, and no longer sends the parent conversation to the
+   * model, only the passage it came from. Null for a branch still in place.
+   */
+  splitAt: z.string().nullable(),
   title: z.string(),
   /** question: the first question; model: written by the AI; user: renamed by the learner. */
   titleSource: z.enum(['question', 'model', 'user']),
@@ -123,6 +129,9 @@ export type CreateThreadRequest = z.infer<typeof CreateThreadRequest>;
 export const RenameThreadRequest = z.object({ title: z.string().trim().min(1).max(200) });
 export type RenameThreadRequest = z.infer<typeof RenameThreadRequest>;
 
+/** Make a branch its own thread (split: true), or put it back (split: false). */
+export const SplitThreadRequest = z.object({ split: z.boolean() });
+
 // The map of a thread: every exchange in order, with the branches that left
 // from it hung on the exact message and passage, nested. Built from stored
 // content only; no model involved.
@@ -141,6 +150,8 @@ export interface MapNode {
   title: string;
   /** For a branch: where it left from. */
   origin: { messageId: string; exact: string } | null;
+  /** A branch made its own thread: shown as a link, its exchanges are on its own map. */
+  split: boolean;
   exchanges: MapExchange[];
 }
 const MapExchangeSchema: z.ZodType<MapExchange> = z.lazy(() =>
@@ -159,15 +170,49 @@ export const MapNodeSchema: z.ZodType<MapNode> = z.lazy(() =>
     threadId: Id,
     title: z.string(),
     origin: z.object({ messageId: Id, exact: z.string() }).nullable(),
+    split: z.boolean(),
     exchanges: z.array(MapExchangeSchema),
   }),
 );
-export const ThreadMap = z.object({ root: MapNodeSchema, focusThreadId: Id });
+/**
+ * The map of one thread and the branches below it. `path` is the threads
+ * above it, outermost first, up to the top or to a thread made its own; each
+ * has its own map.
+ */
+export const ThreadMap = z.object({
+  root: MapNodeSchema,
+  path: z.array(z.object({ threadId: Id, title: z.string() })),
+  /** Where the root came from, when it is a branch or was one. */
+  parent: z.object({ threadId: Id, title: z.string() }).nullable(),
+});
 export type ThreadMap = z.infer<typeof ThreadMap>;
 
-// Notes: an editable document the AI writes from a thread on request.
-// It never replaces the chat; every version is kept.
+// Notes: a document of blocks (paragraphs, lists, tables, formulas, code)
+// that the learner edits in place. The AI can write a whole note from a
+// thread, or suggest one block, which the learner accepts or discards. It
+// never replaces the chat; every version is kept.
 export const NoteStatus = z.enum(['generating', 'done', 'failed']);
+export const NoteAuthor = z.enum(['ai', 'user', 'ai+user']);
+export type NoteAuthor = z.infer<typeof NoteAuthor>;
+export const ProposalStatus = z.enum(['generating', 'ready', 'failed']);
+/** An AI suggestion for a block, waiting for the learner. It never changes the block by itself. */
+export const Proposal = z.object({
+  status: ProposalStatus,
+  text: z.string(),
+  /** What the learner asked for. */
+  instruction: z.string(),
+  error: z.string().nullable(),
+});
+export type Proposal = z.infer<typeof Proposal>;
+export const NoteBlock = z.object({
+  id: Id,
+  /** Markdown. Empty only for a new block whose AI suggestion is not yet accepted. */
+  content: z.string(),
+  /** ai: written by the model; user: by the learner; ai+user: AI text the learner edited (or the reverse). */
+  author: NoteAuthor,
+  proposal: Proposal.nullable(),
+});
+export type NoteBlock = z.infer<typeof NoteBlock>;
 /** Where a citation label in a note ([E3]) points: the exact message it came from. */
 export const CiteRef = z.object({ threadId: Id, messageId: Id });
 export const CiteRefs = z.record(z.string().regex(/^E\d{1,4}$/), CiteRef);
@@ -177,28 +222,54 @@ export const Note = z.object({
   notebookId: Id,
   threadId: Id.nullable(),
   title: z.string(),
+  /** The blocks joined as one Markdown document (for export, and while the AI writes the whole note). */
   content: z.string(),
+  /** In order. Empty while the AI writes the whole note. */
+  blocks: z.array(NoteBlock),
   /** Citation labels in the content and the exchanges they point at. */
   refs: CiteRefs,
   status: NoteStatus,
   error: z.string().nullable(),
-  /** ai: as written by the model; user: written by the learner; ai+user: AI draft the learner edited. */
-  author: z.enum(['ai', 'user', 'ai+user']),
+  /** ai: as written by the model; user: written by the learner; ai+user: both. */
+  author: NoteAuthor,
   revision: z.number().int().nonnegative(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type Note = z.infer<typeof Note>;
-export const NoteSummary = Note.omit({ content: true, refs: true });
+export const NoteSummary = Note.omit({ content: true, blocks: true, refs: true });
 export type NoteSummary = z.infer<typeof NoteSummary>;
 export const NoteList = z.object({ notes: z.array(NoteSummary) });
 export const RewriteRequest = z.object({ id: Id });
-export const UpdateNoteRequest = z
-  .object({ title: z.string().trim().min(1).max(200), content: z.string().max(400_000) })
-  .partial()
-  .refine((v) => Object.keys(v).length > 0, 'nothing to update');
+/** A note the learner starts from nothing. */
+export const CreateNoteRequest = z.object({ id: Id, title: z.string().trim().max(200).default('') });
+const BlockText = z.string().max(100_000);
+const Instruction = z.string().trim().min(1).max(1000);
+/**
+ * Add a block after `after` (null: at the top). Either the learner's own
+ * `content`, or `ask`: the AI writes a suggestion for this place.
+ */
+export const InsertBlockRequest = z
+  .object({ id: Id, after: Id.nullable(), content: BlockText.optional(), ask: Instruction.optional() })
+  .refine((v) => (v.content === undefined) !== (v.ask === undefined), 'give content or ask, not both');
+export type InsertBlockRequest = z.infer<typeof InsertBlockRequest>;
+export const EditBlockRequest = z.object({ content: BlockText });
+export const MoveBlockRequest = z.object({ after: Id.nullable() });
+/** Ask the AI to suggest a new version of a block. */
+export const SuggestRequest = z.object({ instruction: Instruction });
+/** Move blocks out into a new note (a section, or everything from one block down). */
+export const MoveOutRequest = z.object({ id: Id, blockIds: z.array(Id).min(1).max(5000) });
+/** Rename a note. Its text changes block by block. */
+export const UpdateNoteRequest = z.object({ title: z.string().trim().min(1).max(200) });
 export type UpdateNoteRequest = z.infer<typeof UpdateNoteRequest>;
-export const NoteRevision = z.object({ n: z.number().int(), author: z.string(), createdAt: z.string(), chars: z.number().int() });
+export const NoteRevision = z.object({
+  n: z.number().int(),
+  author: z.string(),
+  /** What happened, in a few words: "edited a block", "accepted a suggestion". */
+  change: z.string(),
+  createdAt: z.string(),
+  chars: z.number().int(),
+});
 export const NoteHistory = z.object({ revisions: z.array(NoteRevision) });
 
 export const UpdateNotebookRequest = z

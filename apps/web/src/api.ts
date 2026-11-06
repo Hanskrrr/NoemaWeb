@@ -28,8 +28,8 @@ import {
   ThreadDetail,
   ThreadList,
   ThreadMap,
+  type InsertBlockRequest,
   type UpdateModelSettingsRequest,
-  type UpdateNoteRequest,
 } from '@noema/core';
 import { z } from 'zod';
 
@@ -104,8 +104,24 @@ export const api = {
   notes: (notebookId: string) => call(NoteList, 'GET', `/api/notebooks/${notebookId}/notes`),
   note: (noteId: string) => call(Note, 'GET', `/api/notes/${noteId}`),
   noteHistory: (noteId: string) => call(NoteHistory, 'GET', `/api/notes/${noteId}/history`),
-  editNote: (noteId: string, patch: UpdateNoteRequest) => call(Note, 'PATCH', `/api/notes/${noteId}`, patch),
-  rewriteNoteAgain: (noteId: string) => call(Note, 'POST', `/api/notes/${noteId}/rewrite`, {}),
+  renameNote: (noteId: string, title: string) => call(Note, 'PATCH', `/api/notes/${noteId}`, { title }),
+  deleteNote: (noteId: string) => call(Ok, 'DELETE', `/api/notes/${noteId}`),
+  createNote: (notebookId: string, noteId: string) => call(Note, 'POST', `/api/notebooks/${notebookId}/notes`, { id: noteId }),
+  splitThread: (threadId: string, split: boolean) => call(Thread, 'POST', `/api/threads/${threadId}/split`, { split }),
+  // Blocks: every change answers with the whole note.
+  insertBlock: (noteId: string, req: InsertBlockRequest) => call(Note, 'POST', `/api/notes/${noteId}/blocks`, req),
+  editBlock: (noteId: string, blockId: string, content: string) =>
+    call(Note, 'PATCH', `/api/notes/${noteId}/blocks/${blockId}`, { content }),
+  deleteBlock: (noteId: string, blockId: string) => call(Note, 'DELETE', `/api/notes/${noteId}/blocks/${blockId}`),
+  restoreBlock: (noteId: string, blockId: string) => call(Note, 'POST', `/api/notes/${noteId}/blocks/${blockId}/restore`, {}),
+  moveBlock: (noteId: string, blockId: string, after: string | null) =>
+    call(Note, 'POST', `/api/notes/${noteId}/blocks/${blockId}/move`, { after }),
+  suggest: (noteId: string, blockId: string, instruction: string) =>
+    call(Note, 'POST', `/api/notes/${noteId}/blocks/${blockId}/suggest`, { instruction }),
+  accept: (noteId: string, blockId: string) => call(Note, 'POST', `/api/notes/${noteId}/blocks/${blockId}/accept`, {}),
+  discard: (noteId: string, blockId: string) => call(Note, 'POST', `/api/notes/${noteId}/blocks/${blockId}/discard`, {}),
+  moveOut: (noteId: string, newId: string, blockIds: string[]) =>
+    call(Note, 'POST', `/api/notes/${noteId}/move-out`, { id: newId, blockIds }),
 };
 
 export interface StreamHandlers {

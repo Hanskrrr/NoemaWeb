@@ -1,4 +1,5 @@
 export * from './anchor.ts';
+export * from './blocks.ts';
 export * from './cite.ts';
 export * from './context.ts';
 export * from './contract.ts';

@@ -77,6 +77,26 @@ export class FakeProvider implements ModelProvider {
       yield { type: 'finish', reason: 'stop' };
       return;
     }
+    if (req.purpose === 'suggest') {
+      // A predictable suggestion that says what it was asked, so tests can follow it.
+      const instruction = /Instruction: (.*)$/s.exec(question)?.[1]?.trim() ?? '';
+      const fail = /\[\[fail:([a-z_]+)\]\]/.exec(instruction);
+      if (fail) throw new ProviderError(fail[1] as ErrorKind, `fake failure: ${fail[1]}`);
+      const all = req.messages.map((m) => m.content).join('\n');
+      const firstLabel = /^\[(E\d+)\] Question:/m.exec(all)?.[1];
+      const target = /<<<REWRITE>>>\n([\s\S]*?)\n<<<END>>>/.exec(question)?.[1];
+      const plain = instruction.replace(/\[\[[^\]]*\]\]/g, '').trim();
+      const text = target
+        ? `Rewritten (${plain}): ${target.replace(/\s+/g, ' ').slice(0, 60)}${firstLabel ? ` [${firstLabel}]` : ''}`
+        : `New block (${plain})${firstLabel ? ` [${firstLabel}]` : ''}.`;
+      const slow = instruction.includes('[[slow]]');
+      for (const part of text.match(slow ? /[\s\S]{1,2}/g : /[\s\S]{1,12}/g) ?? []) {
+        await sleep(slow ? Math.max(this.delayMs, 25) : this.delayMs, req.signal);
+        yield { type: 'text', text: part };
+      }
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
     if (req.purpose === 'title') {
       // A predictable title: "About" plus the question, so tests can tell it was written.
       const asked = /Question:\n(.*)/.exec(question)?.[1] ?? 'this';

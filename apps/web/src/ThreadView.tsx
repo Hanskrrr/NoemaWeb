@@ -17,6 +17,7 @@ import {
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ApiFailure, api, watchMessage } from './api.ts';
 import { Composer } from './Composer.tsx';
+import { EditableTitle } from './EditableTitle.tsx';
 import { MessageView } from './MessageView.tsx';
 import { highlight, selectionToSource, sourceToRange } from './markdown/selection.ts';
 import { keys, storage } from './storage.ts';
@@ -353,6 +354,17 @@ export function ThreadView({
     }
   };
 
+  // Make this side question its own thread, or put it back. Reload: its path changes.
+  const split = async (next: boolean) => {
+    try {
+      setThread(await api.splitThread(threadId, next));
+      setPath((await api.thread(threadId)).path);
+      onChanged();
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
+
   const back = () => {
     if (!origin) return;
     void api.returnFromBranch(threadId).catch(() => {});
@@ -395,6 +407,8 @@ export function ThreadView({
             path={path}
             onBack={back}
             onOpen={(id) => onNavigate(id)}
+            split={Boolean(thread?.splitAt)}
+            onSplit={(next) => void split(next)}
           />
         )}
         {loaded && messages.length === 0 && !origin && (
@@ -471,52 +485,9 @@ function ThreadHeader({
   onOpenMap: () => void;
   onRewrite: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(title);
-
-  const save = async () => {
-    const next = draft.trim();
-    setEditing(false);
-    if (next && next !== title) await onRename(next);
-  };
-
   return (
     <header className="thread-head">
-      {editing ? (
-        <input
-          className="title-input"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => void save()}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.nativeEvent.isComposing) void save();
-            if (e.key === 'Escape') setEditing(false);
-          }}
-          aria-label="Thread title"
-          maxLength={200}
-          // biome-ignore lint/a11y/noAutofocus: the field appears because the learner asked to rename
-          autoFocus
-          data-testid="title-input"
-        />
-      ) : (
-        <h1>
-          <button
-            type="button"
-            className="title-button"
-            onClick={() => {
-              setDraft(title);
-              setEditing(true);
-            }}
-            title="Rename"
-            data-testid="rename"
-          >
-            {title || 'Untitled'}
-            <span className="pencil" aria-hidden>
-              ✎
-            </span>
-          </button>
-        </h1>
-      )}
+      <EditableTitle title={title} onRename={onRename} label="Thread title" />
       <div className="thread-actions">
         <button type="button" className="quiet" onClick={onOpenMap} data-testid="open-map">
           Map
@@ -542,12 +513,17 @@ function OriginCard({
   path,
   onBack,
   onOpen,
+  split,
+  onSplit,
 }: {
   parentTitle: string;
   exact: string;
   path?: Array<{ id: string; title: string }>;
   onBack: () => void;
   onOpen?: (threadId: string) => void;
+  /** Absent for a branch not yet asked. */
+  split?: boolean;
+  onSplit?: (split: boolean) => void;
 }) {
   const quote = exact.length > 600 ? `${exact.slice(0, 600)}…` : exact;
   return (
@@ -572,6 +548,28 @@ function OriginCard({
         )}
       </div>
       <blockquote>{quote}</blockquote>
+      {onSplit && (
+        <div className="origin-foot">
+          {split ? (
+            <>
+              <span>Its own thread, with its own map and notes.</span>
+              <button type="button" className="quiet" onClick={() => onSplit(false)} data-testid="unsplit">
+                Put back as a side question
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="quiet"
+              onClick={() => onSplit(true)}
+              title="List it on its own, with its own map and notes. The AI then sees only this passage, not the conversation above."
+              data-testid="split"
+            >
+              ↗ Make it its own thread
+            </button>
+          )}
+        </div>
+      )}
     </section>
   );
 }

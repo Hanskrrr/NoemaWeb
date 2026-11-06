@@ -5,18 +5,25 @@ import { createServer, type Server } from 'node:http';
 import {
   AskRequest,
   CreateBranchRequest,
+  CreateNoteRequest,
   CreateThreadRequest,
   describeError,
+  EditBlockRequest,
+  InsertBlockRequest,
   isLive,
   type Message,
+  MoveBlockRequest,
+  MoveOutRequest,
   RenameThreadRequest,
   RewriteRequest,
+  SplitThreadRequest,
+  SuggestRequest,
   UpdateModelSettingsRequest,
   UpdateNoteRequest,
   UpdateNotebookRequest,
 } from '@noema/core';
 import { Generations } from './chat/generation.ts';
-import { NoteWriter } from './chat/notes.ts';
+import { NoteWriter, Suggester } from './chat/notes.ts';
 import { Titler } from './chat/titles.ts';
 import type { Config } from './config.ts';
 import { checkRequest, SECURITY_HEADERS } from './http/guard.ts';
@@ -26,9 +33,9 @@ import { serveStatic } from './http/static.ts';
 import { ProviderError } from './llm/provider.ts';
 import type { ModelSettings } from './llm/settings.ts';
 import type { Logger } from './log.ts';
-import { type AskPair, ConflictError, InvalidError, type Repo } from './store/repo.ts';
+import { type AskPair, ConflictError, InvalidError, NotFoundError, type Repo } from './store/repo.ts';
 
-export const VERSION = '0.1.0-m2';
+export const VERSION = '0.1.0-m2.2';
 
 export interface AppDeps {
   repo: Repo;
@@ -42,6 +49,7 @@ export interface App {
   generations: Generations;
   titler: Titler;
   notes: NoteWriter;
+  suggestions: Suggester;
   /** Stop live answers (stored as interrupted) and close the server. */
   close(): Promise<void>;
 }
@@ -51,6 +59,7 @@ export function createApp(deps: AppDeps): App {
   const titler = new Titler({ repo, models, log });
   const generations = new Generations({ repo, models, titler, config: deps.config, log });
   const notes = new NoteWriter({ repo, models, maxOutputTokens: deps.config.maxOutputTokens, log });
+  const suggestions = new Suggester({ repo, models, maxOutputTokens: deps.config.maxOutputTokens, log });
   const router = new Router();
 
   const notFound = (what: string) => new HttpError(404, 'not_found', `${what} not found`);
@@ -172,7 +181,15 @@ export function createApp(deps: AppDeps): App {
     sendJson(ctx.res, 200, repo.getThread(thread.id));
   });
 
-  // The whole journey from the root thread: exchanges in order, branches where they left.
+  // Make a branch its own thread, or put it back.
+  router.on('POST', '/api/threads/:id/split', async (ctx) => {
+    const { split } = await ctx.body(SplitThreadRequest);
+    const thread = repo.setSplit(ctx.params.id as string, split);
+    if (!thread) throw notFound('thread');
+    sendJson(ctx.res, 200, thread);
+  });
+
+  // The map of this thread and the branches below it: exchanges in order, branches where they left.
   router.on('GET', '/api/threads/:id/map', ({ res, params }) => {
     const thread = repo.getThread(params.id as string);
     if (!thread) throw notFound('thread');
@@ -191,7 +208,17 @@ export function createApp(deps: AppDeps): App {
 
   router.on('GET', '/api/notebooks/:id/notes', ({ res, params }) => {
     if (!repo.getNotebook(params.id as string)) throw notFound('notebook');
-    sendJson(res, 200, { notes: repo.listNotes(params.id as string).map(({ content: _c, refs: _r, ...rest }) => rest) });
+    sendJson(res, 200, {
+      notes: repo.listNotes(params.id as string).map(({ content: _c, blocks: _b, refs: _r, ...rest }) => rest),
+    });
+  });
+
+  // A note the learner starts from nothing. Idempotent on the note id.
+  router.on('POST', '/api/notebooks/:id/notes', async (ctx) => {
+    if (!repo.getNotebook(ctx.params.id as string)) throw notFound('notebook');
+    const { id, title } = await ctx.body(CreateNoteRequest);
+    const { note, created } = repo.createNote(id, ctx.params.id as string, title);
+    sendJson(ctx.res, created ? 201 : 200, note);
   });
 
   router.on('GET', '/api/notes/:id', ({ res, params }) => {
@@ -206,10 +233,67 @@ export function createApp(deps: AppDeps): App {
   });
 
   router.on('PATCH', '/api/notes/:id', async (ctx) => {
-    const patch = await ctx.body(UpdateNoteRequest);
-    const note = repo.editNote(ctx.params.id as string, patch);
+    const { title } = await ctx.body(UpdateNoteRequest);
+    const note = repo.renameNote(ctx.params.id as string, title);
     if (!note) throw notFound('note');
     sendJson(ctx.res, 200, note);
+  });
+
+  router.on('DELETE', '/api/notes/:id', ({ res, params }) => {
+    if (!repo.deleteNote(params.id as string)) throw notFound('note');
+    sendJson(res, 200, { ok: true });
+  });
+
+  // Blocks. Every change answers with the whole note, which is small.
+  // Write a block, or ask the AI for one at this place (it arrives as a suggestion).
+  router.on('POST', '/api/notes/:id/blocks', async (ctx) => {
+    const noteId = ctx.params.id as string;
+    const req = await ctx.body(InsertBlockRequest);
+    const { block, created } = repo.insertBlock(noteId, req);
+    if (created && req.ask !== undefined) suggestions.start(noteId, block.id, 'insert', req.ask);
+    sendJson(ctx.res, created ? 201 : 200, repo.getNote(noteId));
+  });
+
+  router.on('PATCH', '/api/notes/:id/blocks/:block', async (ctx) => {
+    const { content } = await ctx.body(EditBlockRequest);
+    sendJson(ctx.res, 200, repo.editBlock(ctx.params.id as string, ctx.params.block as string, content));
+  });
+
+  router.on('DELETE', '/api/notes/:id/blocks/:block', ({ res, params }) => {
+    sendJson(res, 200, repo.deleteBlock(params.id as string, params.block as string));
+  });
+
+  router.on('POST', '/api/notes/:id/blocks/:block/restore', ({ res, params }) => {
+    sendJson(res, 200, repo.restoreBlock(params.id as string, params.block as string));
+  });
+
+  router.on('POST', '/api/notes/:id/blocks/:block/move', async (ctx) => {
+    const { after } = await ctx.body(MoveBlockRequest);
+    sendJson(ctx.res, 200, repo.moveBlock(ctx.params.id as string, ctx.params.block as string, after));
+  });
+
+  // Ask the AI for a new version of a block. It arrives as a suggestion; the block is unchanged.
+  router.on('POST', '/api/notes/:id/blocks/:block/suggest', async (ctx) => {
+    const noteId = ctx.params.id as string;
+    const { instruction } = await ctx.body(SuggestRequest);
+    const block = repo.startProposal(noteId, ctx.params.block as string, instruction);
+    suggestions.start(noteId, block.id, 'rewrite', instruction);
+    sendJson(ctx.res, 202, repo.getNote(noteId));
+  });
+
+  router.on('POST', '/api/notes/:id/blocks/:block/accept', ({ res, params }) => {
+    sendJson(res, 200, repo.acceptProposal(params.id as string, params.block as string));
+  });
+
+  router.on('POST', '/api/notes/:id/blocks/:block/discard', ({ res, params }) => {
+    sendJson(res, 200, repo.discardProposal(params.id as string, params.block as string));
+  });
+
+  // Move a section (or everything from a block down) into a new note. Idempotent on the new note's id.
+  router.on('POST', '/api/notes/:id/move-out', async (ctx) => {
+    const { id, blockIds } = await ctx.body(MoveOutRequest);
+    const { note, created } = repo.moveOut(ctx.params.id as string, id, blockIds);
+    sendJson(ctx.res, created ? 201 : 200, note);
   });
 
   // Write it again from the thread as it is now; the previous version stays in the history.
@@ -300,6 +384,8 @@ export function createApp(deps: AppDeps): App {
         sendError(res, 409, 'conflict', err.message);
       } else if (err instanceof InvalidError) {
         sendError(res, 400, 'invalid_request', err.message);
+      } else if (err instanceof NotFoundError) {
+        sendError(res, 404, 'not_found', err.message);
       } else {
         log.error('request failed', { method: req.method, path: url.pathname, err });
         sendError(res, 500, 'internal', 'something went wrong; see the server log');
@@ -323,8 +409,9 @@ export function createApp(deps: AppDeps): App {
     generations,
     titler,
     notes,
+    suggestions,
     async close() {
-      await Promise.all([generations.shutdown(), notes.shutdown()]);
+      await Promise.all([generations.shutdown(), notes.shutdown(), suggestions.shutdown()]);
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
         server.closeAllConnections();

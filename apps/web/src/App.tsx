@@ -3,7 +3,7 @@
 // thread tree, or a note).
 // Still to come: sources (M3) and the search UI (M4).
 
-import type { Health, Notebook, NoteSummary, Thread } from '@noema/core';
+import { type Health, type Notebook, type NoteSummary, type Thread, ulid } from '@noema/core';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { api } from './api.ts';
 import { MapView } from './MapView.tsx';
@@ -112,6 +112,16 @@ function NotebookView({
   const openNote = useCallback((id: string) => go({ kind: 'note', id }), [go]);
 
   const startNew = () => go({ kind: 'new' });
+  const newNote = async () => {
+    const id = ulid();
+    try {
+      await api.createNote(notebook.id, id);
+    } catch {
+      return; // the server is unreachable; the views already say so
+    }
+    await refresh();
+    openNote(id);
+  };
 
   const onRefresh = useCallback(() => void refresh(), [refresh]);
   const showDraft = draft && route?.kind === 'thread' && route.id === draft.parentThreadId ? draft : null;
@@ -168,10 +178,24 @@ function NotebookView({
         toMessage={toMessage}
         toPassage={(parent, branch) => open(parent, branch)}
         toThread={(id) => open(id)}
+        toMap={(id) => go({ kind: 'map', id })}
       />
     );
   } else if (route?.kind === 'note') {
-    main = <NoteView key={route.id} noteId={route.id} onCite={toMessage} onOpenThread={(id) => open(id)} onChanged={onRefresh} />;
+    main = (
+      <NoteView
+        key={route.id}
+        noteId={route.id}
+        onCite={toMessage}
+        onOpenThread={(id) => open(id)}
+        onOpenNote={openNote}
+        onChanged={onRefresh}
+        onDeleted={() => {
+          onRefresh();
+          go({ kind: 'new' });
+        }}
+      />
+    );
   }
 
   const activeId = showDraft || !route || route.kind === 'new' ? null : route.id;
@@ -221,6 +245,7 @@ function NotebookView({
           onJump={(branch) => branch.parentThreadId && open(branch.parentThreadId, branch.id)}
           onOpenNote={openNote}
           onNew={startNew}
+          onNewNote={() => void newNote()}
         />
         <div className="main">{main}</div>
       </div>

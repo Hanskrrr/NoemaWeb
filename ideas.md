@@ -24,3 +24,4 @@ Things worth doing that are outside the v0.1 scope fence or not yet scheduled. A
 - Lazy-load KaTeX and its fonts; the web bundle is about 600 KB minified, mostly React and KaTeX.
 - Property tests for anchors with fast-check, once the dependency is installed.
 - Swap `node:sqlite` for better-sqlite3 if Node's module changes its API before it is stable (ADR 0002).
+- **Empty the Trash / delete for good** (ADR 0012): remove a thread for real. Before that: detach side questions that became their own threads (their `parent_thread_id` cascades), keep merges it gave other threads (make the source nullable, keep its title), and show a citation to a removed exchange as removed.

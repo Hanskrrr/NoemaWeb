@@ -121,7 +121,67 @@ function render(node: Nodes, source: string, index: number): ReactNode {
       );
     }
     case 'listItem':
+      if (typeof node.checked === 'boolean') {
+        return (
+          <li key={key} className="task">
+            <input type="checkbox" checked={node.checked} disabled readOnly aria-label={node.checked ? 'done' : 'not done'} />
+            {children(node, source)}
+          </li>
+        );
+      }
       return <li key={key}>{children(node, source)}</li>;
+    case 'delete':
+      return <del key={key}>{children(node, source)}</del>;
+    case 'table': {
+      const [head, ...rows] = node.children;
+      const align = (i: number) => {
+        const a = node.align?.[i];
+        return a ? { textAlign: a } : undefined;
+      };
+      return (
+        <div key={key} className="table-wrap">
+          <table>
+            {head && (
+              <thead>
+                <tr>
+                  {head.children.map((cell, i) => (
+                    <th key={`h${nodeRange(cell)?.start ?? i}`} style={align(i)}>
+                      {children(cell, source)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+            )}
+            {rows.length > 0 && (
+              <tbody>
+                {rows.map((row, r) => (
+                  <tr key={`r${nodeRange(row)?.start ?? r}`}>
+                    {row.children.map((cell, i) => (
+                      <td key={`c${nodeRange(cell)?.start ?? i}`} style={align(i)}>
+                        {children(cell, source)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            )}
+          </table>
+        </div>
+      );
+    }
+    case 'footnoteReference':
+      return (
+        <sup key={key} className="fnref" data-s={r?.start} data-e={r?.end} data-atomic="">
+          [{node.label ?? node.identifier}]
+        </sup>
+      );
+    case 'footnoteDefinition':
+      return (
+        <div key={key} className="footnote">
+          <span className="fn-label">[{node.label ?? node.identifier}]</span>
+          {children(node, source)}
+        </div>
+      );
     case 'blockquote':
       return <blockquote key={key}>{children(node, source)}</blockquote>;
     case 'thematicBreak':
@@ -147,7 +207,6 @@ function render(node: Nodes, source: string, index: number): ReactNode {
         </span>
       );
     case 'definition':
-    case 'footnoteDefinition':
     case 'yaml':
       return null;
     default:

@@ -10,6 +10,12 @@ test('ask a question and watch the answer stream in, with math rendered', async 
   await expect(answer).toContainText('You asked: "What is a derivative?"');
   await expect(answer.locator('.katex').first()).toBeVisible();
   await expect(answer.locator('pre code')).toContainText('const answer = 42;');
+  // Tables, alignment, strikethrough; single tildes in ranges stay text.
+  await expect(answer.locator('table th')).toHaveText(['Step', 'Cost']);
+  await expect(answer.locator('table td del')).toHaveText('Backward');
+  await expect(answer.locator('table td').nth(3)).toHaveText('3~5 ms or 4~6 ms');
+  await expect(answer.locator('table td').nth(3)).toHaveCSS('text-align', 'right');
+  await expect(answer.locator('table td .katex')).toHaveCount(1);
   await expect(page.locator('[data-testid=message][data-role=user]')).toHaveAttribute('data-status', 'done');
 });
 
@@ -72,5 +78,6 @@ test('New thread starts empty and appears in the sidebar after the first questio
   await ask(page, 'A brand new topic');
   await expect(page).toHaveURL(/#\/t\/[0-9A-Z]{26}$/);
   await expect(lastAnswer(page)).toHaveAttribute('data-status', 'done');
-  await expect(page.locator('[data-testid=thread-link].active')).toHaveText('A brand new topic');
+  // The title is written by the model after the first answer (the test model writes "About …").
+  await expect(page.locator('[data-testid=thread-link].active')).toHaveText('About A brand new topic');
 });

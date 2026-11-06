@@ -330,6 +330,77 @@ button.quiet:hover {
   margin: 1.4em 0;
 }
 
+.md .table-wrap {
+  overflow-x: auto;
+  margin: 0 0 0.95em;
+}
+
+.md table {
+  border-collapse: collapse;
+  font-family: var(--sans);
+  font-size: 0.92rem;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  min-width: 50%;
+}
+
+.md th,
+.md td {
+  border: 1px solid var(--rule);
+  padding: 0.4rem 0.7rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.md th {
+  background: var(--code);
+  font-weight: 600;
+}
+
+.md tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--code) 45%, transparent);
+}
+
+.md del {
+  color: var(--ink-faint);
+}
+
+.md li.task {
+  list-style: none;
+  margin-left: -1.3em;
+}
+
+.md li.task > input {
+  margin: 0 0.45em 0 0;
+  vertical-align: middle;
+}
+
+.md li.task > p {
+  display: inline;
+}
+
+.md .fnref {
+  color: var(--accent);
+  font-size: 0.75em;
+}
+
+.md .footnote {
+  font-size: 0.9em;
+  color: var(--ink-soft);
+  border-top: 1px solid var(--rule);
+  padding-top: 0.4rem;
+  margin-top: 0.8rem;
+}
+
+.md .footnote > p {
+  display: inline;
+}
+
+.md .fn-label {
+  color: var(--accent);
+  margin-right: 0.35em;
+}
+
 .math-display {
   overflow-x: auto;
   overflow-y: hidden;

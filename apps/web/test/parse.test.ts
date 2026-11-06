@@ -105,3 +105,48 @@ test('code regions for fences, empty blocks and indented code', () => {
   const i = '    indented';
   assert.deepEqual(codeRegion(i, 0, i.length), { start: 0, end: i.length });
 });
+
+test('tables: every cell maps back to its raw characters', () => {
+  const md = 'Compare:\n\n| 方法 | Cost |\n|---|---:|\n| **SGD** | $O(n)$ |\n| a \\| b | `x` |\n';
+  const tree = parseMarkdown(md);
+  assert.equal(tree.children[1]?.type, 'table');
+  const cells = leaves(tree, md);
+  const raw = (l: Leaf) => md.slice(l.start, l.end);
+  assert.deepEqual(
+    cells.map((l) => [l.kind, l.value]),
+    [
+      ['text', 'Compare:'],
+      ['text', '方法'],
+      ['text', 'Cost'],
+      ['text', 'SGD'],
+      ['inlineMath', 'O(n)'],
+      ['text', 'a | b'],
+      ['inlineCode', 'x'],
+    ],
+  );
+  const escaped = cells[5] as Leaf;
+  assert.equal(raw(escaped), 'a \\| b');
+  const r = leafToSource(escaped.value, raw(escaped), escaped.start, 2, 3);
+  assert.equal(r && md.slice(r.start, r.end), '|');
+});
+
+test('single tildes stay text (Chinese ranges like 3~5); double tildes strike through', () => {
+  const md = '大约 3~5 天，或者 4~6 天。~~old~~';
+  const tree = parseMarkdown(md);
+  const para = tree.children[0];
+  assert.equal(para?.type, 'paragraph');
+  const types = para && 'children' in para ? para.children.map((c) => c.type) : [];
+  assert.deepEqual(types, ['text', 'delete']);
+});
+
+test('task lists and footnotes parse', () => {
+  const md = '- [x] done\n- [ ] todo\n\nSee note[^1].\n\n[^1]: The note.\n';
+  const tree = parseMarkdown(md);
+  const list = tree.children[0];
+  assert.ok(list?.type === 'list');
+  assert.deepEqual(
+    list.children.map((i) => i.checked),
+    [true, false],
+  );
+  assert.ok(tree.children.some((n) => n.type === 'footnoteDefinition'));
+});

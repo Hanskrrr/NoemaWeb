@@ -93,7 +93,9 @@ test('Back returns to the exact passage, highlighted, with the branch marked whe
   const branchId = currentThreadId(page);
 
   // The sidebar shows the branch under its thread.
-  await expect(page.locator(`[data-testid=thread-link][data-thread-id="${branchId}"]`)).toContainText('Why tests?');
+  await expect(page.locator(`[data-testid=thread-link][data-thread-id="${branchId}"]`)).toContainText(
+    'About Why tests',
+  );
 
   await page.getByTestId('back').click();
   await expect(page).toHaveURL(new RegExp(`#/t/${parentId}/from/${branchId}$`));
@@ -106,7 +108,7 @@ test('Back returns to the exact passage, highlighted, with the branch marked whe
     return box ? box.top >= 0 && box.bottom <= window.innerHeight : false;
   });
   expect(inView).toBe(true);
-  await expect(page.getByTestId('branch-link')).toHaveText(/Why tests\?/);
+  await expect(page.getByTestId('branch-link')).toHaveText(/About Why tests/);
 
   // The browser's own Back goes to the branch again.
   await page.goBack();
@@ -123,6 +125,12 @@ test('a branch of a branch shows the whole path', async ({ page }) => {
   await expect(page.getByTestId('origin').locator('.crumbs')).toContainText('First detour');
   const nested = page.locator('.sidebar ul ul ul [data-testid=thread-link]');
   await expect(nested).toContainText('Second detour');
+});
+
+test('a passage inside a table cell anchors exactly', async ({ page }) => {
+  await doubleClickWord(page, 'Forward');
+  await page.getByTestId('branch-button').click();
+  await expect(page.getByTestId('origin')).toHaveAttribute('data-exact', 'Forward');
 });
 
 test('cancelling a branch before asking returns to the passage', async ({ page }) => {

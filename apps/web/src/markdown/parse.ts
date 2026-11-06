@@ -7,11 +7,21 @@
 
 import type { Nodes, Root } from 'mdast';
 import { fromMarkdown } from 'mdast-util-from-markdown';
+import { gfmFromMarkdown } from 'mdast-util-gfm';
 import { mathFromMarkdown } from 'mdast-util-math';
+import { gfm } from 'micromark-extension-gfm';
 import { math } from 'micromark-extension-math';
 
+/**
+ * CommonMark plus GitHub's extensions (tables, ~~strikethrough~~, task lists,
+ * footnotes, bare links) and $math$. Single tildes are not strikethrough:
+ * Chinese text writes ranges as "3~5 天", and one line can hold two of them.
+ */
 export function parseMarkdown(source: string): Root {
-  return fromMarkdown(source, { extensions: [math()], mdastExtensions: [mathFromMarkdown()] });
+  return fromMarkdown(source, {
+    extensions: [gfm({ singleTilde: false }), math()],
+    mdastExtensions: [gfmFromMarkdown(), mathFromMarkdown()],
+  });
 }
 
 export function nodeRange(node: Nodes): { start: number; end: number } | null {

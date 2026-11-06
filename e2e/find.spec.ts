@@ -1,13 +1,9 @@
 import { expect, type Page, test } from '@playwright/test';
-import { ask, currentThreadId, doubleClickWord, freshThread, highlighted, lastAnswer } from './helpers.ts';
+import { answered, currentThreadId, doubleClickWord, freshThread, highlighted, lastAnswer } from './helpers.ts';
 
 // Finding things again (M4), and the brief's acceptance tests 1 (zero
 // records) and 5 (find again inside a branch).
 
-async function answered(page: Page, question: string) {
-  await ask(page, question);
-  await expect(lastAnswer(page)).toHaveAttribute('data-status', 'done');
-}
 
 async function branchFrom(page: Page, word: string, question: string) {
   await doubleClickWord(page, word);

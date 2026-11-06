@@ -30,6 +30,19 @@ export async function ask(page: Page, question: string): Promise<void> {
   await page.getByTestId('composer').press('Enter');
 }
 
+/**
+ * Ask and wait for this question's own answer to finish. Waiting on the last
+ * answer alone can pass on the previous one, already done, while the new
+ * question is still being sent.
+ */
+export async function answered(page: Page, question: string): Promise<void> {
+  const answers = page.locator('[data-testid=message][data-role=assistant]');
+  const n = await answers.count();
+  await ask(page, question);
+  await expect(answers).toHaveCount(n + 1);
+  await expect(answers.last()).toHaveAttribute('data-status', 'done');
+}
+
 export function lastAnswer(page: Page) {
   return page.locator('[data-testid=message][data-role=assistant]').last();
 }

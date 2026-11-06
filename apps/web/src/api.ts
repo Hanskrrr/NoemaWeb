@@ -116,6 +116,9 @@ export const api = {
   deleteNote: (noteId: string) => call(Ok, 'DELETE', `/api/notes/${noteId}`),
   createNote: (notebookId: string, noteId: string) => call(Note, 'POST', `/api/notebooks/${notebookId}/notes`, { id: noteId }),
   splitThread: (threadId: string, split: boolean) => call(Thread, 'POST', `/api/threads/${threadId}/split`, { split }),
+  splitOff: (threadId: string, id: string, messageId: string) =>
+    call(Thread, 'POST', `/api/threads/${threadId}/split-off`, { id, messageId }),
+  joinBack: (threadId: string) => call(Thread, 'POST', `/api/threads/${threadId}/join-back`, {}),
   // Blocks: every change answers with the whole note.
   insertBlock: (noteId: string, req: InsertBlockRequest) => call(Note, 'POST', `/api/notes/${noteId}/blocks`, req),
   editBlock: (noteId: string, blockId: string, content: string) =>

@@ -7,6 +7,8 @@ export interface MessageActions {
   onStop: () => void;
   onOpenSettings: () => void;
   onOpenBranch: (threadId: string) => void;
+  /** On a question after the first: start a new thread from it. */
+  onSplitOff?: (() => void) | undefined;
 }
 
 export function MessageView({
@@ -15,6 +17,7 @@ export function MessageView({
   onStop,
   onOpenSettings,
   onOpenBranch,
+  onSplitOff,
   slots,
 }: { message: Message; branches: BranchSummary[]; slots?: Slot[] } & MessageActions) {
   const { role, status } = message;
@@ -34,6 +37,19 @@ export function MessageView({
         {role === 'assistant' && status === 'streaming' && <span className="caret" aria-hidden />}
       </div>
       <StatusLine message={message} onStop={onStop} onOpenSettings={onOpenSettings} />
+      {onSplitOff && (
+        <div className="message-actions">
+          <button
+            type="button"
+            className="quiet"
+            onClick={onSplitOff}
+            title="Move this question and everything after it into a new thread of its own"
+            data-testid="split-off"
+          >
+            ↪ New thread from here
+          </button>
+        </div>
+      )}
       {branches.length > 0 && (
         <ul className="branch-links" aria-label="Side questions from this message">
           {branches.map((b) => (

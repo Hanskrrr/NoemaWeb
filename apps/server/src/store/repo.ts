@@ -6,6 +6,8 @@ import {
   type AnchorRef,
   type BranchSummary,
   type ContextManifest,
+  type Continuation,
+  type ContinuedFrom,
   createAnchor,
   type ErrorKind,
   ftsQuery,
@@ -65,6 +67,7 @@ function toThread(r: Row): Thread {
     originQuote: exact ? shorten(exact, 160) : null,
     splitAt: (r.split_at as string | null | undefined) ?? null,
     mergedIntoId: (r.merged_into as string | null | undefined) ?? null,
+    continuedFromId: (r.continued_from as string | null | undefined) ?? null,
     title: r.title as string,
     titleSource: ((r.title_source as string | undefined) ?? 'question') as Thread['titleSource'],
     createdAt: r.created_at as string,
@@ -278,6 +281,7 @@ export class Repo {
         originQuote: null,
         splitAt: null,
         mergedIntoId: null,
+        continuedFromId: null,
         title,
         titleSource: 'question',
         createdAt: t,
@@ -411,6 +415,200 @@ export class Repo {
       this.logEvent(split ? 'thread.split' : 'thread.unsplit', threadId, { parentThreadId: thread.parentThreadId });
       return this.getThread(threadId);
     });
+  }
+
+  // New thread from here ------------------------------------------------------
+  //
+  // A thread that drifted into a second subject is cut at a question: that
+  // question and everything after it move into a new thread. Nothing is
+  // copied or rewritten. Messages keep their ids, revisions and anchors; only
+  // the thread they belong to and their place in it change, and everything
+  // that points at them by thread follows: side questions asked from them,
+  // merges accepted after the cut, citations in notes and merges, the search
+  // index. The new thread is its own: it does not send the earlier
+  // conversation to the model. Joining back undoes it exactly.
+
+  /** Split `threadId` at the question `messageId` into the new thread `newId`. Idempotent on newId. */
+  splitOff(threadId: string, messageId: string, newId: string): { thread: Thread; created: boolean } {
+    return this.db.tx(() => {
+      const done = this.getThread(newId);
+      if (done) {
+        if (done.continuedFromId !== threadId) throw new ConflictError('thread id already used');
+        return { thread: done, created: false };
+      }
+      const thread = this.getThread(threadId);
+      if (!thread) throw new NotFoundError('thread');
+      const q = this.db.sql
+        .prepare('SELECT m.id, m.role, m.seq FROM message m WHERE m.id = ? AND m.thread_id = ?')
+        .get(messageId, threadId) as Row | undefined;
+      if (!q) throw new InvalidError('no such question in this thread');
+      if (q.role !== 'user') throw new InvalidError('a thread is split at a question, not an answer');
+      if ((q.seq as number) === 0) throw new InvalidError('that is the first question: the whole thread would move');
+      if (this.hasLiveAnswer(threadId)) throw new ConflictError('wait for the answer to finish');
+      const at = q.seq as number;
+      const first = this.getMessage(messageId) as Message;
+      const t = now();
+      const title = titleFrom(first.content);
+      this.db.sql
+        .prepare(
+          `INSERT INTO thread (id, notebook_id, title, title_source, continued_from, continued_at_seq, created_at, updated_at)
+           VALUES (?, ?, ?, 'question', ?, ?, ?, ?)`,
+        )
+        .run(newId, thread.notebookId, title, threadId, at, t, t);
+      const moved = this.moveMessages(threadId, newId, at, -at);
+      // Side questions asked from the moved messages go with them.
+      this.db.sql
+        .prepare(
+          `UPDATE thread SET parent_thread_id = ? WHERE parent_thread_id = ? AND origin_anchor_id IN (
+             SELECT a.id FROM anchor a JOIN message m ON m.id = a.message_id WHERE m.thread_id = ?)`,
+        )
+        .run(newId, threadId, newId);
+      // Merges accepted after the cut were shown, and carried, in the part that moved.
+      this.db.sql
+        .prepare(
+          `UPDATE thread_merge SET target_thread_id = ?, after_seq = after_seq - ?
+           WHERE target_thread_id = ? AND after_seq IS NOT NULL AND after_seq >= ?`,
+        )
+        .run(newId, at, threadId, at);
+      // Threads split off earlier from the part that moved now continue from the new thread.
+      this.db.sql
+        .prepare(
+          `UPDATE thread SET continued_from = ?, continued_at_seq = continued_at_seq - ?
+           WHERE continued_from = ? AND continued_at_seq >= ? AND id <> ?`,
+        )
+        .run(newId, at, threadId, at, newId);
+      this.repointRefs(moved, newId);
+      this.index('thread', newId, newId, title);
+      this.db.sql.prepare('UPDATE thread SET updated_at = ? WHERE id = ?').run(t, threadId);
+      this.logEvent('thread.split_off', threadId, { into: newId, atSeq: at, messages: moved.size });
+      return { thread: this.getThread(newId) as Thread, created: true };
+    });
+  }
+
+  /** Why a split-off thread can't join back now, or null if it can. */
+  private joinBackBlocked(id: string): string | null {
+    const row = this.db.sql
+      .prepare(
+        `SELECT t.continued_from, t.continued_at_seq, o.title AS original_title FROM thread t
+         LEFT JOIN thread o ON o.id = t.continued_from WHERE t.id = ?`,
+      )
+      .get(id) as Row | undefined;
+    if (!row?.continued_from) return 'This thread was not split off from another.';
+    const original = row.continued_from as string;
+    const name = `“${shorten((row.original_title as string) || 'Untitled', 60)}”`;
+    const last = this.lastMessage(original);
+    if (last && last.seq >= (row.continued_at_seq as number)) {
+      return `${name} has new questions since this was split off. Merge it instead.`;
+    }
+    const linked = this.db.sql
+      .prepare(
+        `SELECT 1 FROM thread_merge WHERE status NOT IN ('undone', 'discarded')
+           AND ((source_thread_id = ? AND target_thread_id = ?) OR (source_thread_id = ? AND target_thread_id = ?))`,
+      )
+      .get(id, original, original, id);
+    if (linked) return `It has a merge with ${name}. Undo or cancel that first.`;
+    if (this.hasLiveAnswer(id) || this.hasLiveAnswer(original)) return 'Wait for the answer to finish.';
+    return null;
+  }
+
+  /** Put a split-off thread's questions back where they were, and remove it. Returns the original thread. */
+  joinBack(id: string): Thread {
+    return this.db.tx(() => {
+      const row = this.db.sql.prepare('SELECT continued_from, continued_at_seq FROM thread WHERE id = ?').get(id) as
+        | Row
+        | undefined;
+      if (!row) throw new NotFoundError('thread');
+      const blocked = this.joinBackBlocked(id);
+      if (blocked) {
+        if (!row.continued_from) throw new InvalidError(blocked);
+        throw new ConflictError(blocked);
+      }
+      const original = row.continued_from as string;
+      const at = row.continued_at_seq as number;
+      const moved = this.moveMessages(id, original, 0, at);
+      this.db.sql.prepare('UPDATE thread SET parent_thread_id = ? WHERE parent_thread_id = ?').run(original, id);
+      this.db.sql
+        .prepare(
+          'UPDATE thread_merge SET target_thread_id = ?, after_seq = after_seq + ? WHERE target_thread_id = ? AND after_seq IS NOT NULL',
+        )
+        .run(original, at, id);
+      this.db.sql.prepare('UPDATE thread_merge SET target_thread_id = ? WHERE target_thread_id = ?').run(original, id);
+      this.db.sql.prepare('UPDATE thread_merge SET source_thread_id = ? WHERE source_thread_id = ?').run(original, id);
+      this.db.sql.prepare('UPDATE note SET thread_id = ? WHERE thread_id = ?').run(original, id);
+      this.db.sql
+        .prepare('UPDATE thread SET continued_from = ?, continued_at_seq = continued_at_seq + ? WHERE continued_from = ?')
+        .run(original, at, id);
+      this.repointRefs(moved, original);
+      this.db.sql.prepare("DELETE FROM search WHERE kind = 'thread' AND target_id = ?").run(id);
+      this.db.sql.prepare('DELETE FROM thread WHERE id = ?').run(id);
+      this.db.sql.prepare('UPDATE thread SET updated_at = ? WHERE id = ?').run(now(), original);
+      this.logEvent('thread.joined_back', original, { from: id, messages: moved.size });
+      return this.getThread(original) as Thread;
+    });
+  }
+
+  /** Where a thread came from and where it continues, for the thread page. */
+  continuationOf(threadId: string): { continuedFrom: ContinuedFrom | null; continuedIn: Continuation[] } {
+    const row = this.db.sql
+      .prepare('SELECT o.id, o.title FROM thread t JOIN thread o ON o.id = t.continued_from WHERE t.id = ?')
+      .get(threadId) as Row | undefined;
+    const blocked = row ? this.joinBackBlocked(threadId) : null;
+    return {
+      continuedFrom: row
+        ? { threadId: row.id as string, title: row.title as string, canJoinBack: blocked === null, joinBackBlocked: blocked }
+        : null,
+      continuedIn: this.continuedIn(threadId),
+    };
+  }
+
+  private continuedIn(threadId: string): Continuation[] {
+    return (
+      this.db.sql
+        .prepare('SELECT id, title FROM thread WHERE continued_from = ? ORDER BY continued_at_seq, created_at')
+        .all(threadId) as Row[]
+    ).map((r) => ({ threadId: r.id as string, title: r.title as string }));
+  }
+
+  /**
+   * Move a thread's messages from seq `from` on into another thread, shifting
+   * their seq by `shift`, and keep the search index in step. Returns their ids.
+   */
+  private moveMessages(fromThread: string, toThread: string, from: number, shift: number): Set<string> {
+    const rows = this.db.sql
+      .prepare(
+        `SELECT m.id, r.content, r.headline, r.status FROM message m JOIN message_revision r ON r.id = m.current_revision_id
+         WHERE m.thread_id = ? AND m.seq >= ?`,
+      )
+      .all(fromThread, from) as Row[];
+    this.db.sql
+      .prepare('UPDATE message SET thread_id = ?, seq = seq + ? WHERE thread_id = ? AND seq >= ?')
+      .run(toThread, shift, fromThread, from);
+    for (const r of rows) {
+      if (r.content) {
+        this.index('message', r.id as string, toThread, messageText(r.content as string, r.headline as string | null));
+      }
+    }
+    return new Set(rows.map((r) => r.id as string));
+  }
+
+  /** Citations (in notes, their versions, and merges) to these messages now name the thread they are in. */
+  private repointRefs(messages: Set<string>, threadId: string): void {
+    if (messages.size === 0) return;
+    for (const table of ['note', 'note_revision', 'thread_merge']) {
+      const rows = this.db.sql.prepare(`SELECT id, refs FROM ${table} WHERE refs <> '{}'`).all() as Row[];
+      const update = this.db.sql.prepare(`UPDATE ${table} SET refs = ? WHERE id = ?`);
+      for (const r of rows) {
+        const refs = JSON.parse(r.refs as string) as Record<string, { threadId: string; messageId: string }>;
+        let changed = false;
+        for (const ref of Object.values(refs)) {
+          if (messages.has(ref.messageId) && ref.threadId !== threadId) {
+            ref.threadId = threadId;
+            changed = true;
+          }
+        }
+        if (changed) update.run(JSON.stringify(refs), r.id as string);
+      }
+    }
   }
 
   private isSplit(threadId: string): boolean {
@@ -742,10 +940,13 @@ export class Repo {
       return { ...node, exchanges };
     };
     const origin = this.originOf(threadId);
+    const { continuedFrom } = this.continuationOf(threadId);
     return {
       root: build(threadId, 0, true),
       path: this.pathOf(threadId).map((p) => ({ threadId: p.id, title: p.title })),
       parent: origin ? { threadId: origin.parentThreadId, title: origin.parentTitle } : null,
+      continuedFrom: continuedFrom ? { threadId: continuedFrom.threadId, title: continuedFrom.title } : null,
+      continuedIn: this.continuedIn(threadId),
     };
   }
 

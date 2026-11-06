@@ -2172,3 +2172,82 @@ button.quiet.inline.faint:hover {
     display: none;
   }
 }
+
+/* New thread from here --------------------------------------------------- */
+
+.message-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.15rem;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.message:hover .message-actions,
+.message:focus-within .message-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .message-actions {
+    opacity: 0.75;
+  }
+}
+
+.message-actions button.quiet {
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+}
+
+.message-actions button.quiet:hover,
+.message-actions button.quiet:focus-visible {
+  color: var(--accent);
+}
+
+.split-off-confirm {
+  margin-bottom: 0.8rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--sheet);
+  color: var(--ink-soft);
+}
+
+.split-off-confirm p {
+  margin: 0 0 0.6rem;
+  max-width: 62ch;
+}
+
+.split-off-confirm strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.continued-from {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.3rem 1rem;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--sheet);
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.continued-note {
+  font-size: 0.82rem;
+  color: var(--ink-faint);
+}
+
+.continued-in {
+  margin: 0;
+  padding-top: 0.8rem;
+  border-top: 1px dashed var(--rule);
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  text-align: center;
+}

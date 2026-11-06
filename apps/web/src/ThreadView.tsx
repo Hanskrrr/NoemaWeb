@@ -3,6 +3,8 @@
 
 import {
   type BranchSummary,
+  type Continuation,
+  type ContinuedFrom,
   createAnchor,
   isLive,
   isTerminal,
@@ -215,6 +217,10 @@ export function ThreadView({
   const [branches, setBranches] = useState<BranchSummary[]>([]);
   const [merges, setMerges] = useState<Merge[]>([]);
   const [outgoing, setOutgoing] = useState<Merge[]>([]);
+  const [continuedFrom, setContinuedFrom] = useState<ContinuedFrom | null>(null);
+  const [continuedIn, setContinuedIn] = useState<Continuation[]>([]);
+  /** The question a new thread would start from, while the learner confirms. */
+  const [cutting, setCutting] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const [messages, dispatch] = useReducer(reducer, []);
   const [loaded, setLoaded] = useState(false);
@@ -284,6 +290,8 @@ export function ThreadView({
         setBranches(detail.branches);
         setMerges(detail.merges);
         setOutgoing(detail.outgoing);
+        setContinuedFrom(detail.continuedFrom);
+        setContinuedIn(detail.continuedIn);
         dispatch({ type: 'reset', messages: detail.messages });
         setLoaded(true);
         for (const m of detail.messages) if (isLive(m.status)) watch(m.id);
@@ -480,6 +488,33 @@ export function ThreadView({
     }
   };
 
+  // New thread from here: this question and everything after it move into a thread of their own.
+  const splitOff = async (messageId: string) => {
+    const id = ulid();
+    try {
+      await api.splitOff(threadId, id, messageId);
+      setCutting(null);
+      onChanged();
+      onNavigate(id);
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
+
+  // Undo it: back into the thread it came from, at the first question that moved.
+  const joinBack = async () => {
+    if (!continuedFrom) return;
+    const first = messages[0]?.id;
+    try {
+      await api.joinBack(threadId);
+      onChanged();
+      if (first) onCite(continuedFrom.threadId, first);
+      else onNavigate(continuedFrom.threadId);
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
+
   const back = () => {
     if (!origin) return;
     void api.returnFromBranch(threadId).catch(() => {});
@@ -539,6 +574,9 @@ export function ThreadView({
             }
           />
         )}
+        {continuedFrom && (
+          <ContinuedFromCard from={continuedFrom} onOpen={(id) => onNavigate(id)} onJoinBack={() => void joinBack()} />
+        )}
         {picking && (
           <MergePicker
             threads={threads}
@@ -585,20 +623,37 @@ export function ThreadView({
             return at === null ? [] : [{ key: x.id, at, node: card(x) }];
           });
           const after = mine.filter((x) => !inline.some((i) => i.key === x.id));
+          const canCut = m.role === 'user' && m.seq > 0 && isTerminal(m.status) && !live;
           return (
             <div key={m.id} className="message-slot">
+              {cutting === m.id && (
+                <SplitOffConfirm
+                  {...movingFrom(messages, branches, m.id)}
+                  onConfirm={() => void splitOff(m.id)}
+                  onCancel={() => setCutting(null)}
+                />
+              )}
               <MessageView
                 message={m}
                 branches={branchesByMessage.get(m.id) ?? []}
                 onStop={() => void stop(m.id)}
                 onOpenSettings={onOpenSettings}
                 onOpenBranch={(id) => onNavigate(id)}
+                onSplitOff={canCut && cutting !== m.id ? () => setCutting(m.id) : undefined}
                 {...(inline.length > 0 ? { slots: inline } : {})}
               />
               {after.map(card)}
             </div>
           );
         })}
+        {continuedIn.map((c) => (
+          <p key={c.threadId} className="continued-in" data-testid="continued-in">
+            This thread continues in{' '}
+            <button type="button" className="quiet inline" onClick={() => onNavigate(c.threadId)}>
+              {c.title || 'Untitled'} →
+            </button>
+          </p>
+        ))}
         {loaded && messages.length > 0 && branches.length === 0 && !origin && messages.length <= 2 && (
           <p className="hint">Tip: select any passage to ask about it in a side branch.</p>
         )}
@@ -694,6 +749,83 @@ function ThreadHeader({
         </button>
       </div>
     </header>
+  );
+}
+
+/** What moves with a new thread started at this question: it and every question after it, and their side questions. */
+function movingFrom(messages: Message[], branches: BranchSummary[], from: string): { questions: number; sides: number } {
+  const i = messages.findIndex((m) => m.id === from);
+  const moving = new Set(messages.slice(i).map((m) => m.id));
+  return {
+    questions: messages.slice(i).filter((m) => m.role === 'user').length,
+    sides: branches.filter((b) => moving.has(b.anchor.messageId)).length,
+  };
+}
+
+function SplitOffConfirm({
+  questions,
+  sides,
+  onConfirm,
+  onCancel,
+}: {
+  questions: number;
+  sides: number;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const what =
+    questions === 1 ? 'This question and its answer' : `This question and the ${questions - 1} after it`;
+  return (
+    <section className="split-off-confirm" data-testid="split-off-confirm" aria-label="New thread from here">
+      <p>
+        <strong>{what}</strong>
+        {sides > 0 ? `, with ${sides === 1 ? 'its side question' : `${sides} side questions`},` : ''} will move into
+        a new thread. It starts here and won't send the earlier conversation to the model. Join back undoes it.
+      </p>
+      <div className="proposal-actions">
+        <button type="button" onClick={onConfirm} data-testid="split-off-confirm-move">
+          Move to a new thread
+        </button>
+        <button type="button" className="quiet" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/** At the top of a thread split off from another: where it came from, and the way back. */
+function ContinuedFromCard({
+  from,
+  onOpen,
+  onJoinBack,
+}: {
+  from: ContinuedFrom;
+  onOpen: (threadId: string) => void;
+  onJoinBack: () => void;
+}) {
+  return (
+    <section className="continued-from" data-testid="continued-from" aria-label="Where this thread came from">
+      <span>
+        Split off from{' '}
+        <button type="button" className="quiet inline" onClick={() => onOpen(from.threadId)}>
+          {from.title || 'Untitled'}
+        </button>
+      </span>
+      {from.canJoinBack ? (
+        <button
+          type="button"
+          className="quiet"
+          onClick={onJoinBack}
+          title="Put these questions back at the end of the thread they came from"
+          data-testid="join-back"
+        >
+          ⤺ Join back
+        </button>
+      ) : (
+        from.joinBackBlocked && <span className="continued-note">{from.joinBackBlocked}</span>
+      )}
+    </section>
   );
 }
 

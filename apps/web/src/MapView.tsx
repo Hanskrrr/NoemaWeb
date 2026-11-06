@@ -83,6 +83,17 @@ export function MapView({ threadId, ...go }: { threadId: string } & Go) {
             {map.parent.title || 'Untitled'}
           </button>
         )}
+        {map.continuedFrom && (
+          <button
+            type="button"
+            className="map-from"
+            onClick={() => go.toMap(map.continuedFrom?.threadId as string)}
+            title="Open the map of the thread it was split off from"
+            data-testid="map-continued-from"
+          >
+            Split off from {map.continuedFrom.title || 'Untitled'}
+          </button>
+        )}
         <p className="map-stats">
           {c.questions} {c.questions === 1 ? 'question' : 'questions'} · {c.branches}{' '}
           {c.branches === 1 ? 'side question' : 'side questions'}
@@ -93,6 +104,14 @@ export function MapView({ threadId, ...go }: { threadId: string } & Go) {
         </button>
       </header>
       <NodeView node={root} go={go} />
+      {map.continuedIn.map((c) => (
+        <p key={c.threadId} className="continued-in" data-testid="map-continued-in">
+          Continues in{' '}
+          <button type="button" className="quiet inline" onClick={() => go.toMap(c.threadId)}>
+            {c.title || 'Untitled'} →
+          </button>
+        </p>
+      ))}
     </main>
   );
 }

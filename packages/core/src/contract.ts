@@ -57,6 +57,8 @@ export const Thread = z.object({
   splitAt: z.string().nullable(),
   /** The thread this one was last merged into (and not undone), if any. */
   mergedIntoId: Id.nullable(),
+  /** "New thread from here": the thread this one was split off from, at one of its questions. */
+  continuedFromId: Id.nullable(),
   title: z.string(),
   /** question: the first question; model: written by the AI; user: renamed by the learner. */
   titleSource: z.enum(['question', 'model', 'user']),
@@ -156,6 +158,22 @@ export const StartMergeRequest = z.object({ id: Id, into: Id, mode: MergeMode.de
 export const EditMergeRequest = z.object({ summary: z.string().trim().min(1).max(20_000) });
 export const RedraftMergeRequest = z.object({ mode: MergeMode });
 
+/** One thread split off from another at a question ("New thread from here"). */
+export const Continuation = z.object({ threadId: Id, title: z.string() });
+export type Continuation = z.infer<typeof Continuation>;
+
+export const ContinuedFrom = Continuation.extend({
+  /** Joining back puts the questions back where they were; only while the original has nothing newer. */
+  canJoinBack: z.boolean(),
+  /** Why not, in a sentence, when it can't. */
+  joinBackBlocked: z.string().nullable(),
+});
+export type ContinuedFrom = z.infer<typeof ContinuedFrom>;
+
+/** "New thread from here": the question `messageId` and everything after it move into a new thread `id`. */
+export const SplitOffRequest = z.object({ id: Id, messageId: Id });
+export type SplitOffRequest = z.infer<typeof SplitOffRequest>;
+
 export const ThreadDetail = z.object({
   thread: Thread,
   messages: z.array(Message),
@@ -169,6 +187,10 @@ export const ThreadDetail = z.object({
   merges: z.array(Merge),
   /** This thread's merges into others: a draft being prepared, and merges done. */
   outgoing: z.array(Merge),
+  /** Split off from another thread: that thread, and whether it can join back now. */
+  continuedFrom: ContinuedFrom.nullable(),
+  /** Threads split off from this one: they continue where it ends. */
+  continuedIn: z.array(Continuation),
 });
 export type ThreadDetail = z.infer<typeof ThreadDetail>;
 
@@ -242,6 +264,9 @@ export const ThreadMap = z.object({
   path: z.array(z.object({ threadId: Id, title: z.string() })),
   /** Where the root came from, when it is a branch or was one. */
   parent: z.object({ threadId: Id, title: z.string() }).nullable(),
+  /** The thread the root was split off from, and the threads split off from it. */
+  continuedFrom: Continuation.nullable(),
+  continuedIn: z.array(Continuation),
 });
 export type ThreadMap = z.infer<typeof ThreadMap>;
 

@@ -20,6 +20,7 @@ import {
   RenameThreadRequest,
   RewriteRequest,
   SearchOpenedRequest,
+  SplitOffRequest,
   SplitThreadRequest,
   StartMergeRequest,
   SuggestRequest,
@@ -152,6 +153,7 @@ export function createApp(deps: AppDeps): App {
       path: repo.pathOf(thread.id),
       merges: repo.mergesInto(thread.id),
       outgoing: repo.outgoingOf(thread.id),
+      ...repo.continuationOf(thread.id),
     });
   });
 
@@ -238,6 +240,19 @@ export function createApp(deps: AppDeps): App {
   });
 
   // Make a branch its own thread, or put it back.
+  // New thread from here: this question and everything after it become a thread of their own.
+  router.on('POST', '/api/threads/:id/split-off', async (ctx) => {
+    const { id, messageId } = await ctx.body(SplitOffRequest);
+    const { thread, created } = repo.splitOff(ctx.params.id as string, messageId, id);
+    if (created) void titler.title(thread.id);
+    sendJson(ctx.res, created ? 201 : 200, thread);
+  });
+
+  // Undo it: the questions go back where they were.
+  router.on('POST', '/api/threads/:id/join-back', ({ res, params }) => {
+    sendJson(res, 200, repo.joinBack(params.id as string));
+  });
+
   router.on('POST', '/api/threads/:id/split', async (ctx) => {
     const { split } = await ctx.body(SplitThreadRequest);
     const thread = repo.setSplit(ctx.params.id as string, split);

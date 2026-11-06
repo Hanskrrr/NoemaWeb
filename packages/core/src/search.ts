@@ -76,6 +76,25 @@ export function ftsQuery(input: string): string | null {
     .join(' AND ');
 }
 
+/**
+ * Markdown as words, for indexing notes and cutting snippets: no citation
+ * labels ("[E3]"), no heading, list or quote markers, no emphasis or code
+ * marks. Line breaks stay; makeSnippet() folds them.
+ */
+export function plainText(markdown: string): string {
+  return markdown
+    .replace(/\s?\[E\d{1,4}\]/g, '')
+    .split('\n')
+    .map((line) =>
+      line
+        .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)/, '')
+        .replace(/^\s*(?:```|~~~).*$/, '')
+        .replace(/(\*\*|__)(.+?)\1/g, '$2')
+        .replace(/`([^`]+)`/g, '$1'),
+    )
+    .join('\n');
+}
+
 export interface Snippet {
   text: string;
   /** Match ranges inside `text`, for highlighting. */

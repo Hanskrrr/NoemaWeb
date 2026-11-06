@@ -103,13 +103,13 @@ test('search finds Chinese words of one or two characters, and English prefixes'
     'done',
     null,
   );
-  const ids = (q: string) => repo.search(q).map((h) => h.messageId);
+  const ids = (q: string) => repo.search(q).hits.map((h) => h.messageId);
   assert.ok(ids('梯度').includes(pair.user.id));
   assert.ok(ids('梯度').includes(pair.assistant.id));
   assert.ok(ids('损').includes(pair.assistant.id));
   assert.ok(ids('gradi').includes(pair.assistant.id));
   assert.deepEqual(ids('量子'), []);
-  const hit = repo.search('损失函数').find((h) => h.messageId === pair.assistant.id);
+  const hit = repo.search('损失函数').hits.find((h) => h.messageId === pair.assistant.id);
   assert.ok(hit?.snippet.includes('损失函数'));
   db.close();
 });

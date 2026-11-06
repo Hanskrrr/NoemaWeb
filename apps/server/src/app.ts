@@ -19,6 +19,7 @@ import {
   RedraftMergeRequest,
   RenameThreadRequest,
   RewriteRequest,
+  SearchOpenedRequest,
   SplitThreadRequest,
   StartMergeRequest,
   SuggestRequest,
@@ -41,7 +42,7 @@ import type { ModelSettings } from './llm/settings.ts';
 import type { Logger } from './log.ts';
 import { type AskPair, ConflictError, InvalidError, NotFoundError, type Repo } from './store/repo.ts';
 
-export const VERSION = '0.1.0-m2.2';
+export const VERSION = '0.1.0-m4.0';
 
 export interface AppDeps {
   repo: Repo;
@@ -410,7 +411,28 @@ export function createApp(deps: AppDeps): App {
 
   router.on('GET', '/api/search', ({ res, url }) => {
     const q = (url.searchParams.get('q') ?? '').slice(0, 200);
-    sendJson(res, 200, { query: q, hits: repo.search(q) });
+    sendJson(res, 200, { query: q, ...repo.search(q) });
+  });
+
+  // For the brief's measure "searches that end on the right message": which kind of hit was opened, and its rank. Never the words.
+  router.on('POST', '/api/search/opened', async (ctx) => {
+    const body = await ctx.body(SearchOpenedRequest);
+    repo.logEvent('search.opened', null, body);
+    sendJson(ctx.res, 200, { ok: true });
+  });
+
+  router.on('GET', '/api/notebooks/:id/open-branches', ({ res, params }) => {
+    if (!repo.getNotebook(params.id as string)) throw notFound('notebook');
+    sendJson(res, 200, { branches: repo.openBranches(params.id as string) });
+  });
+
+  // "Not now": a side question leaves the list of those you never came back from, until it is asked in again.
+  router.on('POST', '/api/threads/:id/set-aside', ({ res, params }) => {
+    const thread = repo.getThread(params.id as string);
+    if (!thread) throw notFound('thread');
+    if (!thread.parentThreadId) throw new HttpError(400, 'invalid', 'only a side question can be set aside');
+    repo.logEvent('branch.set_aside', thread.id);
+    sendJson(res, 200, { ok: true });
   });
 
   router.on('GET', '/api/export', ({ res }) => {

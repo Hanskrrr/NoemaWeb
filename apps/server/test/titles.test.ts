@@ -49,7 +49,8 @@ test('a thread is titled by the model after its first answer, once', async () =>
   assert.equal(await titleOf(threadId), 'About What is a Hessian');
   await ask(threadId, 'And its eigenvalues?');
   assert.equal(await titleOf(threadId), 'About What is a Hessian', 'a later answer must not rename the thread');
-  const hits = await api<{ hits: Array<{ threadId: string; kind: string }> }>(s, 'GET', '/api/search?q=Hessian');
+  // The model's title is searchable ("About" is only in the title; a title is its own hit when nothing inside matched).
+  const hits = await api<{ hits: Array<{ threadId: string; kind: string }> }>(s, 'GET', '/api/search?q=about%20Hessian');
   assert.ok(hits.json.hits.some((h) => h.kind === 'thread' && h.threadId === threadId));
 });
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ftsQuery, makeSnippet, parseQuery, searchText } from '../src/index.ts';
+import { ftsQuery, makeSnippet, parseQuery, plainText, searchText } from '../src/index.ts';
 
 test('CJK runs become unigrams and bigrams; other words pass through', () => {
   assert.equal(searchText('机器学习 is fun'), '机 器 学 习 机器 器学 学习 is fun');
@@ -29,4 +29,12 @@ test('snippets come from the original text with match ranges', () => {
   assert.equal(s.text, '…的是机器学习的基础，…');
   assert.deepEqual(s.matches, [{ start: 5, end: 7 }]);
   assert.equal(s.text.slice(5, 7), '学习');
+});
+
+test('plain text drops citation labels and Markdown marks, keeping the words', () => {
+  assert.equal(
+    plainText('## Variance\n\n- The **sum** of `d` terms [E3].\n> quoted [E12]\n```ts\nconst x = 1;\n```'),
+    'Variance\n\nThe sum of d terms.\nquoted\n\nconst x = 1;\n',
+  );
+  assert.equal(plainText('1. 方差 [E1]'), '方差');
 });

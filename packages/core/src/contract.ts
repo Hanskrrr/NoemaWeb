@@ -367,17 +367,56 @@ export const StopResponse = z.object({ stopping: z.boolean(), message: Message }
 export type StopResponse = z.infer<typeof StopResponse>;
 
 export const SearchHit = z.object({
-  kind: z.enum(['message', 'thread']),
-  threadId: Id,
+  /** A thread's title, a question or answer, a note's title, or a block of a note. */
+  kind: z.enum(['message', 'thread', 'note', 'block']),
+  threadId: Id.nullable(),
   messageId: Id.nullable(),
+  noteId: Id.nullable(),
+  blockId: Id.nullable(),
+  /** For a message: the learner's question or the AI's answer. */
+  role: z.enum(['user', 'assistant']).nullable(),
+  /** The thread's or the note's title. */
   title: z.string(),
+  /** The threads above a side question, top first: where it is. */
+  path: z.array(z.object({ threadId: Id, title: z.string() })),
+  /** For an answer: its one-line headline, if written. */
+  headline: z.string().nullable(),
+  /** When it was asked, answered or last changed. */
+  at: z.string(),
   snippet: z.string(),
   matches: z.array(z.object({ start: z.number().int(), end: z.number().int() })),
 });
 export type SearchHit = z.infer<typeof SearchHit>;
 
-export const SearchResponse = z.object({ query: z.string(), hits: z.array(SearchHit) });
+/** Logged when a search hit is opened: what kind, at what rank, how long the query was. Never its words. */
+export const SearchOpenedRequest = z.object({
+  kind: z.enum(['message', 'thread', 'note', 'block']),
+  rank: z.number().int().nonnegative().max(100),
+  queryChars: z.number().int().nonnegative().max(200),
+});
+export type SearchOpenedRequest = z.infer<typeof SearchOpenedRequest>;
+
+export const SearchResponse = z.object({
+  query: z.string(),
+  /** The words searched for, to mark them where a hit opens. */
+  terms: z.array(z.string()),
+  hits: z.array(SearchHit),
+});
 export type SearchResponse = z.infer<typeof SearchResponse>;
+
+/** A side question with no way back taken after its last exchange: no return, no later question above it, not set aside. */
+export const OpenBranch = z.object({
+  threadId: Id,
+  title: z.string(),
+  parentThreadId: Id,
+  parentTitle: z.string(),
+  quote: z.string().nullable(),
+  lastAt: z.string(),
+});
+export type OpenBranch = z.infer<typeof OpenBranch>;
+
+export const OpenBranchesResponse = z.object({ branches: z.array(OpenBranch) });
+export type OpenBranchesResponse = z.infer<typeof OpenBranchesResponse>;
 
 export const Health = z.object({
   ok: z.literal(true),

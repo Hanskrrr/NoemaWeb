@@ -24,7 +24,10 @@ import {
   type Note,
   type NoteBlock,
   type Notebook,
+  type OpenBranch,
   type Origin,
+  plainText,
+  parseQuery,
   type SearchHit,
   searchText,
   splitBlocks,
@@ -892,9 +895,13 @@ export class Repo {
   }
 
   deleteNote(id: string): boolean {
-    const result = this.db.sql.prepare('DELETE FROM note WHERE id = ?').run(id);
-    if (Number(result.changes) > 0) this.logEvent('note.deleted', id);
-    return Number(result.changes) > 0;
+    return this.db.tx(() => {
+      const result = this.db.sql.prepare('DELETE FROM note WHERE id = ?').run(id);
+      if (Number(result.changes) === 0) return false;
+      this.unindexNote(id);
+      this.logEvent('note.deleted', id);
+      return true;
+    });
   }
 
   private editable(noteId: string): Note {
@@ -1168,6 +1175,7 @@ export class Repo {
       ids.splice(at, 0, ...moving);
       this.renumber(targetId, ids);
       this.db.sql.prepare('UPDATE note SET refs = ? WHERE id = ?').run(JSON.stringify(refs), targetId);
+      this.unindexNote(fromId);
       this.syncNote(targetId, 'user', `merged “${from.title}” into this note`);
       this.db.sql.prepare('DELETE FROM note WHERE id = ?').run(fromId);
       this.logEvent('note.merged', targetId, { from: fromId, blocks: moving.length, relabelled: rename.size });
@@ -1191,6 +1199,7 @@ export class Repo {
     this.db.sql
       .prepare('UPDATE note SET content = ?, author = ?, revision = ?, updated_at = ? WHERE id = ?')
       .run(content, author, n, t, noteId);
+    this.indexNote(noteId);
     if (!who || !change) return;
     this.db.sql
       .prepare(
@@ -1416,10 +1425,21 @@ export class Repo {
 
   /** The model's line for a finished answer. Only the current, finished revision takes it. */
   setHeadline(revisionId: string, headline: string): boolean {
-    const r = this.db.sql
-      .prepare("UPDATE message_revision SET headline = ? WHERE id = ? AND status = 'done'")
-      .run(headline, revisionId);
-    return Number(r.changes) > 0;
+    return this.db.tx(() => {
+      const r = this.db.sql
+        .prepare("UPDATE message_revision SET headline = ? WHERE id = ? AND status = 'done'")
+        .run(headline, revisionId);
+      if (Number(r.changes) === 0) return false;
+      // The line is searchable with its answer (it may say in other words what the answer says).
+      const m = this.db.sql
+        .prepare(
+          `SELECT m.id, m.thread_id, r.content FROM message_revision r JOIN message m ON m.current_revision_id = r.id
+           WHERE r.id = ?`,
+        )
+        .get(revisionId) as Row | undefined;
+      if (m) this.index('message', m.id as string, m.thread_id as string, messageText(m.content as string, headline));
+      return true;
+    });
   }
 
   /** Finished answers without a headline yet, oldest first. */
@@ -1551,35 +1571,201 @@ export class Repo {
   }
 
   // Search ------------------------------------------------------------------
+  //
+  // One FTS5 table for everything. Rows: kind 'thread' (a title), 'message'
+  // (a question, or an answer with its headline), 'note' (a note's title) and
+  // 'block' (a block of a note). `thread_id` holds the owner: the thread, or
+  // for 'note' and 'block' rows, the note.
 
-  private index(kind: 'message' | 'thread', targetId: string, threadId: string, text: string): void {
+  private index(kind: SearchKind, targetId: string, ownerId: string, text: string): void {
     this.db.sql.prepare('DELETE FROM search WHERE target_id = ? AND kind = ?').run(targetId, kind);
-    this.db.sql
-      .prepare('INSERT INTO search (body, kind, target_id, thread_id) VALUES (?, ?, ?, ?)')
-      .run(searchText(text), kind, targetId, threadId);
+    this.insertIndex(kind, targetId, ownerId, text);
   }
 
-  search(query: string, limit = 30): SearchHit[] {
+  private insertIndex(kind: SearchKind, targetId: string, ownerId: string, text: string): void {
+    const body = searchText(text);
+    if (!body) return;
+    this.db.sql
+      .prepare('INSERT INTO search (body, kind, target_id, thread_id) VALUES (?, ?, ?, ?)')
+      .run(body, kind, targetId, ownerId);
+  }
+
+  private unindexNote(noteId: string): void {
+    this.db.sql.prepare("DELETE FROM search WHERE thread_id = ? AND kind IN ('note', 'block')").run(noteId);
+  }
+
+  /** A note's title and blocks, as they are now. Called on every change (syncNote). */
+  private indexNote(noteId: string): void {
+    this.unindexNote(noteId);
+    const row = this.db.sql.prepare('SELECT title FROM note WHERE id = ?').get(noteId) as Row | undefined;
+    if (!row) return;
+    this.insertIndex('note', noteId, noteId, row.title as string);
+    for (const b of this.blocksOf(noteId)) {
+      if (b.content) this.insertIndex('block', b.id, noteId, plainText(b.content));
+    }
+  }
+
+  /**
+   * Build the whole index again from what is stored. At start-up when the
+   * index is older than this code (SEARCH_INDEX_VERSION), so notebooks from
+   * before notes or headlines were searchable find them too.
+   */
+  rebuildSearch(): { rows: number } {
+    return this.db.tx(() => {
+      this.db.sql.exec('DELETE FROM search');
+      const threads = this.db.sql.prepare("SELECT id, title FROM thread WHERE title <> ''").all() as Row[];
+      for (const t of threads) this.insertIndex('thread', t.id as string, t.id as string, t.title as string);
+      const messages = this.db.sql
+        .prepare(
+          `SELECT m.id, m.thread_id, r.content, r.headline FROM message m
+           JOIN message_revision r ON r.id = m.current_revision_id
+           WHERE r.content <> '' AND r.status NOT IN ('pending', 'streaming')`,
+        )
+        .all() as Row[];
+      for (const m of messages) {
+        this.insertIndex(
+          'message',
+          m.id as string,
+          m.thread_id as string,
+          messageText(m.content as string, m.headline as string | null),
+        );
+      }
+      const notes = this.db.sql.prepare('SELECT id FROM note').all() as Row[];
+      for (const n of notes) this.indexNote(n.id as string);
+      this.db.sql
+        .prepare("INSERT INTO meta (key, value) VALUES ('search_index', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .run(String(SEARCH_INDEX_VERSION));
+      const count = this.db.sql.prepare('SELECT count(*) AS n FROM search').get() as { n: number };
+      return { rows: count.n };
+    });
+  }
+
+  /** Rebuild the index if it was built by older code. Returns whether it did. */
+  ensureSearchIndex(): boolean {
+    const row = this.db.sql.prepare("SELECT value FROM meta WHERE key = 'search_index'").get() as Row | undefined;
+    if (row?.value === String(SEARCH_INDEX_VERSION)) return false;
+    this.rebuildSearch();
+    return true;
+  }
+
+  search(query: string, limit = 30): { terms: string[]; hits: SearchHit[] } {
+    const { terms } = parseQuery(query);
     const match = ftsQuery(query);
-    if (!match) return [];
+    if (!match) return { terms, hits: [] };
     const rows = this.db.sql
       .prepare('SELECT kind, target_id, thread_id FROM search WHERE search MATCH ? ORDER BY rank LIMIT ?')
-      .all(match, limit) as Array<{ kind: 'message' | 'thread'; target_id: string; thread_id: string }>;
+      .all(match, limit * 2) as Array<{ kind: SearchKind; target_id: string; thread_id: string }>;
     const hits: SearchHit[] = [];
+    const paths = new Map<string, Array<{ threadId: string; title: string }>>();
+    const pathTo = (threadId: string) => {
+      let p = paths.get(threadId);
+      if (!p) {
+        p = this.pathOf(threadId).map((x) => ({ threadId: x.id, title: x.title }));
+        paths.set(threadId, p);
+      }
+      return p;
+    };
+    const none = { threadId: null, messageId: null, noteId: null, blockId: null, role: null, headline: null };
     for (const r of rows) {
-      const thread = this.getThread(r.thread_id);
-      if (!thread) continue;
-      if (r.kind === 'thread') {
-        const s = makeSnippet(thread.title, query);
-        hits.push({ kind: 'thread', threadId: thread.id, messageId: null, title: thread.title, ...snippetFields(s) });
-      } else {
+      if (r.kind === 'thread' || r.kind === 'message') {
+        const thread = this.getThread(r.thread_id);
+        if (!thread) continue;
+        if (r.kind === 'thread') {
+          hits.push({
+            ...none,
+            kind: 'thread',
+            threadId: thread.id,
+            title: thread.title,
+            path: pathTo(thread.id),
+            at: thread.updatedAt,
+            ...snippetFields(makeSnippet(thread.title, query)),
+          });
+          continue;
+        }
         const m = this.getMessage(r.target_id);
         if (!m || isLive(m.status)) continue;
-        const s = makeSnippet(m.content, query);
-        hits.push({ kind: 'message', threadId: thread.id, messageId: m.id, title: thread.title, ...snippetFields(s) });
+        let s = makeSnippet(plainText(m.content), query);
+        if (s.matches.length === 0 && m.headline) s = makeSnippet(m.headline, query);
+        hits.push({
+          ...none,
+          kind: 'message',
+          threadId: thread.id,
+          messageId: m.id,
+          role: m.role,
+          title: thread.title,
+          path: pathTo(thread.id),
+          headline: m.role === 'assistant' ? m.headline : null,
+          at: m.createdAt,
+          ...snippetFields(s),
+        });
+      } else {
+        const note = this.db.sql.prepare('SELECT id, title, updated_at FROM note WHERE id = ?').get(r.thread_id) as
+          | Row
+          | undefined;
+        if (!note) continue;
+        const base = { ...none, noteId: note.id as string, title: note.title as string, path: [], at: note.updated_at as string };
+        if (r.kind === 'note') {
+          hits.push({ ...base, kind: 'note', ...snippetFields(makeSnippet(note.title as string, query)) });
+          continue;
+        }
+        const block = this.blockRow(note.id as string, r.target_id);
+        if (!block || block.deleted_at !== null) continue;
+        hits.push({
+          ...base,
+          kind: 'block',
+          blockId: block.id as string,
+          at: block.updated_at as string,
+          ...snippetFields(makeSnippet(plainText(block.content as string), query)),
+        });
       }
     }
-    return hits;
+    // A title is only worth its own line when nothing inside matched.
+    const inside = new Set(hits.filter((h) => h.kind === 'message' || h.kind === 'block').map((h) => h.threadId ?? h.noteId));
+    return {
+      terms,
+      hits: hits.filter((h) => !((h.kind === 'thread' || h.kind === 'note') && inside.has(h.threadId ?? h.noteId))).slice(0, limit),
+    };
+  }
+
+  // Coming back ---------------------------------------------------------------
+
+  /**
+   * Side questions you never came back from: a side question with an answer,
+   * not made its own thread and not merged back, where nothing after its last
+   * exchange took you back: no Back to the passage, no later question in the
+   * thread above, and not set aside. Newest first.
+   */
+  openBranches(notebookId: string, limit = 8): OpenBranch[] {
+    const rows = this.db.sql
+      .prepare(
+        `SELECT t.id, t.title, t.parent_thread_id, p.title AS parent_title, a.exact AS quote, x.last_at
+         FROM thread t
+         JOIN thread p ON p.id = t.parent_thread_id
+         LEFT JOIN anchor a ON a.id = t.origin_anchor_id
+         JOIN (SELECT thread_id, max(created_at) AS last_at FROM message GROUP BY thread_id) x ON x.thread_id = t.id
+         WHERE t.notebook_id = ? AND t.split_at IS NULL
+           AND EXISTS (
+             SELECT 1 FROM message m JOIN message_revision r ON r.id = m.current_revision_id
+             WHERE m.thread_id = t.id AND m.role = 'assistant' AND r.status = 'done')
+           AND NOT EXISTS (
+             SELECT 1 FROM thread_merge g WHERE g.source_thread_id = t.id AND g.status = 'merged')
+           AND NOT EXISTS (
+             SELECT 1 FROM event e
+             WHERE e.subject_id = t.id AND e.type IN ('branch.returned', 'branch.set_aside') AND e.at >= x.last_at)
+           AND NOT EXISTS (
+             SELECT 1 FROM message pm WHERE pm.thread_id = t.parent_thread_id AND pm.created_at > x.last_at)
+         ORDER BY x.last_at DESC
+         LIMIT ?`,
+      )
+      .all(notebookId, limit) as Row[];
+    return rows.map((r) => ({
+      threadId: r.id as string,
+      title: r.title as string,
+      parentThreadId: r.parent_thread_id as string,
+      parentTitle: r.parent_title as string,
+      quote: (r.quote as string | null) ?? null,
+      lastAt: r.last_at as string,
+    }));
   }
 
   // Events and export -------------------------------------------------------
@@ -1610,6 +1796,16 @@ export class Repo {
       events: all('event'),
     };
   }
+}
+
+type SearchKind = 'thread' | 'message' | 'note' | 'block';
+
+/** Raise when what goes into the index changes; the index is rebuilt at the next start. */
+const SEARCH_INDEX_VERSION = 2;
+
+/** What is indexed for a message: its text, and an answer's headline. */
+function messageText(content: string, headline: string | null): string {
+  return headline ? `${content}\n${headline}` : content;
 }
 
 function snippetFields(s: { text: string; matches: Array<{ start: number; end: number }> }) {

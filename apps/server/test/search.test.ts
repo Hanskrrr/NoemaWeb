@@ -96,7 +96,7 @@ test("an answer's headline is searchable, and its snippet comes from the line wh
 test('notes: titles and blocks are found as they are now, never as they were', async () => {
   const { notebookId } = await newThread(s);
   const note = await blankNote(notebookId, 'Platypus notes');
-  const a = await write(note.id, null, '## Echidna\n\nThe **echidna** lays eggs [E1].');
+  const a = await write(note.id, null, '- The **echidna** lays eggs [E1].');
   const b = await write(note.id, a, 'Second block about numbats.');
 
   let r = await search('echidna');
@@ -105,7 +105,7 @@ test('notes: titles and blocks are found as they are now, never as they were', a
     [['block', note.id, a]],
   );
   assert.equal(r.hits[0]?.title, 'Platypus notes');
-  assert.equal(r.hits[0]?.snippet, 'Echidna The echidna lays eggs.', 'no Markdown marks or citation labels');
+  assert.equal(r.hits[0]?.snippet, 'The echidna lays eggs.', 'no Markdown marks or citation labels');
   assert.deepEqual(r.hits[0]?.path, []);
   assert.equal((await search('E1')).hits.length, 0, 'citation labels are not words');
 

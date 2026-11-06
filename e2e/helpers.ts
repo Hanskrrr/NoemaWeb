@@ -33,7 +33,7 @@ export async function ask(page: Page, question: string): Promise<void> {
 /**
  * Ask and wait for this question's own answer to finish. Waiting on the last
  * answer alone can pass on the previous one, already done, while the new
- * question is still being sent.
+ * question is still being sent. Call it once the thread is on the page.
  */
 export async function answered(page: Page, question: string): Promise<void> {
   const answers = page.locator('[data-testid=message][data-role=assistant]');

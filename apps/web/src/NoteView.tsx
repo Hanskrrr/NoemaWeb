@@ -6,7 +6,7 @@
 // Citations ([E3]) open the exchange they came from. Every change is kept
 // as a version on the server.
 
-import { headingLevel, type Note, type NoteBlock, type NoteSummary, sectionOf, ulid } from '@noema/core';
+import { headingLevel, type Note, type NoteBlock, type NoteSummary, plainText, sectionOf, ulid } from '@noema/core';
 import { type KeyboardEvent, type MouseEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { EditableTitle } from './EditableTitle.tsx';
@@ -45,6 +45,39 @@ function headingsOf(blocks: NoteBlock[]): OutlineItem[] {
         target: `[data-block-id="${b.id}"]`,
       },
     ];
+  });
+}
+
+/** A block's first sentence (or first words), as plain text, for the catalog. */
+function blockLabel(content: string): string {
+  const text = plainText(content)
+    .replace(/\|/g, ' ')
+    .replace(/^\s*\$\$\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const sentence = /^(.{4,60}?(?:[。！？!?]|\.(?=\s|$)))/.exec(text)?.[1];
+  return shortLabel(sentence ?? text, 60);
+}
+
+/**
+ * The catalog of a note: its headings, when it has at least two; otherwise,
+ * once the note is long enough to need one, every block by its first words
+ * (a note written by hand often has no headings).
+ */
+function catalogOf(blocks: NoteBlock[]): OutlineItem[] {
+  const written = blocks.filter((b) => b.content.trim() !== '');
+  const headings = headingsOf(written);
+  if (headings.length >= 2) return headings;
+  if (written.length < 4) return [];
+  return written.map((b) => {
+    const isHeading = headingLevel(b.content) !== null;
+    return {
+      id: b.id,
+      label: blockLabel(b.content) || '…',
+      level: headings.length > 0 && !isHeading ? 2 : 1,
+      kind: 'heading' as const,
+      target: `[data-block-id="${b.id}"]`,
+    };
   });
 }
 
@@ -155,6 +188,7 @@ export function NoteView({
   if (!note) return <main className="thread note-page" aria-busy />;
   const writing = note.status === 'generating';
   const blocks = note.blocks;
+  const catalog = catalogOf(blocks);
 
   const save = async (e: Editing) => {
     setEditing(null);
@@ -441,7 +475,7 @@ export function NoteView({
         )}
       </CiteContext.Provider>
 
-      {!writing && headingsOf(blocks).length >= 2 && <Outline items={headingsOf(blocks)} label="Headings in this note" />}
+      {!writing && catalog.length > 0 && <Outline items={catalog} label="Catalog of this note" />}
 
       {toast && (
         <div className="toast" role="status" data-testid="toast">

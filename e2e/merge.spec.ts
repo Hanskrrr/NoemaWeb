@@ -1,14 +1,10 @@
-import { expect, type Page, test } from '@playwright/test';
-import { ask, currentThreadId, doubleClickWord, freshThread, lastAnswer } from './helpers.ts';
+import { expect, test } from '@playwright/test';
+import { answered, currentThreadId, doubleClickWord, freshThread, lastAnswer } from './helpers.ts';
 
 // Merging, like a merge commit: what a side question (or another thread)
 // found is drafted, checked by the learner, and carried into the target from
 // the next question on. Nothing already said is rewritten.
 
-async function answered(page: Page, question: string) {
-  await ask(page, question);
-  await expect(lastAnswer(page)).toHaveAttribute('data-status', 'done');
-}
 
 test('a side question merged back: checked, merged, shown under its passage, carried, undone', async ({
   page,

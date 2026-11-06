@@ -526,6 +526,16 @@ button.quiet:hover {
   margin-left: 0.6rem;
 }
 
+/* Deep families indent less, so titles keep room. */
+.sidebar ul ul ul ul {
+  padding-left: 0.4rem;
+  margin-left: 0.3rem;
+}
+
+.merged-tag {
+  color: var(--ink-faint);
+}
+
 .new-thread {
   width: 100%;
   margin-bottom: 0.8rem;

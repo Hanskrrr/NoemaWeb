@@ -1,15 +1,11 @@
-import { expect, type Page, test } from '@playwright/test';
-import { ask, currentThreadId, doubleClickWord, freshThread, highlighted, lastAnswer, ulidish } from './helpers.ts';
+import { expect, test } from '@playwright/test';
+import { answered, currentThreadId, doubleClickWord, freshThread, highlighted, ulidish } from './helpers.ts';
 
 // Finding your way: a catalog on the right of long threads and notes, and a
 // way straight back from deep side questions.
 
 const H = { 'x-noema-client': 'web' };
 
-async function answered(page: Page, question: string) {
-  await ask(page, question);
-  await expect(lastAnswer(page)).toHaveAttribute('data-status', 'done');
-}
 
 test('a long thread has a catalog: each question, its side questions, and where you are', async ({ page, request }) => {
   await freshThread(request);

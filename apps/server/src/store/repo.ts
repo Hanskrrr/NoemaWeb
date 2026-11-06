@@ -1127,6 +1127,26 @@ export class Repo {
     ).map((r) => r.id as string);
   }
 
+  /**
+   * Text that holds several blocks (a heading and its paragraph, two
+   * paragraphs, a whole section from the AI) becomes that many blocks: the
+   * first stays in `blockId`, the rest are new blocks right after it. The
+   * caller has already written the first part. Returns the new block ids.
+   */
+  private spreadBlock(noteId: string, blockId: string, rest: string[], author: NoteBlock['author']): string[] {
+    if (rest.length === 0) return [];
+    const ids = this.allBlockIds(noteId);
+    const t = now();
+    const fresh = rest.map((content) => {
+      const id = ulid();
+      this.insertBlockRow(noteId, id, 0, content, author, t);
+      return id;
+    });
+    ids.splice(ids.indexOf(blockId) + 1, 0, ...fresh);
+    this.renumber(noteId, ids);
+    return fresh;
+  }
+
   private renumber(noteId: string, ids: string[]): void {
     const stmt = this.db.sql.prepare('UPDATE note_block SET pos = ? WHERE id = ? AND note_id = ?');
     ids.forEach((id, i) => stmt.run(i, id, noteId));
@@ -1150,6 +1170,9 @@ export class Repo {
       if (req.after !== null && !ids.includes(req.after)) throw new InvalidError('no such block in this note');
       const at = req.after === null ? 0 : ids.indexOf(req.after) + 1;
       const t = now();
+      // Two paragraphs, or a heading and its text, written in one box become blocks of their own.
+      const content = req.content ?? '';
+      const [first = content, ...rest] = req.ask === undefined ? splitBlocks(content) : [];
       if (req.ask !== undefined) {
         this.insertBlockRow(noteId, req.id, at, '', 'ai', t);
         this.db.sql
@@ -1158,10 +1181,11 @@ export class Repo {
           )
           .run(req.ask, req.id);
       } else {
-        this.insertBlockRow(noteId, req.id, at, req.content ?? '', 'user', t);
+        this.insertBlockRow(noteId, req.id, at, rest.length > 0 ? first : content, 'user', t);
       }
       ids.splice(at, 0, req.id);
       this.renumber(noteId, ids);
+      this.spreadBlock(noteId, req.id, rest, 'user');
       if (req.ask === undefined) this.syncNote(noteId, 'user', 'wrote a block');
       else this.logEvent('note.block_asked', noteId, { blockId: req.id });
       return { block: toBlock(this.blockRow(noteId, req.id) as Row), created: true };
@@ -1177,9 +1201,12 @@ export class Repo {
       if (content.trim() === '') return this.deleteBlock(noteId, blockId);
       if (content === row.content) return this.getNote(noteId) as Note;
       const author = row.author === 'user' && row.content !== '' ? 'user' : row.content === '' ? 'user' : 'ai+user';
+      // Two paragraphs, or a heading and its text, written in one box become blocks of their own.
+      const [first = content, ...rest] = splitBlocks(content);
       this.db.sql
         .prepare('UPDATE note_block SET content = ?, author = ?, updated_at = ? WHERE id = ?')
-        .run(content, author, now(), blockId);
+        .run(rest.length > 0 ? first : content, author, now(), blockId);
+      this.spreadBlock(noteId, blockId, rest, 'user');
       this.syncNote(noteId, 'user', 'edited a block');
       return this.getNote(noteId) as Note;
     });
@@ -1271,13 +1298,17 @@ export class Repo {
       if (row.proposal_status === 'generating') throw new ConflictError('the suggestion is still being written');
       if (!text) throw new InvalidError('there is no suggestion to accept');
       const author = row.content === '' || row.author === 'ai' ? 'ai' : 'ai+user';
+      // Reviewed as one suggestion; kept as blocks, so each paragraph or heading can be edited, moved or rewritten on its own.
+      const [first = text, ...rest] = splitBlocks(text);
       this.db.sql
         .prepare(
           `UPDATE note_block SET content = ?, author = ?, proposal = NULL, proposal_status = NULL,
              proposal_instruction = NULL, proposal_error = NULL, updated_at = ? WHERE id = ?`,
         )
-        .run(text, author, now(), blockId);
-      this.syncNote(noteId, 'ai', row.content === '' ? 'added an AI block' : 'accepted an AI suggestion');
+        .run(first, author, now(), blockId);
+      this.spreadBlock(noteId, blockId, rest, 'ai');
+      const what = rest.length > 0 ? `${rest.length + 1} AI blocks` : 'an AI block';
+      this.syncNote(noteId, 'ai', row.content === '' ? `added ${what}` : 'accepted an AI suggestion');
       return this.getNote(noteId) as Note;
     });
   }
@@ -1441,7 +1472,7 @@ export class Repo {
    * At boot: notes and suggestions still being written were cut off, and
    * notes from before blocks existed get their blocks.
    */
-  recoverNotes(): { failed: number; blockified: number } {
+  recoverNotes(): { failed: number; blockified: number; spread: number } {
     const cut = 'The server stopped before this was finished.';
     const live = this.db.sql.prepare("SELECT id, content FROM note WHERE status = 'generating'").all() as Row[];
     for (const r of live) this.finishNote(r.id as string, r.content as string, 'failed', cut);
@@ -1463,7 +1494,27 @@ export class Repo {
         this.syncNote(r.id as string, null, null);
       });
     }
-    return { failed: live.length, blockified: old.length };
+    // Blocks written before text was kept one paragraph, heading or list to a block: split them now (once; afterwards none holds several).
+    const several = (
+      this.db.sql
+        .prepare(
+          `SELECT b.id, b.note_id, b.content, b.author FROM note_block b JOIN note n ON n.id = b.note_id
+           WHERE b.deleted_at IS NULL AND n.status <> 'generating' AND instr(b.content, char(10)) > 0
+           ORDER BY b.note_id, b.pos`,
+        )
+        .all() as Row[]
+    ).filter((r) => splitBlocks(r.content as string).length > 1);
+    const spread = new Set<string>();
+    for (const r of several) {
+      this.db.tx(() => {
+        const [first = '', ...rest] = splitBlocks(r.content as string);
+        this.db.sql.prepare('UPDATE note_block SET content = ? WHERE id = ?').run(first, r.id as string);
+        this.spreadBlock(r.note_id as string, r.id as string, rest, r.author as NoteBlock['author']);
+        this.syncNote(r.note_id as string, null, null);
+      });
+      spread.add(r.note_id as string);
+    }
+    return { failed: live.length, blockified: old.length, spread: spread.size };
   }
 
   // Branches ----------------------------------------------------------------

@@ -189,14 +189,15 @@ export class NoteWriter {
   }
 }
 
-// Suggestions: the AI writes one block, a new version of a block or a new
-// block at a place, following the learner's instruction. The result waits
-// as a suggestion; the learner accepts or discards it.
+// Suggestions: the AI writes at one place, a new version of a block or new
+// text where the learner asked, following the learner's instruction. The
+// result waits as one suggestion; the learner accepts or discards it as a
+// whole, and accepted text becomes as many blocks as it holds.
 
 export const SUGGEST_PROMPT = [
-  "You help a learner edit their study note. The note is Markdown, made of blocks. You write exactly one block: either a new version of the block marked <<<REWRITE>>>, or a new block at the place marked <<<NEW BLOCK HERE>>>, following the learner's instruction.",
-  '- Reply with the Markdown of that one block only: no preamble, no explanation, no code fence around it, no markers.',
-  '- One block is usually one paragraph, list, table, formula or short worked example. Use several paragraphs only if the instruction asks for more.',
+  "You help a learner edit their study note. The note is Markdown, made of blocks (paragraphs, headings, lists, tables, formulas). You write at one place, following the learner's instruction: either a new version of the block marked <<<REWRITE>>>, or new text at the place marked <<<NEW BLOCK HERE>>>.",
+  '- Reply with that Markdown only: no preamble, no explanation, no code fence around it, no markers.',
+  '- For a rewrite, keep to what that block covers; it may become two blocks if that reads better. For new text, write as much as the instruction asks: a sentence, a paragraph, or a short section with its own heading, paragraphs, lists or formulas. Separate blocks with a blank line.',
   "- Write in the note's language unless the instruction asks otherwise. Fit the surrounding blocks: do not repeat them.",
   '- When a point comes from the conversation, cite the exchange with its label, like [E3]. Keep citations that still apply. Use only labels that exist.',
   '- Math as $...$ inline and $$...$$ on their own lines.',

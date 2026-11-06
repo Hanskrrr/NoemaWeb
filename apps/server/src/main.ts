@@ -74,6 +74,7 @@ app.server.listen(config.port, config.host, () => {
     interruptedAtBoot: interrupted,
     notesCutOff: notes.failed,
     notesMadeIntoBlocks: notes.blockified,
+    notesBlocksSplit: notes.spread,
     mergeDraftsCutOff: mergeDrafts,
     searchReindexed: reindexed,
     provider: models.view().provider,

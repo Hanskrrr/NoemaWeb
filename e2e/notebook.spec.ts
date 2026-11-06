@@ -114,8 +114,9 @@ test('a side question becomes its own thread, and can be put back', async ({ pag
 
   await page.getByTestId('split').click();
   await expect(page.getByTestId('unsplit')).toBeVisible();
-  await expect(nested).toHaveCount(0);
-  await expect(page.locator(`[data-testid=thread-link][data-thread-id="${branch}"]`)).toContainText('↗');
+  // Its own thread now, still listed with the thread it came from.
+  await expect(nested).toHaveCount(1);
+  await expect(nested).toContainText('↗');
   // Back still goes to the passage.
   await expect(page.getByTestId('origin')).toContainText('offline');
 
@@ -132,6 +133,7 @@ test('a side question becomes its own thread, and can be put back', async ({ pag
   await page.getByTestId('unsplit').click();
   await expect(page.getByTestId('split')).toBeVisible();
   await expect(nested).toHaveCount(1);
+  await expect(nested).toContainText('↳');
 });
 
 test('rewrite as note: blocks you edit in place, with citations that open the exchange', async ({ page, request }) => {

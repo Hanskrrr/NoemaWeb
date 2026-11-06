@@ -1,27 +1,57 @@
-// Threads and their branches as a tree, then notes. Top-level threads are
-// newest first; branches sit under the thread they were asked from, in the
-// order opened. A branch made its own thread is listed at the top level.
-// Each branch shows the passage it came from: click the passage to jump to
-// that exact spot, click the title to open the branch.
+// Threads as families, then notes. Everything that came from a thread sits
+// under it, in the order it was opened: its side questions (↳), the side
+// questions made their own threads (↗) and the threads split off from it at
+// a question (↪). A family stays together, and moves up as a whole when
+// anything in it is asked in. Each side question shows the passage it came
+// from: click the passage to jump to that exact spot, the title to open it.
 
 import type { NoteSummary, Thread } from '@noema/core';
 
-function tree(threads: Thread[]): { roots: Thread[]; children: Map<string, Thread[]> } {
-  const children = new Map<string, Thread[]>();
+/** The thread this one came from, if any: the one it was asked from, or split off from. */
+function cameFrom(t: Thread): string | null {
+  return t.continuedFromId ?? t.parentThreadId ?? null;
+}
+
+export function tree(threads: Thread[]): { roots: Thread[]; children: Map<string, Thread[]> } {
   const known = new Set(threads.map((t) => t.id));
+  const children = new Map<string, Thread[]>();
   const roots: Thread[] = [];
   for (const t of threads) {
-    if (t.parentThreadId && !t.splitAt && known.has(t.parentThreadId)) {
-      const list = children.get(t.parentThreadId) ?? [];
+    const from = cameFrom(t);
+    if (from && from !== t.id && known.has(from)) {
+      const list = children.get(from) ?? [];
       list.push(t);
-      children.set(t.parentThreadId, list);
+      children.set(from, list);
     } else {
       roots.push(t);
     }
   }
-  roots.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  // A family's place is its latest activity anywhere in it.
+  const latest = new Map<string, string>();
+  const seen = new Set<string>();
+  const visit = (t: Thread): string => {
+    if (seen.has(t.id)) return latest.get(t.id) ?? t.updatedAt;
+    seen.add(t.id);
+    let at = t.updatedAt;
+    for (const k of children.get(t.id) ?? []) {
+      const a = visit(k);
+      if (a > at) at = a;
+    }
+    latest.set(t.id, at);
+    return at;
+  };
+  for (const r of roots) visit(r);
+  roots.sort((a, b) => (latest.get(b.id) ?? '').localeCompare(latest.get(a.id) ?? ''));
   for (const list of children.values()) list.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return { roots, children };
+}
+
+/** How a thread came out of the one above it. */
+function markOf(t: Thread, depth: number): { glyph: string; label: string } | null {
+  if (t.continuedFromId) return { glyph: '↪', label: 'Split off from the thread above at a question' };
+  if (t.splitAt) return { glyph: '↗', label: 'A side question made its own thread' };
+  if (depth > 0) return { glyph: '↳', label: 'A side question' };
+  return null;
 }
 
 export function Sidebar({
@@ -51,8 +81,9 @@ export function Sidebar({
   const item = (t: Thread, depth: number) => {
     const kids = children.get(t.id) ?? [];
     const active = t.id === activeId;
+    const mark = markOf(t, depth);
     return (
-      <li key={t.id} className={depth > 0 ? 'branch-item' : undefined}>
+      <li key={t.id} className={depth > 0 ? 'branch-item' : undefined} data-family-depth={depth}>
         <button
           type="button"
           className={`thread-link${active ? ' active' : ''}${depth > 0 ? ' is-branch' : ''}`}
@@ -61,17 +92,15 @@ export function Sidebar({
           data-testid="thread-link"
           data-thread-id={t.id}
         >
-          {t.mergedIntoId ? (
-            <span title="Merged into another thread">
+          {mark && (
+            <span aria-hidden title={mark.label}>
+              {`${mark.glyph} `}
+            </span>
+          )}
+          {t.mergedIntoId && (
+            <span className="merged-tag" title="Merged into another thread">
               <span aria-hidden>⤶ </span>
               <span className="sr-only">merged: </span>
-            </span>
-          ) : (
-            depth > 0 && <span aria-hidden>↳ </span>
-          )}
-          {depth === 0 && t.splitAt && (
-            <span aria-hidden title="Made its own thread from a side question">
-              ↗{' '}
             </span>
           )}
           {t.title || 'Untitled'}

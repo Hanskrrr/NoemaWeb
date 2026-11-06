@@ -277,6 +277,78 @@ test('a blank note gets AI help too, without a conversation to cite', async () =
   assert.equal(now.blocks[0]?.proposal?.text, 'New block (An intro).');
 });
 
+test('text that holds several blocks becomes several blocks: written, edited, or accepted from the AI', async () => {
+  const { threadId } = await newThread(s);
+  const note = await blankNote(s.repo.getThread(threadId)?.notebookId as string);
+
+  // Written in one box: a heading, its paragraph and a list.
+  const a = ulid();
+  const written = (await write(note.id, null, '# Unions\n\nA value of one of several types.\n\n- `A | B`\n- narrowed by checks', a)).json;
+  assert.deepEqual(
+    written.blocks.map((b) => b.content),
+    ['# Unions', 'A value of one of several types.', '- `A | B`\n- narrowed by checks'],
+  );
+  assert.equal(written.blocks[0]?.id, a, 'the first part keeps the id that was written');
+  assert.equal((await write(note.id, null, '# Unions\n\nagain', a)).json.blocks.length, 3, 'idempotent: nothing added twice');
+
+  // An edit that adds a paragraph: the new paragraph is a block after it.
+  const p = written.blocks[1]?.id as string;
+  const edited = (
+    await api<Note>(s, 'PATCH', `/api/notes/${note.id}/blocks/${p}`, {
+      content: 'A value of one of several types.\n\n## Intersections\n\nAll of them at once.',
+    })
+  ).json;
+  assert.deepEqual(
+    edited.blocks.map((b) => b.content),
+    ['# Unions', 'A value of one of several types.', '## Intersections', 'All of them at once.', '- `A | B`\n- narrowed by checks'],
+  );
+  assert.equal(edited.blocks[1]?.id, p);
+  // A code fence with blank lines stays one block.
+  const code = (
+    await api<Note>(s, 'PATCH', `/api/notes/${note.id}/blocks/${p}`, { content: '```ts\nconst a = 1;\n\nconst b = 2;\n```' })
+  ).json;
+  assert.equal(code.blocks[1]?.content, '```ts\nconst a = 1;\n\nconst b = 2;\n```');
+  assert.equal(code.blocks.length, 5);
+
+  // The AI asked for a section: one suggestion to review, several blocks once accepted.
+  const id = ulid();
+  await api(s, 'POST', `/api/notes/${note.id}/blocks`, { id, after: null, ask: 'Type guards [[section]]' });
+  const waiting = await settled(note.id, id);
+  assert.equal(waiting.blocks.filter((b) => b.proposal).length, 1, 'one suggestion');
+  assert.match(waiting.blocks[0]?.proposal?.text ?? '', /^## Type guards\n\nA first paragraph/);
+  const accepted = (await api<Note>(s, 'POST', `/api/notes/${note.id}/blocks/${id}/accept`)).json;
+  assert.deepEqual(
+    accepted.blocks.slice(0, 3).map((b) => [b.content, b.author]),
+    [
+      ['## Type guards', 'ai'],
+      ['A first paragraph about Type guards.', 'ai'],
+      ['- one point\n- another point', 'ai'],
+    ],
+  );
+  assert.equal(accepted.blocks[0]?.id, id);
+  assert.equal(accepted.blocks[3]?.content, '# Unions', 'the rest of the note follows, unchanged');
+  const history = (await api<{ revisions: Array<{ change: string }> }>(s, 'GET', `/api/notes/${note.id}/history`)).json;
+  assert.equal(history.revisions.at(-1)?.change, 'added 3 AI blocks');
+
+  // Blocks from before, holding several (an AI section accepted whole), are split at start-up, once.
+  const old = ulid();
+  s.db.sql
+    .prepare("INSERT INTO note_block (id, note_id, pos, content, author, created_at, updated_at) VALUES (?, ?, 99, ?, 'ai', ?, ?)")
+    .run(old, note.id, '## Graphs\n\nNodes and edges.\n\n$$\nA_{ij}\n\n$$', '2026-11-01T00:00:00.000Z', '2026-11-01T00:00:00.000Z');
+  assert.equal(s.repo.recoverNotes().spread, 1);
+  const after = s.repo.getNote(note.id) as Note;
+  assert.deepEqual(
+    after.blocks.slice(-3).map((b) => [b.content, b.author]),
+    [
+      ['## Graphs', 'ai'],
+      ['Nodes and edges.', 'ai'],
+      ['$$\nA_{ij}\n\n$$', 'ai'],
+    ],
+  );
+  assert.equal(after.blocks.at(-3)?.id, old);
+  assert.equal(s.repo.recoverNotes().spread, 0, 'once');
+});
+
 test('a section moves out into its own note, keeping the thread and citations', async () => {
   const { threadId } = await journey();
   const note = await aiNote(threadId);

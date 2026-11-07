@@ -402,6 +402,7 @@ function NotebookView({
         version={r ? r.version : beside?.versionId}
         at={r?.at}
         focusThread={r ? r.from : beside?.rootId}
+        pinTo={route?.kind === 'thread' && beside ? route.id : undefined}
         jump={jump}
         arrival={route ? toHash(route) : ''}
         notebookId={notebook.id}

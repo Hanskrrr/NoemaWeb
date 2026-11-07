@@ -32,8 +32,10 @@ import {
   type NoteBlock,
   type Notebook,
   type NoemaExport,
+  MAX_PINS,
   type OpenBranch,
   type Origin,
+  type Pin,
   type ReadableNotebook,
   type Source,
   type SourceDetail,
@@ -1466,6 +1468,184 @@ export class Repo {
       continuedFrom: continuedFrom ? { threadId: continuedFrom.threadId, title: continuedFrom.title } : null,
       continuedIn: this.continuedIn(threadId),
     };
+  }
+
+  // Pins ----------------------------------------------------------------------
+
+  /** Pin a passage to a thread. Idempotent on the pin's id. */
+  createPin(
+    threadId: string,
+    pinId: string,
+    at:
+      | { message: { messageId: string; revisionId?: string | undefined; start: number; end: number } }
+      | { source: { versionId: string; start: number; end: number } },
+  ): { pin: Pin; created: boolean } {
+    return this.db.tx(() => {
+      const existing = this.db.sql.prepare('SELECT thread_id FROM pin WHERE id = ?').get(pinId) as Row | undefined;
+      if (existing) {
+        if (existing.thread_id !== threadId) throw new ConflictError('that pin id is already used');
+        return { pin: this.pinById(pinId) as Pin, created: false };
+      }
+      const thread = this.getThread(threadId);
+      if (!thread) throw new NotFoundError('thread');
+      this.notInTrash(threadId);
+      if (this.pinsFor(threadId).length >= MAX_PINS) {
+        throw new InvalidError(`at most ${MAX_PINS} passages can be pinned here: unpin one first`);
+      }
+      const t = now();
+      let anchorId: string | null = null;
+      let sourceAnchorId: string | null = null;
+      if ('message' in at) {
+        const message = this.getMessage(at.message.messageId);
+        if (!message) throw new InvalidError('no such message');
+        const revision =
+          at.message.revisionId && at.message.revisionId !== message.revisionId
+            ? (this.db.sql
+                .prepare('SELECT id, content, status FROM message_revision WHERE id = ? AND message_id = ?')
+                .get(at.message.revisionId, message.id) as { id: string; content: string; status: MessageStatus } | undefined)
+            : { id: message.revisionId, content: message.content, status: message.status };
+        if (!revision) throw new InvalidError('that revision is not of this message');
+        if (isLive(revision.status)) throw new ConflictError('wait for the answer to finish before pinning from it');
+        let anchor: ReturnType<typeof createAnchor>;
+        try {
+          anchor = createAnchor(revision.id, revision.content, at.message.start, at.message.end);
+        } catch {
+          throw new InvalidError('the selected range is outside the message');
+        }
+        anchorId = ulid();
+        this.db.sql
+          .prepare(
+            `INSERT INTO anchor (id, message_id, revision_id, exact, prefix, suffix, start_offset, end_offset, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            anchorId,
+            message.id,
+            revision.id,
+            anchor.quote.exact,
+            anchor.quote.prefix,
+            anchor.quote.suffix,
+            anchor.position.start,
+            anchor.position.end,
+            t,
+          );
+      } else {
+        const version = this.db.sql
+          .prepare(
+            `SELECT v.id, v.content, s.deleted_at FROM source_version v JOIN source s ON s.id = v.source_id WHERE v.id = ?`,
+          )
+          .get(at.source.versionId) as Row | undefined;
+        if (!version) throw new InvalidError('no such version of a source');
+        if (version.deleted_at) throw new ConflictError('that source is in the Trash: restore it first');
+        let anchor: ReturnType<typeof createAnchor>;
+        try {
+          anchor = createAnchor(version.id as string, version.content as string, at.source.start, at.source.end);
+        } catch {
+          throw new InvalidError('the selected range is outside the text');
+        }
+        sourceAnchorId = ulid();
+        this.db.sql
+          .prepare(
+            `INSERT INTO source_anchor (id, version_id, exact, prefix, suffix, start_offset, end_offset, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            sourceAnchorId,
+            version.id as string,
+            anchor.quote.exact,
+            anchor.quote.prefix,
+            anchor.quote.suffix,
+            anchor.position.start,
+            anchor.position.end,
+            t,
+          );
+      }
+      this.db.sql
+        .prepare('INSERT INTO pin (id, thread_id, anchor_id, source_anchor_id, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(pinId, threadId, anchorId, sourceAnchorId, t);
+      this.logEvent('pin.added', threadId, { kind: anchorId ? 'message' : 'source' });
+      return { pin: this.pinById(pinId) as Pin, created: true };
+    });
+  }
+
+  /** Unpin. Returns the thread it was pinned to, or null if there was no such pin. */
+  deletePin(pinId: string): string | null {
+    return this.db.tx(() => {
+      const row = this.db.sql.prepare('SELECT thread_id FROM pin WHERE id = ?').get(pinId) as Row | undefined;
+      if (!row) return null;
+      this.notInTrash(row.thread_id as string);
+      this.db.sql.prepare('DELETE FROM pin WHERE id = ?').run(pinId);
+      this.logEvent('pin.removed', row.thread_id as string);
+      return row.thread_id as string;
+    });
+  }
+
+  private static readonly PIN_SELECT = `
+    SELECT p.id, p.thread_id, p.created_at,
+           a.message_id, a.revision_id, a.exact AS a_exact, a.start_offset AS a_start, a.end_offset AS a_end,
+           m.thread_id AS m_thread, mt.title AS m_title,
+           sa.version_id, sa.exact AS s_exact, sa.start_offset AS s_start, sa.end_offset AS s_end,
+           sv.source_id, s.title AS s_title
+    FROM pin p
+    LEFT JOIN anchor a ON a.id = p.anchor_id
+    LEFT JOIN message m ON m.id = a.message_id
+    LEFT JOIN thread mt ON mt.id = m.thread_id
+    LEFT JOIN source_anchor sa ON sa.id = p.source_anchor_id
+    LEFT JOIN source_version sv ON sv.id = sa.version_id
+    LEFT JOIN source s ON s.id = sv.source_id`;
+
+  private toPin(r: Row): Pin {
+    return {
+      id: r.id as string,
+      threadId: r.thread_id as string,
+      exact: (r.a_exact ?? r.s_exact) as string,
+      message: r.message_id
+        ? {
+            threadId: r.m_thread as string,
+            threadTitle: (r.m_title as string | null) ?? '',
+            messageId: r.message_id as string,
+            revisionId: r.revision_id as string,
+            start: r.a_start as number,
+            end: r.a_end as number,
+          }
+        : null,
+      source: r.version_id
+        ? {
+            sourceId: r.source_id as string,
+            title: (r.s_title as string | null) ?? '',
+            versionId: r.version_id as string,
+            start: r.s_start as number,
+            end: r.s_end as number,
+          }
+        : null,
+      createdAt: r.created_at as string,
+    };
+  }
+
+  private pinById(pinId: string): Pin | null {
+    const r = this.db.sql.prepare(`${Repo.PIN_SELECT} WHERE p.id = ?`).get(pinId) as Row | undefined;
+    return r ? this.toPin(r) : null;
+  }
+
+  /**
+   * The passages pinned where a question in this thread is asked: those of
+   * the threads it is a side question of (outermost first), then its own,
+   * each oldest first. A side question made its own thread starts afresh.
+   */
+  pinsFor(threadId: string): Pin[] {
+    const chain: string[] = [];
+    const seen = new Set<string>();
+    let id: string | null = threadId;
+    while (id && !seen.has(id)) {
+      seen.add(id);
+      chain.unshift(id);
+      const t = this.db.sql.prepare('SELECT parent_thread_id, split_at FROM thread WHERE id = ?').get(id) as
+        | Row
+        | undefined;
+      id = t && t.split_at === null ? ((t.parent_thread_id as string | null) ?? null) : null;
+    }
+    const stmt = this.db.sql.prepare(`${Repo.PIN_SELECT} WHERE p.thread_id = ? ORDER BY p.created_at, p.rowid`);
+    return chain.flatMap((t) => (stmt.all(t) as Row[]).map((r) => this.toPin(r)));
   }
 
   // Notes -------------------------------------------------------------------

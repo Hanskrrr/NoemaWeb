@@ -1,6 +1,6 @@
 // What was sent for an answer, word for word: the instructions, what the AI
-// knows about you, what you are reading, the conversation it was given, and
-// the question as it went out. Read from the record kept with every answer.
+// knows about you, what you are reading, the passages you pinned, the
+// conversation it was given, and the question as it went out. Read from the record kept with every answer.
 
 import { describeSent, type MessageContext, type SentPart } from '@noema/core';
 import { useEffect, useRef, useState } from 'react';
@@ -10,6 +10,7 @@ const KIND_LABELS: Record<SentPart['kind'], string> = {
   instructions: 'Instructions to the AI',
   about_me: 'About you',
   source: 'What you are reading',
+  pinned: 'Passages you pinned',
   inherited: 'From the thread this came from',
   history: 'Earlier in this thread',
   question: 'Your question',
@@ -29,7 +30,7 @@ export function partLabel(p: SentPart): string {
 }
 
 const tokens = (n: number) => `about ${n.toLocaleString()} tokens`;
-const OPEN_BY_DEFAULT = new Set<SentPart['kind']>(['about_me', 'source', 'question']);
+const OPEN_BY_DEFAULT = new Set<SentPart['kind']>(['about_me', 'source', 'pinned', 'question']);
 
 export function ContextDialog({
   messageId,

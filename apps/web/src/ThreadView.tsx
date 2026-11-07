@@ -15,6 +15,7 @@ import {
   type MessageStatus,
   type NoteSummary,
   type Origin,
+  type Pin,
   resolveAnchor,
   type SourceOrigin,
   type Thread,
@@ -27,6 +28,7 @@ import { Composer } from './Composer.tsx';
 import { EditableTitle } from './EditableTitle.tsx';
 import { MergeCard, MergePicker, OPEN_MERGE_EVENT, OutgoingMerges } from './Merges.tsx';
 import { MessageView } from './MessageView.tsx';
+import { PINS_CHANGED_EVENT, PinnedList } from './Pinned.tsx';
 import { Outline, type OutlineItem, scrollRangeIntoView, shortLabel } from './Outline.tsx';
 import { highlight, selectionToSource, sourceToRange } from './markdown/selection.ts';
 import { keys, storage } from './storage.ts';
@@ -267,6 +269,7 @@ export function ThreadView({
   const [continuedFrom, setContinuedFrom] = useState<ContinuedFrom | null>(null);
   const [sourceOrigin, setSourceOrigin] = useState<SourceOrigin | null>(null);
   const [continuedIn, setContinuedIn] = useState<Continuation[]>([]);
+  const [pins, setPins] = useState<Pin[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   /** The question a new thread would start from, while the learner confirms. */
   const [cutting, setCutting] = useState<string | null>(null);
@@ -354,6 +357,7 @@ export function ThreadView({
         setContinuedFrom(detail.continuedFrom);
         setSourceOrigin(detail.sourceOrigin);
         setContinuedIn(detail.continuedIn);
+        setPins(detail.pins);
         dispatch({ type: 'reset', messages: detail.messages });
         setLoaded(true);
         for (const m of detail.messages) if (isLive(m.status)) watch(m.id);
@@ -394,6 +398,36 @@ export function ThreadView({
   useEffect(() => {
     if (lastContentLength >= 0 && lastStatus && stick.current) bottom.current?.scrollIntoView({ block: 'end' });
   }, [lastContentLength, lastStatus]);
+
+  // Pinned or unpinned from the source beside: read the pins again.
+  useEffect(() => {
+    const onChanged = () => {
+      api.thread(threadId).then(
+        (d) => setPins(d.pins),
+        () => {},
+      );
+    };
+    window.addEventListener(PINS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(PINS_CHANGED_EVENT, onChanged);
+  }, [threadId]);
+
+  // Pinned passages of this thread, marked where they are (in the revision shown).
+  useEffect(() => {
+    if (!loaded) return;
+    const ranges: Range[] = [];
+    for (const p of pins) {
+      const at = p.message;
+      const message = at ? byId.get(at.messageId) : undefined;
+      const container = at ? document.querySelector(`[data-message-id="${at.messageId}"]`) : null;
+      if (!at || !message || !container || message.revisionId !== at.revisionId) continue;
+      const r = resolveAnchor({ targetId: at.revisionId, quote: { exact: p.exact, prefix: '', suffix: '' }, position: at }, message.content);
+      if (r.status === 'unresolved') continue;
+      const range = sourceToRange(container, message.content, r.start, r.end);
+      if (range) ranges.push(range);
+    }
+    highlight('noema-pins', ranges);
+  }, [pins, byId, loaded]);
+  useEffect(() => () => void highlight('noema-pins', null), []);
 
   // Marks where branches left, redrawn as messages render.
   useEffect(() => {
@@ -503,6 +537,58 @@ export function ThreadView({
       exact: anchor.quote.exact,
     });
   };
+
+  const pinSelection = async () => {
+    const message = selection ? byId.get(selection.messageId) : undefined;
+    if (!selection || !message) return;
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+    try {
+      const pin = await api.pin(threadId, {
+        id: ulid(),
+        message: { messageId: message.id, revisionId: message.revisionId, start: selection.start, end: selection.end },
+      });
+      setPins((list) => [...list.filter((p) => p.id !== pin.id), pin]);
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
+
+  const unpin = async (pin: Pin) => {
+    try {
+      await api.unpin(pin.id);
+      setPins((list) => list.filter((p) => p.id !== pin.id));
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
+
+  // Show a pinned passage: here, in the answer it is in (as the revision pinned), or in its own thread.
+  const [showingPin, setShowingPin] = useState<Pin | null>(null);
+  const showPin = (pin: Pin) => {
+    const at = pin.message;
+    if (!at) return;
+    if (at.threadId !== threadId) {
+      onCite(at.threadId, at.messageId);
+      return;
+    }
+    const inUse = messages.find((m) => m.id === at.messageId);
+    if (!inUse) return;
+    setShowingPin(pin);
+    showRevision(at.messageId, at.revisionId === inUse.revisionId ? null : at.revisionId).catch(() => {});
+  };
+  useEffect(() => {
+    const at = showingPin?.message;
+    if (!showingPin || !at) return;
+    const message = byId.get(at.messageId);
+    if (!message || message.revisionId !== at.revisionId) return;
+    setShowingPin(null);
+    const container = document.querySelector(`[data-message-id="${at.messageId}"]`);
+    const range = container ? sourceToRange(container, message.content, at.start, at.end) : null;
+    if (!range) return;
+    highlight('noema-return', range);
+    range.startContainer.parentElement?.scrollIntoView({ block: 'center' });
+  }, [showingPin, byId]);
 
   const send = (content: string) => {
     const item = { id: ulid(), content };
@@ -759,6 +845,13 @@ export function ThreadView({
         {continuedFrom && (
           <ContinuedFromCard from={continuedFrom} onOpen={(id) => onNavigate(id)} onJoinBack={() => void joinBack()} />
         )}
+        <PinnedList
+          pins={pins}
+          threadId={threadId}
+          titleOf={(id, fallback) => (id === threadId ? thread?.title : threads.find((t) => t.id === id)?.title) || fallback}
+          onShow={showPin}
+          onUnpin={(p) => void unpin(p)}
+        />
         {picking && (
           <MergePicker
             threads={threads}
@@ -890,16 +983,32 @@ export function ThreadView({
       )}
 
       {selection && (
-        <button
-          type="button"
-          className="selection-button"
-          data-testid="branch-button"
+        <div
+          className="selection-actions"
           style={{ top: Math.max(8, selection.rect.top - 44), left: selection.rect.left + selection.rect.width / 2 }}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={branchFromSelection}
         >
-          Ask in a branch
-        </button>
+          <button
+            type="button"
+            className="selection-button"
+            data-testid="branch-button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={branchFromSelection}
+          >
+            Ask in a branch
+          </button>
+          {!thread?.deletedAt && (
+            <button
+              type="button"
+              className="selection-button secondary"
+              data-testid="pin-button"
+              title="Pin: send this passage with every question in this thread until you unpin it"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void pinSelection()}
+            >
+              📌 Pin
+            </button>
+          )}
+        </div>
       )}
     </>
   );

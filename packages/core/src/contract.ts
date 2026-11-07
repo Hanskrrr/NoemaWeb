@@ -281,6 +281,43 @@ export type ContinuedFrom = z.infer<typeof ContinuedFrom>;
 export const SplitOffRequest = z.object({ id: Id, messageId: Id });
 export type SplitOffRequest = z.infer<typeof SplitOffRequest>;
 
+// Pins: passages the learner keeps in front of the AI. A pin belongs to a
+// thread and is sent with every question there and in its side questions,
+// until unpinned. It points at an exact passage, of an answer (or question)
+// revision or of a source version, like a side question does.
+
+const Offset = z.number().int().nonnegative();
+export const Pin = z.object({
+  id: Id,
+  /** The thread it was pinned to (for a side question, it may be a thread it came from). */
+  threadId: Id,
+  exact: z.string(),
+  /** A passage of the conversation: the message, its revision, and the thread it is in. */
+  message: z
+    .object({ threadId: Id, threadTitle: z.string(), messageId: Id, revisionId: Id, start: Offset, end: Offset })
+    .nullable(),
+  /** A passage of a source: its version. */
+  source: z.object({ sourceId: Id, title: z.string(), versionId: Id, start: Offset, end: Offset }).nullable(),
+  createdAt: z.string(),
+});
+export type Pin = z.infer<typeof Pin>;
+
+/** Pin a passage of a message (the revision shown) or of a source version. The id is the client's, so sending twice pins once. */
+export const CreatePinRequest = z
+  .object({
+    id: Id,
+    message: z
+      .object({ messageId: Id, revisionId: Id.optional(), start: Offset, end: z.number().int().positive() })
+      .optional(),
+    source: z.object({ versionId: Id, start: Offset, end: z.number().int().positive() }).optional(),
+  })
+  .refine((b) => Boolean(b.message) !== Boolean(b.source), { message: 'pin a passage of a message or of a source' });
+export type CreatePinRequest = z.infer<typeof CreatePinRequest>;
+export const PinList = z.object({ pins: z.array(Pin) });
+
+/** At most this many passages are pinned where a question is asked (its own and those it inherits). */
+export const MAX_PINS = 12;
+
 export const ThreadDetail = z.object({
   thread: Thread,
   messages: z.array(Message),
@@ -300,6 +337,8 @@ export const ThreadDetail = z.object({
   continuedIn: z.array(Continuation),
   /** Asked about a passage of a source. */
   sourceOrigin: SourceOrigin.nullable(),
+  /** Passages pinned here and in the threads it came from: sent with every question. */
+  pins: z.array(Pin),
 });
 export type ThreadDetail = z.infer<typeof ThreadDetail>;
 
@@ -498,7 +537,7 @@ export const MessageContext = z.object({
   manifest: z.object({
     parts: z.array(
       z.object({
-        kind: z.enum(['system', 'about_me', 'source', 'inherited', 'history', 'origin', 'merged', 'question']),
+        kind: z.enum(['system', 'about_me', 'source', 'pinned', 'inherited', 'history', 'origin', 'merged', 'question']),
         id: z.string().optional(),
         role: z.enum(['user', 'assistant']).optional(),
         tokens: z.number(),

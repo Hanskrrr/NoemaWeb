@@ -12,6 +12,7 @@ import {
   type SourceDetail,
   sourceHeadings,
   type Thread,
+  ulid,
 } from '@noema/core';
 import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
@@ -20,6 +21,7 @@ import { arrive, centre, clearFound } from './found.ts';
 import { dayOf } from './hits.ts';
 import { Markdown, type Slot } from './markdown/Markdown.tsx';
 import { highlight, selectionToSource, sourceToRange } from './markdown/selection.ts';
+import { pinsChanged } from './Pinned.tsx';
 import { askedPassages, headingText, hostOf, markStrength, sourceFamily } from './reading.ts';
 import { DraftView, type SourceDraft } from './ThreadView.tsx';
 
@@ -51,7 +53,10 @@ export function SourceView({
   onAsked,
   onChanged,
   onDeleted,
+  pinTo,
 }: {
+  /** The thread open beside the text: a passage can be pinned to it. */
+  pinTo?: string | undefined;
   sourceId: string;
   /** The version to show; the latest when absent. */
   version?: string | undefined;
@@ -247,6 +252,19 @@ export function SourceView({
       end: anchor.position.end,
       exact: anchor.quote.exact,
     });
+  };
+
+  const pinPassage = async (threadId: string) => {
+    if (!selection || !detail) return;
+    const at = { versionId: detail.version.id, start: selection.start, end: selection.end };
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+    try {
+      await api.pin(threadId, { id: ulid(), source: at });
+      pinsChanged(threadId);
+    } catch (err) {
+      setNotice(errorText(err));
+    }
   };
 
   const showPassage = (start: number, end: number) => {
@@ -596,16 +614,32 @@ export function SourceView({
       </section>
       <div className="conversation">{right}</div>
       {selection && !source.deletedAt && (
-        <button
-          type="button"
-          className="selection-button"
-          data-testid="ask-source"
+        <div
+          className="selection-actions"
           style={{ top: Math.max(8, selection.rect.top - 44), left: selection.rect.left + selection.rect.width / 2 }}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={askAbout}
         >
-          Ask about this
-        </button>
+          <button
+            type="button"
+            className="selection-button"
+            data-testid="ask-source"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={askAbout}
+          >
+            Ask about this
+          </button>
+          {pinTo && (
+            <button
+              type="button"
+              className="selection-button secondary"
+              data-testid="pin-source"
+              title="Pin to the thread beside: send this passage with every question there until you unpin it"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void pinPassage(pinTo)}
+            >
+              📌 Pin to this thread
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

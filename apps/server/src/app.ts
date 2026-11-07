@@ -6,6 +6,7 @@ import {
   AskRequest,
   CreateBranchRequest,
   CreateNoteRequest,
+  CreatePinRequest,
   CreateSourceRequest,
   CreateThreadRequest,
   describeError,
@@ -163,7 +164,21 @@ export function createApp(deps: AppDeps): App {
       outgoing: repo.outgoingOf(thread.id),
       ...repo.continuationOf(thread.id),
       sourceOrigin: repo.sourceOriginOf(thread.id),
+      pins: repo.pinsFor(thread.id),
     });
+  });
+
+  // Pins: passages sent with every question in a thread (and its side questions) until unpinned.
+  router.on('POST', '/api/threads/:id/pins', async (ctx) => {
+    const body = await ctx.body(CreatePinRequest);
+    const at = body.message ? { message: body.message } : { source: body.source as NonNullable<typeof body.source> };
+    const { pin, created } = repo.createPin(ctx.params.id as string, body.id, at);
+    sendJson(ctx.res, created ? 201 : 200, pin);
+  });
+
+  router.on('DELETE', '/api/pins/:id', ({ res, params }) => {
+    if (!repo.deletePin(params.id as string)) throw notFound('pin');
+    sendJson(res, 200, { ok: true });
   });
 
   // Merge this thread into another: a draft (the AI's summary, or the

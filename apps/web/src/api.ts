@@ -8,6 +8,7 @@ import {
   CLIENT_HEADER_VALUE,
   type CreateBranchRequest,
   CreateBranchResponse,
+  type CreatePinRequest,
   DeleteThreadResponse,
   Health,
   ImportResponse,
@@ -28,6 +29,7 @@ import {
   NoteHistory,
   NoteList,
   OpenBranchesResponse,
+  Pin,
   RefetchResponse,
   type SearchOpenedRequest,
   SearchResponse,
@@ -150,6 +152,9 @@ export const api = {
   markdownUrl: (notebookId: string) => `/api/notebooks/${notebookId}/export.md`,
   /** Put a JSON export back, into an empty store. `text` is the file as read. */
   importCopy: (text: string) => call(ImportResponse, 'POST', '/api/import', new RawJson(text)),
+  /** Pin a passage to a thread: sent with every question there until unpinned. */
+  pin: (threadId: string, body: CreatePinRequest) => call(Pin, 'POST', `/api/threads/${threadId}/pins`, body),
+  unpin: (pinId: string) => call(Ok, 'DELETE', `/api/pins/${pinId}`),
   /** Ask the same question again: a new revision of the answer, made the one in use. Idempotent on its id. */
   regenerate: (messageId: string, revisionId: string) =>
     call(MessageResponse, 'POST', `/api/messages/${messageId}/regenerate`, { revisionId }),

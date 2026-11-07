@@ -3234,3 +3234,95 @@ label.button.disabled {
     flex-direction: column;
   }
 }
+
+/* Pinned passages: at the top of a thread, and marked where they are in it. */
+
+::highlight(noema-pins) {
+  text-decoration: underline 2px dotted var(--warn);
+  text-underline-offset: 4px;
+}
+
+.pinned {
+  margin-bottom: 1rem;
+  padding: 0.5rem 0.6rem 0.55rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--warn) 28%, var(--rule));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 5%, var(--sheet));
+}
+
+.pinned-title {
+  margin: 0 0 0.3rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  color: var(--ink-faint);
+}
+
+.pinned ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.pinned li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.5rem;
+  min-width: 0;
+}
+
+.pinned-quote {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 0.95rem;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pinned-quote:not(:disabled):hover {
+  color: var(--accent);
+}
+
+.pinned-quote:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.pinned-from {
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+}
+
+.pinned-remove {
+  margin-left: auto;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* The buttons over a selection. */
+.selection-actions {
+  position: fixed;
+  z-index: 10;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0.3rem;
+}
+
+.selection-actions .selection-button {
+  position: static;
+  transform: none;
+}
+
+.selection-actions button.secondary {
+  background: var(--sheet);
+  color: var(--accent);
+}

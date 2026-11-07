@@ -179,6 +179,12 @@ export class Generations {
         system: SYSTEM_PROMPT,
         aboutMe: notebook?.aboutMe ?? '',
         ...(reading ? { source: { title: reading.title, url: reading.url, section: reading.section } } : {}),
+        pinned: this.repo.pinsFor(args.threadId).map((p) => ({
+          id: p.id,
+          quote: p.exact,
+          from: p.source ? ('source' as const) : ('conversation' as const),
+          title: p.source ? p.source.title : (p.message?.threadTitle ?? ''),
+        })),
         inherited: this.repo.inheritedHistory(args.threadId),
         ...(origin
           ? { origin: { quote: origin.anchor.exact } }

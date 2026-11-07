@@ -24,14 +24,13 @@ Principles the code keeps, from that thinking:
 ## The pieces
 
 ```
- browser tab                     this computer only (127.0.0.1)                  the model provider
-┌───────────────┐   HTTP/JSON    ┌──────────────────────────────────┐   HTTPS     ┌──────────────────┐
-│ apps/web      │ ─────────────▶ │ apps/server                      │ ──────────▶ │ DeepSeek, or any │
-│ React SPA     │ ◀───────────── │ node:http routes                 │ ◀────────── │ OpenAI-compatible│
-│               │   SSE stream   │ generation loop, jobs            │  streaming  │ endpoint         │
-└───────────────┘                │ store: node:sqlite, data/noema.db│             └──────────────────┘
-        │                        └──────────────────────────────────┘
-        └──────── both import packages/core: ids, anchors, context, the API contract (Zod) ────────┘
+ browser tab           this computer only (127.0.0.1)                model provider
+┌─────────────┐  HTTP  ┌───────────────────────────────┐   HTTPS   ┌─────────────────┐
+│ apps/web    │ ─────▶ │ apps/server                   │ ────────▶ │ DeepSeek, or    │
+│ React app   │ ◀───── │ routes, generation, jobs      │ ◀──────── │ any OpenAI-     │
+│             │  SSE   │ store: data/noema.db (SQLite) │ streaming │ compatible API  │
+└─────────────┘        └───────────────────────────────┘           └─────────────────┘
+       └── both import packages/core: ids, anchors, context, the API contract ──┘
 ```
 
 - **`packages/core`** is pure TypeScript: no I/O, no Node or DOM APIs. Anything that must never be wrong lives here with tests: ids, anchors, context assembly, the HTTP contract, HTML-to-Markdown, search text.

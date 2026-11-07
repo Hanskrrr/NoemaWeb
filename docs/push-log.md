@@ -4,7 +4,7 @@ How each push to GitHub (`Hanskrrr/NoemaWeb`) was made, so the next one can be m
 
 ## Next push: `notebook-features`, guides for collaborators
 
-- **What.** Two commits on top of `1bf0921`: guides for collaborators (`docs/architecture.md`, `docs/codebase.md`, `CONTRIBUTING.md`, a fuller `docs/status.md`, links from the README and AGENTS.md), and this log. Docs only.
+- **What.** Three commits on top of `1bf0921`: guides for collaborators (`docs/architecture.md`, `docs/codebase.md`, `CONTRIBUTING.md`, a fuller `docs/status.md`, links from the README and AGENTS.md), and this log. Docs only.
 - **Checks before pushing.** `node --test`: 185 pass. Every relative link in the new docs resolves. No notebook content in them.
 - **How.** A plain push from the Mac; no force needed:
 

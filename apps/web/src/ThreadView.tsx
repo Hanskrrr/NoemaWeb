@@ -211,8 +211,11 @@ export function ThreadView({
   beside = false,
   threads,
   notes = [],
+  onShowContext,
 }: {
   threadId: string;
+  /** Show what the model was sent for an answer. */
+  onShowContext?: (messageId: string) => void;
   /** Every note: those made from this thread are named under its title. */
   notes?: NoteSummary[];
   /** Back to the passage of the source this thread was asked about. */
@@ -709,6 +712,7 @@ export function ThreadView({
                 onOpenSettings={onOpenSettings}
                 onOpenBranch={(id) => onNavigate(id)}
                 onSplitOff={canCut && cutting !== m.id ? () => setCutting(m.id) : undefined}
+                onShowContext={onShowContext ? () => onShowContext(m.id) : undefined}
                 {...(inline.length > 0 ? { slots: inline } : {})}
               />
               {after.map(card)}

@@ -495,6 +495,13 @@ export function createApp(deps: AppDeps): App {
     sendJson(res, 200, { ok: true });
   });
 
+  // What the model was sent for this answer, word for word when it was recorded.
+  router.on('GET', '/api/messages/:id/context', ({ res, params }) => {
+    const context = repo.contextOf(params.id as string);
+    if (!context) throw notFound('context');
+    sendJson(res, 200, context);
+  });
+
   router.on('GET', '/api/messages/:id/events', ({ res, params }) => {
     const stored = repo.getMessage(params.id as string);
     if (!stored) throw notFound('message');

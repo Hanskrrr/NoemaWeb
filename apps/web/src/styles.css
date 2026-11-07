@@ -2977,3 +2977,140 @@ button.cite.current {
 .branch-link.note-chip {
   border-style: dashed;
 }
+
+/* About you, and what was sent ------------------------------------------- */
+
+.about-open {
+  font-size: 0.85rem;
+  color: var(--ink-faint);
+}
+
+.about-open:hover,
+.about-open:focus-visible {
+  color: var(--accent);
+}
+
+.about-dialog textarea {
+  width: 100%;
+  font: 0.95rem / 1.55 var(--sans);
+  color: var(--ink);
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem;
+  resize: vertical;
+  min-height: 9rem;
+}
+
+.form-count {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.context-dialog {
+  width: min(48rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
+}
+
+.context-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.context-top h2 {
+  margin: 0;
+}
+
+.context-top button {
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.context-meta,
+.context-note {
+  margin: 0.4rem 0 0.8rem;
+  font-size: 0.86rem;
+  color: var(--ink-faint);
+}
+
+.context-note {
+  color: var(--ink-soft);
+}
+
+.context-parts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.context-part {
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--rule);
+  border-radius: 8px;
+  background: var(--sheet);
+}
+
+.context-part.kind-about_me,
+.context-part.kind-source {
+  border-left-color: var(--accent);
+}
+
+.context-part.kind-question {
+  border-left-color: var(--ink-soft);
+}
+
+.context-part summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0.8rem;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.context-kind {
+  flex: 1;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+.context-tokens {
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.context-text {
+  margin: 0;
+  padding: 0.2rem 0.9rem 0.8rem;
+  max-height: 22rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 0.86rem / 1.55 var(--sans);
+  color: var(--ink-soft);
+}
+
+.context-part details > button {
+  margin: 0 0.9rem 0.7rem;
+}
+
+.context-old {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--ink-soft);
+}
+
+.context-part details > button.quiet.inline {
+  font-size: 0.86rem;
+}

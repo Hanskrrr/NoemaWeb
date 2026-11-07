@@ -9,6 +9,8 @@ export interface MessageActions {
   onOpenBranch: (threadId: string) => void;
   /** On a question after the first: start a new thread from it. */
   onSplitOff?: (() => void) | undefined;
+  /** On an answer: show what the model was sent for it. */
+  onShowContext?: (() => void) | undefined;
 }
 
 export function MessageView({
@@ -18,9 +20,11 @@ export function MessageView({
   onOpenSettings,
   onOpenBranch,
   onSplitOff,
+  onShowContext,
   slots,
 }: { message: Message; branches: BranchSummary[]; slots?: Slot[] } & MessageActions) {
   const { role, status } = message;
+  const sent = role === 'assistant' && status !== 'pending' && onShowContext;
   return (
     <article className={`message message-${role}`} data-testid="message" data-role={role} data-status={status}>
       <div className="message-body" data-message-id={message.id}>
@@ -37,6 +41,19 @@ export function MessageView({
         {role === 'assistant' && status === 'streaming' && <span className="caret" aria-hidden />}
       </div>
       <StatusLine message={message} onStop={onStop} onOpenSettings={onOpenSettings} />
+      {sent && (
+        <div className="message-actions">
+          <button
+            type="button"
+            className="quiet"
+            onClick={onShowContext}
+            title="See exactly what the AI was sent for this answer"
+            data-testid="show-context"
+          >
+            What was sent
+          </button>
+        </div>
+      )}
       {onSplitOff && (
         <div className="message-actions">
           <button

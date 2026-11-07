@@ -193,6 +193,7 @@ export class Generations {
         provider: provider.name,
         model: provider.model,
         manifest,
+        request: messages,
       });
       const stream = provider.stream({
         messages,

@@ -479,6 +479,38 @@ export const NoteRevision = z.object({
 });
 export const NoteHistory = z.object({ revisions: z.array(NoteRevision) });
 
+/** What was sent to the model for one answer (its latest call): the manifest, and the exact messages when recorded. */
+export const MessageContext = z.object({
+  messageId: Id,
+  revisionId: Id,
+  provider: z.string(),
+  model: z.string(),
+  startedAt: z.string(),
+  finishReason: z.string().nullable(),
+  usage: z.object({
+    promptTokens: z.number().int().nullable(),
+    completionTokens: z.number().int().nullable(),
+    cacheHitTokens: z.number().int().nullable(),
+    cacheMissTokens: z.number().int().nullable(),
+  }),
+  manifest: z.object({
+    parts: z.array(
+      z.object({
+        kind: z.enum(['system', 'about_me', 'source', 'inherited', 'history', 'origin', 'merged', 'question']),
+        id: z.string().optional(),
+        role: z.enum(['user', 'assistant']).optional(),
+        tokens: z.number(),
+      }),
+    ),
+    omitted: z.array(z.object({ id: z.string(), tokens: z.number(), reason: z.literal('budget') })),
+    estimatedTokens: z.number(),
+    budgetTokens: z.number(),
+  }),
+  /** Null for answers from before the exact messages were recorded. */
+  request: z.array(z.object({ role: z.enum(['system', 'user', 'assistant']), content: z.string() })).nullable(),
+});
+export type MessageContext = z.infer<typeof MessageContext>;
+
 export const UpdateNotebookRequest = z
   .object({ title: z.string().min(1).max(200), aboutMe: z.string().max(4000) })
   .partial()

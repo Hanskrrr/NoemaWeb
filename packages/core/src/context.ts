@@ -226,3 +226,103 @@ export function assembleContext(input: ContextInput): AssembledContext {
 
   return { messages, manifest: { parts, omitted, estimatedTokens: used, budgetTokens: input.budgetTokens } };
 }
+
+/** One part of what was sent, as the learner is shown it: its text exactly as sent. */
+export interface SentPart {
+  kind: 'instructions' | 'about_me' | 'source' | 'inherited' | 'history' | 'question';
+  role: Role;
+  text: string;
+  /** The estimate made when it was sent. */
+  tokens: number;
+  /** For a turn of the conversation: the message. */
+  id?: string;
+  /** Threads merged in, carried by this turn. */
+  merged: number;
+  /** The question carries the passage it is about. */
+  withPassage: boolean;
+}
+
+/** A manifest's part as it is read back (from the database or over HTTP). */
+export interface SentManifestPart {
+  kind: ManifestPart['kind'];
+  id?: string | undefined;
+  role?: 'user' | 'assistant' | undefined;
+  tokens: number;
+}
+
+const ABOUT_HEADING = '\n\n## About the learner\n';
+const READING_HEADING = '\n\n## What the learner is reading';
+
+/**
+ * What was sent (`request`, the exact messages), split into the parts the
+ * manifest names: the system message into instructions, About me and the
+ * source; then each turn of the conversation; then the question. Joining
+ * the parts' texts gives back the messages exactly.
+ */
+export function describeSent(manifest: { parts: SentManifestPart[] }, request: ChatMessage[]): SentPart[] {
+  const tokensOf = (kind: ManifestPart['kind']) =>
+    manifest.parts.filter((p) => p.kind === kind).reduce((n, p) => n + p.tokens, 0);
+  const has = (kind: ManifestPart['kind']) => manifest.parts.some((p) => p.kind === kind);
+  const out: SentPart[] = [];
+  const [first, ...rest] = request;
+  let turns = request;
+  if (first?.role === 'system') {
+    turns = rest;
+    let text = first.content;
+    let source: string | null = null;
+    let about: string | null = null;
+    // About me follows the instructions; the source comes last (so its heading is the last one: About me may hold anything).
+    const a = has('about_me') ? text.indexOf(ABOUT_HEADING) : -1;
+    const r = has('source') ? text.lastIndexOf(READING_HEADING) : -1;
+    if (r >= 0) {
+      source = text.slice(r);
+      text = text.slice(0, r);
+    }
+    if (a >= 0) {
+      about = text.slice(a);
+      text = text.slice(0, a);
+    }
+    const base = { role: 'system' as const, merged: 0, withPassage: false };
+    out.push({ ...base, kind: 'instructions', text, tokens: tokensOf('system') });
+    if (about !== null) out.push({ ...base, kind: 'about_me', text: about, tokens: tokensOf('about_me') });
+    if (source !== null) out.push({ ...base, kind: 'source', text: source, tokens: tokensOf('source') });
+  }
+
+  // The turns of the conversation, in the manifest's order; merged parts belong to the turn after them.
+  const conversation = turns.slice(0, -1);
+  const kinds: Array<{ kind: 'history' | 'inherited'; id: string | undefined; merged: number; tokens: number }> = [];
+  let pending = { merged: 0, tokens: 0 };
+  for (const p of manifest.parts) {
+    if (p.kind === 'merged') {
+      pending = { merged: pending.merged + 1, tokens: pending.tokens + p.tokens };
+    } else if (p.kind === 'history' || p.kind === 'inherited') {
+      kinds.push({ kind: p.kind, id: p.id, merged: pending.merged, tokens: p.tokens + pending.tokens });
+      pending = { merged: 0, tokens: 0 };
+    }
+  }
+  conversation.forEach((m, i) => {
+    const k = kinds[i];
+    out.push({
+      kind: k?.kind ?? 'history',
+      role: m.role,
+      text: m.content,
+      tokens: k?.tokens ?? estimateTokens(m.content),
+      ...(k?.id ? { id: k.id } : {}),
+      merged: k?.merged ?? 0,
+      withPassage: false,
+    });
+  });
+  const question = turns.at(-1);
+  if (question) {
+    out.push({
+      kind: 'question',
+      role: question.role,
+      text: question.content,
+      tokens: tokensOf('question') + tokensOf('origin') + pending.tokens,
+      id: manifest.parts.find((p) => p.kind === 'question')?.id ?? '',
+      merged: pending.merged,
+      withPassage: has('origin'),
+    });
+  }
+  return out;
+}

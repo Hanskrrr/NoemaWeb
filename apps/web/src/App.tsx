@@ -16,8 +16,10 @@ import {
   ulid,
 } from '@noema/core';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
+import { AboutYouDialog } from './AboutYou.tsx';
 import { AddSourceDialog } from './AddSource.tsx';
 import { api } from './api.ts';
+import { ContextDialog } from './ContextView.tsx';
 import { expectFound } from './found.ts';
 import { MapView } from './MapView.tsx';
 import { ConnectScreen, ModelDialog } from './ModelSettings.tsx';
@@ -90,6 +92,8 @@ function NotebookView({
   const [sources, setSources] = useState<Source[]>([]);
   const [trash, setTrash] = useState<Trash>({ threads: [], notes: [], sources: [] });
   const [adding, setAdding] = useState(false);
+  const [contextFor, setContextFor] = useState<string | null>(null);
+  const [aboutOpen, setAboutOpen] = useState(false);
   /** One line at the bottom after something went to the Trash, with Undo. */
   const [toast, setToast] = useState<{ text: string; undo: () => void } | null>(null);
   const [draft, setDraft] = useState<BranchDraft | null>(null);
@@ -325,6 +329,7 @@ function NotebookView({
         onBackToSource={backToSource}
         beside={beside !== null}
         notes={notes}
+        onShowContext={setContextFor}
         onDeleted={(t, count) => {
           void refresh();
           const sides = count - 1;
@@ -449,6 +454,15 @@ function NotebookView({
         </button>
         <button
           type="button"
+          className="quiet about-open"
+          onClick={() => setAboutOpen(true)}
+          title="What the AI is told about you with every question"
+          data-testid="about-open"
+        >
+          About you
+        </button>
+        <button
+          type="button"
           className="model"
           onClick={() => setSettingsOpen(true)}
           title="Model settings"
@@ -473,6 +487,18 @@ function NotebookView({
           onOpenThread={(id) => open(id)}
         />
       )}
+      {contextFor && (
+        <ContextDialog
+          key={contextFor}
+          messageId={contextFor}
+          onClose={() => setContextFor(null)}
+          onEditAboutMe={() => {
+            setContextFor(null);
+            setAboutOpen(true);
+          }}
+        />
+      )}
+      {aboutOpen && <AboutYouDialog notebookId={notebook.id} onClose={() => setAboutOpen(false)} />}
       {adding && (
         <AddSourceDialog
           notebookId={notebook.id}

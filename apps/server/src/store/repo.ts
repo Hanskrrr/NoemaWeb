@@ -6,6 +6,7 @@ import type { SQLInputValue } from 'node:sqlite';
 import {
   type AnchorRef,
   type BranchSummary,
+  type ChatMessage,
   type ContextManifest,
   type Continuation,
   type ContinuedFrom,
@@ -21,6 +22,7 @@ import {
   type Merge,
   type MergedText,
   type Message,
+  type MessageContext,
   type MessageError,
   type MessageStatus,
   makeSnippet,
@@ -206,6 +208,8 @@ export interface ModelCallStart {
   provider: string;
   model: string;
   manifest: ContextManifest;
+  /** The exact messages sent. */
+  request: ChatMessage[];
 }
 
 export interface ModelCallEnd {
@@ -2240,9 +2244,17 @@ export class Repo {
     const id = ulid();
     this.db.sql
       .prepare(
-        'INSERT INTO model_call (id, revision_id, provider, model, started_at, manifest) VALUES (?, ?, ?, ?, ?, ?)',
+        'INSERT INTO model_call (id, revision_id, provider, model, started_at, manifest, request) VALUES (?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(id, start.revisionId, start.provider, start.model, now(), JSON.stringify(start.manifest));
+      .run(
+        id,
+        start.revisionId,
+        start.provider,
+        start.model,
+        now(),
+        JSON.stringify(start.manifest),
+        JSON.stringify(start.request),
+      );
     return id;
   }
 
@@ -2264,6 +2276,33 @@ export class Repo {
         end.errorKind ?? null,
         id,
       );
+  }
+
+  /** What was sent for an answer: its latest model call, with the exact messages when they were recorded. */
+  contextOf(messageId: string): MessageContext | null {
+    const message = this.getMessage(messageId);
+    if (!message || message.role !== 'assistant') return null;
+    const row = this.db.sql
+      .prepare('SELECT * FROM model_call WHERE revision_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1')
+      .get(message.revisionId) as Row | undefined;
+    if (!row) return null;
+    const num = (v: unknown) => (typeof v === 'number' ? v : null);
+    return {
+      messageId,
+      revisionId: message.revisionId,
+      provider: row.provider as string,
+      model: row.model as string,
+      startedAt: row.started_at as string,
+      finishReason: (row.finish_reason as string | null) ?? null,
+      usage: {
+        promptTokens: num(row.prompt_tokens),
+        completionTokens: num(row.completion_tokens),
+        cacheHitTokens: num(row.cache_hit_tokens),
+        cacheMissTokens: num(row.cache_miss_tokens),
+      },
+      manifest: JSON.parse(row.manifest as string),
+      request: row.request ? JSON.parse(row.request as string) : null,
+    };
   }
 
   modelCallsFor(revisionId: string): Row[] {

@@ -1,10 +1,15 @@
 # Noema
 
-A learning notebook for studying hard material with an AI. Ask in a normal chat; branch a side question from the exact passage that raised it; come back to exactly where you were; find any exchange again days later. Nothing is lost when a tab closes or the server restarts.
+A learning notebook for studying hard material with an AI, on your own computer.
 
-This repository is the working prototype (v0.1). The product thinking (PARADIGM, interviews, the prototype brief) lives in the `NoemaLearningNote` workspace, not here.
+- Ask in a normal chat. Ask a side question about any passage, and come back to exactly where you were.
+- Read a web page, an arXiv paper or pasted text beside the conversation, and ask about any passage of it.
+- Find any question, answer, note or passage again with ⌘K.
+- Turn a thread into a study note you edit block by block; its citations open the exchange they came from.
+- See exactly what the AI was sent for any answer, and tell it about yourself once.
+- Everything stays in one file on your computer, and nothing is lost when a tab closes or the server restarts.
 
-**Status: M3 (sources) and M4 (find again) done; M5 (context you can see, export) under way.** Under any answer, What was sent shows exactly what the AI received, part by part; About you is sent with every question. Add something to read, a web page (an arXiv paper is read from its HTML version) or pasted text, and it opens in a reading pane with the conversation beside it: select a passage to ask about it, and Back returns to that passage in the text. Passages you asked about are marked in the text and the margin, darker where you asked more; a page read again keeps what you asked with the version you asked it about. Threads in a sidebar with titles the model writes and you can change; ask about any selected passage in a side branch that keeps its exact origin, go Back to that passage, make the branch its own thread, or merge what it found back in (nothing already said is rewritten). A thread that drifted can be cut at a question into a new thread of its own, and joined back. Search everything with ⌘K: questions, answers, side questions, notes and sources, in English or Chinese; a hit opens the exact message, note block or passage with the words marked. Noema reopens where you were and names the side questions you never came back from. Every thread has a Map of what you went through, each exchange labelled by what it established, and long threads and notes a catalog on the right; both jump to the exact spot. The sidebar shows one list at a time, threads, sources or notes, picked on a rail of icons, and follows what is open; side questions and notes sit under their thread and fold away, and threads that became their own are listed right after the one they came from. Deleted threads, notes and sources go to the Trash, with Undo and Restore. Rewrite a thread as a study note made of blocks you edit in place, one paragraph, heading or list each: write or ask the AI anywhere (a sentence or a whole section), accept or discard its suggestions, split a note in two or merge two; a citation opens the exchange it came from beside the note. Answers stream and survive reloads and crashes, with tables, math and code; the model is connected with your own key. See [the latest handoff](docs/handoffs/2026-11-06-what-was-sent.md).
+This is a working prototype. Where it stands and what comes next: [docs/status.md](docs/status.md).
 
 ## Run it
 
@@ -51,6 +56,8 @@ apps/web          Vite + React: the shell, the offset-preserving Markdown render
 e2e               Playwright specs, always against the fake model
 docs/adr          engineering decisions, one page each
 docs/handoffs     one note per build session
+docs/status.md    what is built, milestone by milestone, and what is next
+docs/push-log.md  how each push was made
 ```
 
 Rules for working in this repo, for people and agents: [AGENTS.md](AGENTS.md).

@@ -51,3 +51,4 @@ Anything outside the fence goes into `ideas.md`, not into code.
 - Record engineering decisions in `docs/adr/` (one page: context, decision, consequences, how to reverse).
 - End every working session with a handoff in `docs/handoffs/YYYY-MM-DD-topic.md`: what changed, what was verified and how, what wasn't, what's next.
 - Commit in small steps with conventional messages. Push and open pull requests only when the founder asks.
+- Log every push in `docs/push-log.md`: what was pushed, the checks before it, how it was pushed, and the result.

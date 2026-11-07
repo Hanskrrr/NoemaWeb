@@ -15,11 +15,16 @@ import { codeRegion, nodeRange, parseMarkdown } from './parse.ts';
 /**
  * Citations: in a note, [E3] labels become buttons that open the exact
  * message they cite. Notes provide this; in chat there is none and [E3] is
- * just text.
+ * just text. A note opens the exchange beside it (`open`); a merge card goes
+ * to it (`go`).
  */
 export interface Cites {
   refs: CiteRefs;
   go: (threadId: string, messageId: string) => void;
+  /** Open the exchange beside the text instead, given the citation and the button clicked. */
+  open?: (label: string, button: HTMLElement) => void;
+  /** The citation open beside the text, if any. */
+  current?: string | undefined;
 }
 export const CiteContext = createContext<Cites | null>(null);
 
@@ -37,10 +42,14 @@ function withCites(key: string | number, text: string, cites: Cites): ReactNode 
             // biome-ignore lint/suspicious/noArrayIndexKey: parts of one fixed string
             key={i}
             type="button"
-            className="cite"
-            onClick={() => cites.go(ref.threadId, ref.messageId)}
-            title="Open the exchange this comes from"
+            className={`cite${cites.current === part.label ? ' current' : ''}`}
+            onClick={(e) =>
+              cites.open ? cites.open(part.label, e.currentTarget) : cites.go(ref.threadId, ref.messageId)
+            }
+            title={cites.open ? 'Show the exchange this comes from, beside the note' : 'Open the exchange this comes from'}
+            aria-pressed={cites.open ? cites.current === part.label : undefined}
             data-testid="cite"
+            data-label={part.label}
           >
             {part.label}
           </button>

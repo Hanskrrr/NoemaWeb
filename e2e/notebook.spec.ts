@@ -138,7 +138,10 @@ test('a side question becomes its own thread, and can be put back', async ({ pag
   await expect(nested).toContainText('↳');
 });
 
-test('rewrite as note: blocks you edit in place, with citations that open the exchange', async ({ page, request }) => {
+test('rewrite as note: blocks you edit in place, with citations that open the exchange beside it', async ({
+  page,
+  request,
+}) => {
   const [parent] = await branchOnOffline(page);
   await page.locator(`[data-testid=thread-link][data-thread-id="${parent}"]`).click();
   await expect(page.getByTestId('rewrite')).toBeEnabled();
@@ -154,16 +157,31 @@ test('rewrite as note: blocks you edit in place, with citations that open the ex
   await expect(note.getByTestId('cite')).toHaveCount(2);
   const noteUrl = page.url();
   const id = noteUrl.split('/').at(-1);
-  const link = page.locator(`[data-testid=note-link][data-note-id="${id}"]`);
+  // In the sidebar it sits under the thread it was made from.
+  const link = page
+    .locator(`li:has(> .thread-row [data-thread-id="${parent}"])`)
+    .locator(`[data-testid=thread-note][data-note-id="${id}"]`);
   await expect(link).toContainText('Study note');
 
-  // [E1] is the first answer in the parent.
+  // [E1] is the first answer in the parent: shown beside the note, which stays.
   await note.getByTestId('cite').first().click();
+  const pane = page.getByTestId('ref-pane');
+  await expect(pane).toHaveAttribute('data-label', 'E1');
+  await expect(pane.getByTestId('ref-question')).toContainText('Tell me about optimisation');
+  await expect(pane.getByTestId('ref-answer')).toContainText('You asked: "Tell me about optimisation"');
+  await expect(page).toHaveURL(new RegExp(`#/note/${id}/e/E1/in/[0-9A-Z]{26}$`));
+  await expect(note).toBeVisible();
+  // Opening the thread goes to the exact answer; the browser's Back comes back to the note, the exchange still beside it.
+  await pane.getByTestId('ref-open').click();
   await expect(page).toHaveURL(new RegExp(`#/t/${parent}/m/[0-9A-Z]{26}$`));
   const flashed = page.locator('[data-testid=message].flash');
   await expect(flashed).toHaveAttribute('data-role', 'assistant');
   await expect(flashed).toContainText('You asked: "Tell me about optimisation"');
-  await page.goto(noteUrl);
+  await page.goBack();
+  await expect(page.getByTestId('ref-pane')).toHaveAttribute('data-label', 'E1');
+  await page.getByTestId('ref-close').click();
+  await expect(page.getByTestId('ref-pane')).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`#/note/${id}$`));
 
   // Click a block to edit it right there: plain Markdown with plain [E1] labels.
   await blocks.first().locator('.nblock-body').click({ position: { x: 30, y: 10 } });
@@ -176,8 +194,10 @@ test('rewrite as note: blocks you edit in place, with citations that open the ex
   await expect(blocks.first()).toHaveAttribute('data-author', 'ai+user');
   await expect(page.getByTestId('note-author')).toHaveText('Written by AI and you');
   await blocks.first().getByTestId('cite').nth(1).click();
-  await expect(page.locator('[data-testid=message].flash')).toContainText('Why is it offline?');
-  await page.goto(noteUrl);
+  await expect(page.getByTestId('ref-question')).toContainText('Why is it offline?');
+  // A side question shows the passage it was asked about.
+  await expect(page.getByTestId('ref-passage')).toContainText('offline');
+  await page.getByTestId('ref-close').click();
 
   // Escape leaves a block as it was.
   await blocks.nth(1).hover();

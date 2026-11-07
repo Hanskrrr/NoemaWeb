@@ -3,16 +3,18 @@
 // Click a block to edit it; hover between blocks to write a new one or ask
 // the AI for one. The AI never changes the note by itself: what it writes
 // arrives as a suggestion under the block, to replace, discard or try again.
-// Citations ([E3]) open the exchange they came from. Every change is kept
-// as a version on the server.
+// Citations ([E3]) open the exchange they came from beside the note, which
+// stays where it is. Every change is kept as a version on the server.
 
 import { headingLevel, type Note, type NoteBlock, type NoteSummary, plainText, sectionOf, ulid } from '@noema/core';
 import { type KeyboardEvent, type MouseEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
+import { citationOrder } from './citations.ts';
 import { EditableTitle } from './EditableTitle.tsx';
 import { arrive, clearFound } from './found.ts';
 import { Outline, type OutlineItem, shortLabel } from './Outline.tsx';
 import { CiteContext, Markdown } from './markdown/Markdown.tsx';
+import { RefPane } from './RefPane.tsx';
 
 const AUTHOR: Record<Note['author'], string> = {
   ai: 'Written by AI from the thread',
@@ -99,8 +101,17 @@ export function NoteView({
   notes,
   onChanged,
   onDeleted,
+  openRef,
+  refIn,
+  onRef,
 }: {
   noteId: string;
+  /** The citation whose exchange is open beside the note ([E2]). */
+  openRef?: string | undefined;
+  /** The block it was cited in: brought back into view when coming back to the note. */
+  refIn?: string | undefined;
+  /** Open the exchange of a citation beside the note (null: close it), cited in this block. */
+  onRef: (label: string | null, blockId?: string) => void;
   /** Bring it back from the Trash. */
   onRestore?: (() => void) | undefined;
   /** Open at this block (from search): scrolled to, flashed, the words searched for marked. */
@@ -187,12 +198,38 @@ export function NoteView({
   }, [soughtBlock, note]);
   useEffect(() => () => clearFound(), []);
 
+  // Coming back to the note (from the thread a citation opened): the block it was cited in.
+  const returned = useRef(false);
+  useEffect(() => {
+    if (soughtBlock || !refIn || returned.current || !note) return;
+    const el = document.querySelector(`[data-block-id="${refIn}"]`);
+    if (!el) return;
+    returned.current = true;
+    el.scrollIntoView({ block: 'center' });
+  }, [soughtBlock, refIn, note]);
+  // The pane narrows the note: keep the citation just clicked in view.
+  useLayoutEffect(() => {
+    if (!openRef) return;
+    const scope = refIn ? document.querySelector(`[data-block-id="${refIn}"]`) : document;
+    scope?.querySelector(`[data-testid=cite][data-label="${openRef}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [openRef, refIn]);
+
   if (error && !note) return <main className="thread note-page">{error}</main>;
   if (!note) return <main className="thread note-page" aria-busy />;
   const writing = note.status === 'generating';
   const trashed = note.deletedAt !== null;
   const blocks = note.blocks;
   const catalog = catalogOf(blocks);
+  const cited = openRef && openRef in note.refs ? openRef : undefined;
+  const cites = {
+    refs: note.refs,
+    go: onCite,
+    open: (label: string, button: HTMLElement) =>
+      label === cited
+        ? onRef(null)
+        : onRef(label, button.closest('[data-block-id]')?.getAttribute('data-block-id') ?? undefined),
+    current: cited,
+  };
 
   const save = async (e: Editing) => {
     setEditing(null);
@@ -319,209 +356,221 @@ export function NoteView({
   };
 
   return (
-    <main className="thread note-page" data-testid="note" data-status={note.status}>
-      <header className="note-head">
-        <p className="map-kicker">Note</p>
-        <EditableTitle
-          title={note.title}
-          onRename={(title) => change(() => api.renameNote(note.id, title))}
-          label="Note title"
-          testId="note-rename"
-          inputTestId="note-title-input"
-        />
-        <p className="note-meta">
-          <span className={`note-author author-${note.author.replace('+', '-')}`} data-testid="note-author">
-            {AUTHOR[note.author]}
-          </span>
-          {note.revision > 0 && <span> · version {note.revision}</span>}
-          {note.threadId && (
-            <>
-              {' · '}
-              <button type="button" className="quiet inline" onClick={() => onOpenThread(note.threadId as string)}>
-                open the thread
-              </button>
-            </>
-          )}
-          {' · '}
-          <button
-            type="button"
-            className="quiet inline"
-            onClick={() => setMerging(merging ? null : { from: null })}
-            data-testid="note-merge"
-          >
-            merge a note in
-          </button>
-          {' · '}
-          {confirmDelete ? (
-            <span className="confirm">
-              {note.threadId ? 'Delete this note? The thread stays.' : 'Delete this note?'}
-              <button
-                type="button"
-                className="danger"
-                onClick={() =>
-                  void api.deleteNote(note.id).then(onDeleted, (err: unknown) => setError(errorText(err)))
-                }
-                data-testid="note-delete-confirm"
-              >
-                Delete
-              </button>
-              <button type="button" className="quiet" onClick={() => setConfirmDelete(false)}>
-                Keep
-              </button>
+    <div className={`note-layout${cited ? ' with-ref' : ''}`}>
+      <main className="thread note-page" data-testid="note" data-status={note.status}>
+        <header className="note-head">
+          <p className="map-kicker">Note</p>
+          <EditableTitle
+            title={note.title}
+            onRename={(title) => change(() => api.renameNote(note.id, title))}
+            label="Note title"
+            testId="note-rename"
+            inputTestId="note-title-input"
+          />
+          <p className="note-meta">
+            <span className={`note-author author-${note.author.replace('+', '-')}`} data-testid="note-author">
+              {AUTHOR[note.author]}
             </span>
-          ) : (
-            <button type="button" className="quiet inline faint" onClick={() => setConfirmDelete(true)} data-testid="note-delete">
-              delete
-            </button>
-          )}
-        </p>
-        <p className="note-legend">
-          <span className="legend-label">Who wrote each block:</span>
-          <span className="legend-ai">AI</span>
-          <span className="legend-mixed">AI, edited by you</span>
-          <span className="legend-user">you</span>
-        </p>
-      </header>
-
-      {merging && (
-        <section className="askbox merge-picker" data-testid="note-merge-picker">
-          {merging.from ? (
-            <div className="askbox-row confirm-row">
-              <span>
-                Move all blocks of “{merging.from.title}” to the end of this note, and remove “{merging.from.title}”?
-              </span>
-              <button
-                type="button"
-                onClick={() => merging.from && void mergeIn(merging.from)}
-                data-testid="note-merge-confirm"
-              >
-                Merge
-              </button>
-              <button type="button" className="quiet" onClick={() => setMerging(null)}>
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <>
-              <p className="merge-explain">Bring which note into this one? Its citations keep working.</p>
-              <ul className="merge-options">
-                {notes
-                  .filter((n) => n.id !== note.id && n.status !== 'generating')
-                  .map((n) => (
-                    <li key={n.id}>
-                      <button type="button" onClick={() => setMerging({ from: n })} data-testid="note-merge-option">
-                        {n.title || 'Untitled'}
-                      </button>
-                    </li>
-                  ))}
-                {notes.filter((n) => n.id !== note.id).length === 0 && <li className="map-empty">No other note.</li>}
-              </ul>
-            </>
-          )}
-        </section>
-      )}
-      {error && (
-        <p className="status status-bad" role="alert">
-          {error}
-        </p>
-      )}
-      {note.status === 'failed' && (
-        <p className="status status-bad" role="alert">
-          {note.error ?? 'The note could not be written.'}
-        </p>
-      )}
-
-      {trashed && (
-        <div className="in-trash" role="status" data-testid="in-trash">
-          This note is in the Trash.
-          <button
-            type="button"
-            onClick={() =>
-              void api.restoreNote(note.id).then((n) => {
-                setNote(n);
-                onRestore?.();
-              }, (err: unknown) => setError(errorText(err)))
-            }
-            data-testid="restore"
-          >
-            Restore
-          </button>
-        </div>
-      )}
-      <CiteContext.Provider value={{ refs: note.refs, go: onCite }}>
-        {trashed ? (
-          <article className="note-body message-assistant">
-            <div className="message-body">
-              <Markdown source={note.content} />
-            </div>
-          </article>
-        ) : writing ? (
-          <article className="note-body message-assistant">
-            <div className="message-body">
-              <Markdown source={note.content} />
-              <span className="thinking">
-                {note.content ? <span className="caret" aria-hidden /> : 'Writing the note…'}
-              </span>
-            </div>
-          </article>
-        ) : (
-          <div className="blocks" data-testid="blocks">
-            {blocks.length === 0 && !editing && !asking && (
-              <p className="blocks-empty">An empty note. Write the first block, or ask the AI for one.</p>
+            {note.revision > 0 && <span> · version {note.revision}</span>}
+            {note.threadId && (
+              <>
+                {' · '}
+                <button type="button" className="quiet inline" onClick={() => onOpenThread(note.threadId as string)}>
+                  open the thread
+                </button>
+              </>
             )}
-            {blocks.map((block, i) => (
-              <div key={block.id} className="block-slot">
-                {gap(i === 0 ? null : (blocks[i - 1]?.id as string))}
-                <BlockView
-                  block={block}
-                  first={i === 0}
-                  last={i === blocks.length - 1}
-                  editing={editing && !editing.isNew && editing.id === block.id ? editing : null}
-                  menuOpen={menu === block.id}
-                  hasThread={note.threadId !== null}
-                  onEdit={() => {
-                    setAsking(null);
-                    setEditing({ id: block.id, draft: block.content, after: null, isNew: false });
-                  }}
-                  onDraft={(draft) => setEditing((e) => (e ? { ...e, draft } : e))}
-                  onSave={() => editing && void save(editing)}
-                  onCancel={() => setEditing(null)}
-                  onMenu={(open) => setMenu(open ? block.id : null)}
-                  onSuggest={(text) => suggest(block, text)}
-                  onAccept={() => void change(() => api.accept(note.id, block.id))}
-                  onDiscard={() => void change(() => api.discard(note.id, block.id))}
-                  onRetry={() => block.proposal && suggest(block, block.proposal.instruction)}
-                  onMove={(dir) => move(block, dir)}
-                  onMoveOut={(what) => moveOut(block, what)}
-                  onDelete={() => void remove(block)}
-                />
-              </div>
-            ))}
-            {gap(blocks.at(-1)?.id ?? null, true)}
-          </div>
-        )}
-      </CiteContext.Provider>
-
-      {!writing && catalog.length > 0 && <Outline items={catalog} label="Catalog of this note" />}
-
-      {toast && (
-        <div className="toast" role="status" data-testid="toast">
-          {toast.text}
-          {toast.action && (
+            {' · '}
             <button
               type="button"
-              onClick={() => {
-                toast.action?.run();
-                setToast(null);
-              }}
-              data-testid={toast.action.testId}
+              className="quiet inline"
+              onClick={() => setMerging(merging ? null : { from: null })}
+              data-testid="note-merge"
             >
-              {toast.action.label}
+              merge a note in
             </button>
+            {' · '}
+            {confirmDelete ? (
+              <span className="confirm">
+                {note.threadId ? 'Delete this note? The thread stays.' : 'Delete this note?'}
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={() =>
+                    void api.deleteNote(note.id).then(onDeleted, (err: unknown) => setError(errorText(err)))
+                  }
+                  data-testid="note-delete-confirm"
+                >
+                  Delete
+                </button>
+                <button type="button" className="quiet" onClick={() => setConfirmDelete(false)}>
+                  Keep
+                </button>
+              </span>
+            ) : (
+              <button type="button" className="quiet inline faint" onClick={() => setConfirmDelete(true)} data-testid="note-delete">
+                delete
+              </button>
+            )}
+          </p>
+          <p className="note-legend">
+            <span className="legend-label">Who wrote each block:</span>
+            <span className="legend-ai">AI</span>
+            <span className="legend-mixed">AI, edited by you</span>
+            <span className="legend-user">you</span>
+          </p>
+        </header>
+
+        {merging && (
+          <section className="askbox merge-picker" data-testid="note-merge-picker">
+            {merging.from ? (
+              <div className="askbox-row confirm-row">
+                <span>
+                  Move all blocks of “{merging.from.title}” to the end of this note, and remove “{merging.from.title}”?
+                </span>
+                <button
+                  type="button"
+                  onClick={() => merging.from && void mergeIn(merging.from)}
+                  data-testid="note-merge-confirm"
+                >
+                  Merge
+                </button>
+                <button type="button" className="quiet" onClick={() => setMerging(null)}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <>
+                <p className="merge-explain">Bring which note into this one? Its citations keep working.</p>
+                <ul className="merge-options">
+                  {notes
+                    .filter((n) => n.id !== note.id && n.status !== 'generating')
+                    .map((n) => (
+                      <li key={n.id}>
+                        <button type="button" onClick={() => setMerging({ from: n })} data-testid="note-merge-option">
+                          {n.title || 'Untitled'}
+                        </button>
+                      </li>
+                    ))}
+                  {notes.filter((n) => n.id !== note.id).length === 0 && <li className="map-empty">No other note.</li>}
+                </ul>
+              </>
+            )}
+          </section>
+        )}
+        {error && (
+          <p className="status status-bad" role="alert">
+            {error}
+          </p>
+        )}
+        {note.status === 'failed' && (
+          <p className="status status-bad" role="alert">
+            {note.error ?? 'The note could not be written.'}
+          </p>
+        )}
+
+        {trashed && (
+          <div className="in-trash" role="status" data-testid="in-trash">
+            This note is in the Trash.
+            <button
+              type="button"
+              onClick={() =>
+                void api.restoreNote(note.id).then((n) => {
+                  setNote(n);
+                  onRestore?.();
+                }, (err: unknown) => setError(errorText(err)))
+              }
+              data-testid="restore"
+            >
+              Restore
+            </button>
+          </div>
+        )}
+        <CiteContext.Provider value={cites}>
+          {trashed ? (
+            <article className="note-body message-assistant">
+              <div className="message-body">
+                <Markdown source={note.content} />
+              </div>
+            </article>
+          ) : writing ? (
+            <article className="note-body message-assistant">
+              <div className="message-body">
+                <Markdown source={note.content} />
+                <span className="thinking">
+                  {note.content ? <span className="caret" aria-hidden /> : 'Writing the note…'}
+                </span>
+              </div>
+            </article>
+          ) : (
+            <div className="blocks" data-testid="blocks">
+              {blocks.length === 0 && !editing && !asking && (
+                <p className="blocks-empty">An empty note. Write the first block, or ask the AI for one.</p>
+              )}
+              {blocks.map((block, i) => (
+                <div key={block.id} className="block-slot">
+                  {gap(i === 0 ? null : (blocks[i - 1]?.id as string))}
+                  <BlockView
+                    block={block}
+                    first={i === 0}
+                    last={i === blocks.length - 1}
+                    editing={editing && !editing.isNew && editing.id === block.id ? editing : null}
+                    menuOpen={menu === block.id}
+                    hasThread={note.threadId !== null}
+                    onEdit={() => {
+                      setAsking(null);
+                      setEditing({ id: block.id, draft: block.content, after: null, isNew: false });
+                    }}
+                    onDraft={(draft) => setEditing((e) => (e ? { ...e, draft } : e))}
+                    onSave={() => editing && void save(editing)}
+                    onCancel={() => setEditing(null)}
+                    onMenu={(open) => setMenu(open ? block.id : null)}
+                    onSuggest={(text) => suggest(block, text)}
+                    onAccept={() => void change(() => api.accept(note.id, block.id))}
+                    onDiscard={() => void change(() => api.discard(note.id, block.id))}
+                    onRetry={() => block.proposal && suggest(block, block.proposal.instruction)}
+                    onMove={(dir) => move(block, dir)}
+                    onMoveOut={(what) => moveOut(block, what)}
+                    onDelete={() => void remove(block)}
+                  />
+                </div>
+              ))}
+              {gap(blocks.at(-1)?.id ?? null, true)}
+            </div>
           )}
-        </div>
+        </CiteContext.Provider>
+
+        {!writing && !cited && catalog.length > 0 && <Outline items={catalog} label="Catalog of this note" />}
+
+        {toast && (
+          <div className="toast" role="status" data-testid="toast">
+            {toast.text}
+            {toast.action && (
+              <button
+                type="button"
+                onClick={() => {
+                  toast.action?.run();
+                  setToast(null);
+                }}
+                data-testid={toast.action.testId}
+              >
+                {toast.action.label}
+              </button>
+            )}
+          </div>
+        )}
+      </main>
+      {cited && (
+        <RefPane
+          label={cited}
+          refs={note.refs}
+          order={citationOrder(note.content, note.refs)}
+          onStep={(label) => onRef(label, refIn)}
+          onOpenThread={onCite}
+          onClose={() => onRef(null)}
+        />
       )}
-    </main>
+    </div>
   );
 }
 

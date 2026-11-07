@@ -5,7 +5,14 @@
 // where more was asked), with its threads under it; the right-hand side lists
 // where you asked most when no thread is open.
 
-import { createAnchor, type Source, type SourceDetail, sourceHeadings, type Thread } from '@noema/core';
+import {
+  createAnchor,
+  type NoteSummary,
+  type Source,
+  type SourceDetail,
+  sourceHeadings,
+  type Thread,
+} from '@noema/core';
 import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { EditableTitle } from './EditableTitle.tsx';
@@ -36,8 +43,10 @@ export function SourceView({
   arrival,
   notebookId,
   threads,
+  notes,
   children,
   onOpenThread,
+  onOpenNote,
   onVersion,
   onAsked,
   onChanged,
@@ -57,6 +66,9 @@ export function SourceView({
   notebookId: string;
   /** Every thread, for live titles and to know when something new was asked here. */
   threads: Thread[];
+  /** Every note: those made from threads about this source are listed with them. */
+  notes: NoteSummary[];
+  onOpenNote: (noteId: string) => void;
   /** The thread open beside the text. */
   children?: ReactNode;
   onOpenThread: (threadId: string) => void;
@@ -111,6 +123,16 @@ export function SourceView({
   const passages = useMemo(() => askedPassages(detail?.threads ?? [], content), [detail?.threads, content]);
   const titles = useMemo(() => new Map(threads.map((t) => [t.id, t.title])), [threads]);
   const titleOf = (id: string, fallback: string) => titles.get(id) || fallback || 'Untitled';
+  // Notes made from the threads asked here (or their side questions), by the thread asked about the passage.
+  const notesByRoot = useMemo(() => {
+    const byRoot = new Map<string, NoteSummary[]>();
+    for (const n of notes) {
+      const family = n.threadId ? sourceFamily(threads, n.threadId) : null;
+      if (family?.sourceId !== sourceId) continue;
+      byRoot.set(family.rootId, [...(byRoot.get(family.rootId) ?? []), n]);
+    }
+    return byRoot;
+  }, [notes, threads, sourceId]);
 
   const rangeOf = useCallback(
     (start: number, end: number) => (text.current ? sourceToRange(text.current, content, start, end) : null),
@@ -388,6 +410,22 @@ export function SourceView({
                         </button>
                       </li>
                     ))}
+                    {p.threads.flatMap((t) =>
+                      (notesByRoot.get(t.threadId) ?? []).map((n) => (
+                        <li key={n.id}>
+                          <button
+                            type="button"
+                            className="branch-link note-chip"
+                            onClick={() => onOpenNote(n.id)}
+                            title="A note made from this question"
+                            data-testid="asked-note"
+                            data-note-id={n.id}
+                          >
+                            <span aria-hidden>▤</span> {n.title || 'Untitled'}
+                          </button>
+                        </li>
+                      )),
+                    )}
                   </ul>
                 </li>
               ))}

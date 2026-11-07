@@ -12,6 +12,7 @@ import {
   type Message,
   type MessageError,
   type MessageStatus,
+  type NoteSummary,
   type Origin,
   resolveAnchor,
   type SourceOrigin,
@@ -209,8 +210,11 @@ export function ThreadView({
   onBackToSource,
   beside = false,
   threads,
+  notes = [],
 }: {
   threadId: string;
+  /** Every note: those made from this thread are named under its title. */
+  notes?: NoteSummary[];
   /** Back to the passage of the source this thread was asked about. */
   onBackToSource: (origin: SourceOrigin, threadId: string) => void;
   /** Shown beside the source it was asked about (which then shows the passage itself). */
@@ -594,6 +598,8 @@ export function ThreadView({
             canMerge={messages.some((m) => m.role === 'assistant' && m.status === 'done')}
             onMerge={() => setPicking((p) => !p)}
             onDelete={thread.deletedAt ? undefined : () => setConfirmDelete((c) => !c)}
+            notes={notes.filter((n) => n.threadId === threadId)}
+            onOpenNote={onOpenNote}
           />
         )}
         {thread?.deletedAt && (
@@ -777,8 +783,13 @@ function ThreadHeader({
   canMerge,
   onMerge,
   onDelete,
+  notes,
+  onOpenNote,
 }: {
   title: string;
+  /** Notes made from this thread. */
+  notes: NoteSummary[];
+  onOpenNote: (noteId: string) => void;
   canRewrite: boolean;
   onRename: (title: string) => Promise<void>;
   onOpenMap: () => void;
@@ -821,6 +832,24 @@ function ThreadHeader({
           </button>
         )}
       </div>
+      {notes.length > 0 && (
+        <p className="thread-notes-line" data-testid="thread-notes-line">
+          <span>{notes.length === 1 ? 'Note from this thread:' : 'Notes from this thread:'}</span>
+          {notes.map((n) => (
+            <button
+              key={n.id}
+              type="button"
+              className="quiet inline"
+              onClick={() => onOpenNote(n.id)}
+              data-testid="thread-note-open"
+              data-note-id={n.id}
+            >
+              <span aria-hidden>▤ </span>
+              {n.title || 'Untitled'}
+            </button>
+          ))}
+        </p>
+      )}
     </header>
   );
 }

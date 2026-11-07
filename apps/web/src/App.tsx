@@ -324,6 +324,7 @@ function NotebookView({
         onCite={toMessage}
         onBackToSource={backToSource}
         beside={beside !== null}
+        notes={notes}
         onDeleted={(t, count) => {
           void refresh();
           const sides = count - 1;
@@ -361,6 +362,12 @@ function NotebookView({
         notes={notes}
         onChanged={onRefresh}
         onRestore={onRefresh}
+        openRef={route.ref}
+        refIn={route.refIn}
+        onRef={(label, blockId) =>
+          // Which exchange is open beside the note is a view of it, not a step: replaced, not added to history.
+          navigate({ kind: 'note', id: route.id, ref: label ?? undefined, refIn: label ? blockId : undefined }, { replace: true })
+        }
         onDeleted={() => {
           const n = notes.find((x) => x.id === route.id);
           const id = route.id;
@@ -387,6 +394,8 @@ function NotebookView({
         arrival={route ? toHash(route) : ''}
         notebookId={notebook.id}
         threads={threads ?? []}
+        notes={notes}
+        onOpenNote={openNote}
         onOpenThread={open}
         onVersion={(version) => go({ kind: 'source', id: reading.id, version })}
         onAsked={(id) => void openNew(id)}

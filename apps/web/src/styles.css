@@ -2819,3 +2819,161 @@ button.quiet.inline.faint:hover {
     border-bottom: 1px solid var(--rule);
   }
 }
+
+/* A note's citation, open beside it -------------------------------------- */
+
+.note-layout {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.note-layout > main {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+button.cite.current {
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+
+/* Scrolls by itself, like the reading pane, so the note keeps its place. */
+.ref-pane {
+  flex: 0 0 min(32rem, 44%);
+  min-width: 0;
+  position: sticky;
+  top: 3.1rem;
+  height: calc(100vh - 3.1rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.8rem 1.3rem 3rem;
+  border-left: 1px solid var(--rule);
+  background: var(--sheet);
+}
+
+.ref-head {
+  position: sticky;
+  top: -0.8rem;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: -0.8rem -1.3rem 0.6rem;
+  padding: 0.5rem 0.8rem 0.5rem 0.9rem;
+  border-bottom: 1px solid var(--rule);
+  background: var(--sheet);
+}
+
+.ref-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.ref-nav button,
+.ref-head > button {
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.2rem 0.5rem;
+}
+
+.ref-label {
+  font: 600 0.85rem / 1 var(--mono);
+  color: var(--accent);
+}
+
+.ref-of {
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.ref-from {
+  margin: 0 0 0.6rem;
+  font-size: 0.85rem;
+  color: var(--ink-faint);
+}
+
+.ref-from strong {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.ref-passage {
+  margin: 0 0 0.9rem;
+  padding: 0.4rem 0.8rem;
+  border-left: 3px solid var(--accent);
+  background: var(--paper);
+  border-radius: 0 6px 6px 0;
+  font: italic 0.95rem / 1.5 var(--serif);
+  color: var(--ink-soft);
+}
+
+.ref-passage-from {
+  font: normal 0.8rem var(--sans);
+  color: var(--ink-faint);
+}
+
+.ref-question {
+  margin: 0 0 0.9rem auto;
+  width: fit-content;
+  max-width: 92%;
+  padding: 0.45rem 0.85rem;
+  border-radius: 12px;
+  background: var(--user);
+}
+
+.ref-question .md > :first-child {
+  margin-top: 0;
+}
+
+.ref-question .md > :last-child {
+  margin-bottom: 0;
+}
+
+.ref-answer {
+  font-size: 0.97rem;
+}
+
+.ref-open {
+  margin-top: 1rem;
+  padding-left: 0;
+}
+
+.ref-missing {
+  text-align: left;
+}
+
+/* Notes in the sidebar: under the thread they came from, and where each came from in the Notes list. */
+.passage-link.note-from {
+  display: block;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: 0.76rem / 1.35 var(--sans);
+  padding-left: 1.6rem;
+}
+
+.thread-notes + ul {
+  margin-top: 0;
+}
+
+.thread-notes-line {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.1rem 0.6rem;
+  margin: 0.1rem 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-faint);
+}
+
+.thread-notes-line button.quiet.inline {
+  color: var(--accent);
+}
+
+.branch-link.note-chip {
+  border-style: dashed;
+}

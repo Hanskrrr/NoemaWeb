@@ -123,7 +123,7 @@ test('merge one note into another: its blocks move over and the other note goes'
   await page.getByTestId('note-rename').click();
   await page.getByTestId('note-title-input').fill('Second note');
   await page.getByTestId('note-title-input').press('Enter');
-  await expect(page.locator(`[data-testid=note-link][data-note-id="${secondId}"]`)).toContainText('Second note');
+  await expect(page.locator(`.sidebar [data-note-id="${secondId}"]`)).toContainText('Second note');
 
   await page.goto(first);
   const blocks = page.getByTestId('note').getByTestId('block');
@@ -133,8 +133,8 @@ test('merge one note into another: its blocks move over and the other note goes'
   await page.getByTestId('note-merge-confirm').click();
   await expect(page.getByTestId('toast')).toContainText('Merged “Second note” into this note');
   await expect(blocks).toHaveCount(8);
-  await expect(page.locator(`[data-testid=note-link][data-note-id="${secondId}"]`)).toHaveCount(0);
+  await expect(page.locator(`.sidebar [data-note-id="${secondId}"]`)).toHaveCount(0);
   // The second note's citation was renumbered and still opens its own exchange.
   await blocks.nth(4).getByTestId('cite').click();
-  await expect(page.locator('[data-testid=message].flash')).toContainText('Topic for the second note');
+  await expect(page.getByTestId('ref-question')).toContainText('Topic for the second note');
 });

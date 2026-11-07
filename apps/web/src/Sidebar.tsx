@@ -13,10 +13,12 @@
 // question shows the passage it came from: click the passage to jump to that
 // exact spot, the title to open it. A source lists the threads asked about
 // its passages (›), with their side questions, under it, so a paper and
-// everything asked about it stay together.
+// everything asked about it stay together. A note made from a thread (▤)
+// sits under that thread too; the Notes list has every note, each saying
+// where it came from.
 
 import type { NoteSummary, Source, Thread, Trash } from '@noema/core';
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { NotesIcon, SourcesIcon, ThreadsIcon, TrashIcon } from './icons.tsx';
 import { sourceFamily } from './reading.ts';
 import { keys, storage } from './storage.ts';
@@ -164,6 +166,13 @@ export function Sidebar({
   const bySource = new Map(sources.map((x) => [x.id, tree(threads.filter((t) => underSource(t.id) === x.id))]));
   for (const { children: kids } of bySource.values()) for (const [k, v] of kids) children.set(k, v);
   const byId = new Map(threads.map((t) => [t.id, t]));
+  // Notes made from a thread are listed under it as well.
+  const homeOf = (n: NoteSummary) => (n.threadId && byId.has(n.threadId) ? n.threadId : null);
+  const notesOf = new Map<string, NoteSummary[]>();
+  for (const n of notes) {
+    const home = homeOf(n);
+    if (home) notesOf.set(home, [...(notesOf.get(home) ?? []), n]);
+  }
   const [folded, setFolded] = useState<string[]>(() => storage.getJson<string[]>(keys.sidebarFolded, []));
   const notesBusy = notes.some((n) => n.status === 'generating');
 
@@ -172,8 +181,11 @@ export function Sidebar({
     if (!id) return null;
     if (byId.has(id)) return underSource(id) ? 'sources' : 'threads';
     if (listed.has(id)) return 'sources';
-    if (notes.some((n) => n.id === id)) return 'notes';
-    return null;
+    const note = notes.find((n) => n.id === id);
+    if (!note) return null;
+    // A note made from a thread is shown under it, with what it was made from.
+    const home = homeOf(note);
+    return home ? sectionOf(home) : 'notes';
   };
   const [section, setSection] = useState<SidebarSection>(() => {
     const saved = storage.get(keys.sidebarSection) as SidebarSection | null;
@@ -188,10 +200,14 @@ export function Sidebar({
     setCollapsed(closed);
     storage.set(keys.sidebarCollapsed, closed ? '1' : '0');
   };
-  // Opening something elsewhere (search, a link, the text) shows the list it is in.
+  // Opening something elsewhere (search, a link, the text) shows the list it is in;
+  // opening it from a list here keeps that list.
   const wanted = sectionOf(activeId);
+  const picked = useRef<string | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: only when what is open changes, not when the learner picks a list
   useEffect(() => {
+    if (activeId && activeId === picked.current) return;
+    picked.current = null;
     if (wanted) show(wanted);
   }, [activeId, wanted]);
   const pick = (next: SidebarSection) => {
@@ -207,33 +223,43 @@ export function Sidebar({
     setFolded(next);
     storage.setJson(keys.sidebarFolded, next);
   };
-  // The open thread is never hidden: the threads above it stay unfolded.
+  // The open thread or note is never hidden: the threads above it stay unfolded.
   const above = new Set<string>();
-  for (let t = activeId ? byId.get(activeId) : undefined; t && isSide(t); t = byId.get(t.parentThreadId ?? '')) {
+  const activeNote = notes.find((n) => n.id === activeId);
+  const openThread = activeNote ? homeOf(activeNote) : activeId;
+  if (activeNote && openThread) above.add(openThread);
+  for (let t = openThread ? byId.get(openThread) : undefined; t && isSide(t); t = byId.get(t.parentThreadId ?? '')) {
     if (t.parentThreadId) above.add(t.parentThreadId);
   }
-  const activeSource = activeId ? underSource(activeId) : null;
+  const activeSource = openThread ? underSource(openThread) : null;
   if (activeSource) above.add(activeSource);
 
+  /** What a fold hides: side questions at any depth, and notes. */
   const count = (id: string): number =>
-    (children.get(id) ?? []).reduce((n, k) => n + 1 + count(k.id), 0);
+    (children.get(id) ?? []).reduce((n, k) => n + 1 + count(k.id), notesOf.get(id)?.length ?? 0);
 
   const item = (t: Thread, depth: number) => {
     const kids = children.get(t.id) ?? [];
+    const own = notesOf.get(t.id) ?? [];
     const active = t.id === activeId;
     const mark = markOf(t, depth, byId);
-    const closed = kids.length > 0 && folded.includes(t.id) && !above.has(t.id);
+    const under = kids.length + own.length;
+    const closed = under > 0 && folded.includes(t.id) && !above.has(t.id);
     return (
       <li key={t.id} className={depth > 0 ? 'branch-item' : undefined}>
         <div className="thread-row">
-          {kids.length > 0 ? (
+          {under > 0 ? (
             <button
               type="button"
               className="fold"
               onClick={() => fold(t.id, !closed)}
               aria-expanded={!closed}
-              aria-label={closed ? `Show the side questions of ${t.title || 'this thread'}` : `Hide the side questions`}
-              title={closed ? `Show ${count(t.id)} side questions` : 'Hide the side questions'}
+              aria-label={closed ? `Show what is under ${t.title || 'this thread'}` : 'Hide what is under it'}
+              title={
+                closed
+                  ? `Show ${count(t.id)} ${kids.length > 0 ? 'side questions and notes' : own.length === 1 ? 'note' : 'notes'}`
+                  : 'Hide what is under it'
+              }
               data-testid="fold"
               data-thread-id={t.id}
             >
@@ -277,6 +303,27 @@ export function Sidebar({
           >
             “{t.sourceQuote ?? t.originQuote}”
           </button>
+        )}
+        {own.length > 0 && !closed && (
+          <ul className="thread-notes" aria-label="Notes made from it">
+            {own.map((n) => (
+              <li key={n.id} className="branch-item">
+                <button
+                  type="button"
+                  className={`thread-link note-link is-branch${n.id === activeId ? ' active' : ''}`}
+                  aria-current={n.id === activeId ? 'page' : undefined}
+                  onClick={() => onOpenNote(n.id)}
+                  title="A note made from this thread"
+                  data-testid="thread-note"
+                  data-note-id={n.id}
+                >
+                  <span aria-hidden>▤ </span>
+                  {n.title || 'Untitled'}
+                  {n.status === 'generating' && <span className="note-busy"> · writing…</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
         {kids.length > 0 && !closed && <ul>{kids.map((k) => item(k, depth + 1))}</ul>}
       </li>
@@ -417,22 +464,40 @@ export function Sidebar({
           <p className="sidebar-empty">No notes yet. Write one, or rewrite a thread as a note.</p>
         ) : (
           <ul className="sidebar-list">
-            {notes.map((n) => (
-              <li key={n.id}>
-                <button
-                  type="button"
-                  className={`thread-link note-link${n.id === activeId ? ' active' : ''}`}
-                  aria-current={n.id === activeId ? 'page' : undefined}
-                  onClick={() => onOpenNote(n.id)}
-                  data-testid="note-link"
-                  data-note-id={n.id}
-                >
-                  <span aria-hidden>▤ </span>
-                  {n.title || 'Untitled'}
-                  {n.status === 'generating' && <span className="note-busy"> · writing…</span>}
-                </button>
-              </li>
-            ))}
+            {notes.map((n) => {
+              const home = homeOf(n);
+              const thread = home ? byId.get(home) : undefined;
+              return (
+                <li key={n.id}>
+                  <button
+                    type="button"
+                    className={`thread-link note-link${n.id === activeId ? ' active' : ''}`}
+                    aria-current={n.id === activeId ? 'page' : undefined}
+                    onClick={() => {
+                      picked.current = n.id;
+                      onOpenNote(n.id);
+                    }}
+                    data-testid="note-link"
+                    data-note-id={n.id}
+                  >
+                    <span aria-hidden>▤ </span>
+                    {n.title || 'Untitled'}
+                    {n.status === 'generating' && <span className="note-busy"> · writing…</span>}
+                  </button>
+                  {thread && (
+                    <button
+                      type="button"
+                      className="passage-link note-from"
+                      onClick={() => onOpen(thread.id)}
+                      title="Open the thread it was made from"
+                      data-testid="note-from"
+                    >
+                      from {thread.title || 'Untitled'}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </>

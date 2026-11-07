@@ -6,6 +6,9 @@
 //   #/map/<threadId>                the map of the whole thread tree around a thread
 //   #/note/<noteId>                 a note
 //   #/note/<noteId>/b/<blockId>     a note, scrolled to one block
+//   #/note/<noteId>/e/<label>[/in/<blockId>]
+//                                   a note with the exchange it cites as [E2] open beside it
+//                                   (the block it was cited in, to come back to)
 //   #/new                           a new thread, before its first question
 //   #/s/<sourceId>                  a source in the reading pane (its latest version)
 //   #/s/<sourceId>/v/<versionId>    one version of it
@@ -20,7 +23,7 @@ import { useCallback, useEffect, useState } from 'react';
 export type Route =
   | { kind: 'thread'; id: string; from?: string | undefined; message?: string | undefined }
   | { kind: 'map'; id: string }
-  | { kind: 'note'; id: string; block?: string | undefined }
+  | { kind: 'note'; id: string; block?: string | undefined; ref?: string | undefined; refIn?: string | undefined }
   | {
       kind: 'source';
       id: string;
@@ -37,7 +40,14 @@ export function parseHash(hash: string): Route | null {
   if (!isUlid(id)) return null;
   if (head === 'map') return { kind: 'map', id };
   if (head === 'source' || head === 's') return parseSource(id, parts.slice(2));
-  if (head === 'note') return sub === 'b' && isUlid(subId) ? { kind: 'note', id, block: subId } : { kind: 'note', id };
+  if (head === 'note') {
+    if (sub === 'b' && isUlid(subId)) return { kind: 'note', id, block: subId };
+    if (sub === 'e' && /^E\d{1,4}$/.test(subId ?? '')) {
+      const at = parts[5];
+      return parts[4] === 'in' && isUlid(at) ? { kind: 'note', id, ref: subId, refIn: at } : { kind: 'note', id, ref: subId };
+    }
+    return { kind: 'note', id };
+  }
   if (head === 't') {
     if (sub === 'from' && isUlid(subId)) return { kind: 'thread', id, from: subId };
     if (sub === 'm' && isUlid(subId)) return { kind: 'thread', id, message: subId };
@@ -72,7 +82,9 @@ export function toHash(route: Route): string {
     case 'map':
       return `#/map/${route.id}`;
     case 'note':
-      return route.block ? `#/note/${route.id}/b/${route.block}` : `#/note/${route.id}`;
+      if (route.block) return `#/note/${route.id}/b/${route.block}`;
+      if (route.ref) return `#/note/${route.id}/e/${route.ref}${route.refIn ? `/in/${route.refIn}` : ''}`;
+      return `#/note/${route.id}`;
     case 'thread':
       if (route.from) return `#/t/${route.id}/from/${route.from}`;
       if (route.message) return `#/t/${route.id}/m/${route.message}`;

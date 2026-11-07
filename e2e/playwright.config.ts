@@ -1,5 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
-import { FAKE_PORT, FRESH_PORT } from './ports.ts';
+import { EMPTY_PORT, FAKE_PORT, FRESH_PORT } from './ports.ts';
 
 // The e2e suite runs the real server serving the real built web app, and
 // drives it in Chromium. It never calls a real model.
@@ -41,5 +41,6 @@ export default defineConfig({
   webServer: [
     server(FAKE_PORT, `pnpm build && ${start}`, { NOEMA_PROVIDER: 'fake', NOEMA_FAKE_DELAY_MS: '4' }),
     server(FRESH_PORT, start, { NOEMA_PROVIDER: 'openai-compatible' }),
+    server(EMPTY_PORT, start, { NOEMA_PROVIDER: 'fake', NOEMA_FAKE_DELAY_MS: '4' }),
   ],
 });

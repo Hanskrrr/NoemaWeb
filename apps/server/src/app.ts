@@ -17,6 +17,8 @@ import {
   type Message,
   MoveBlockRequest,
   MoveOutRequest,
+  NoemaExport,
+  notebookMarkdown,
   RedraftMergeRequest,
   RegenerateRequest,
   RenameSourceRequest,
@@ -594,10 +596,31 @@ export function createApp(deps: AppDeps): App {
     sendJson(res, 200, { ok: true });
   });
 
+  // The whole store as JSON: a copy that can be imported into an empty notebook.
   router.on('GET', '/api/export', ({ res }) => {
     const day = new Date().toISOString().slice(0, 10);
     res.setHeader('content-disposition', `attachment; filename="noema-export-${day}.json"`);
     sendJson(res, 200, repo.exportAll());
+  });
+
+  // A notebook as one Markdown file, for reading anywhere.
+  router.on('GET', '/api/notebooks/:id/export.md', ({ res, params }) => {
+    const notebook = repo.readable(params.id as string);
+    if (!notebook) throw notFound('notebook');
+    const day = new Date().toISOString().slice(0, 10);
+    res.writeHead(200, {
+      'content-type': 'text/markdown; charset=utf-8',
+      'cache-control': 'no-store',
+      'content-disposition': `attachment; filename="noema-${day}.md"`,
+    });
+    res.end(notebookMarkdown(notebook));
+  });
+
+  // Put an export back, into an empty store. Exports hold every request sent, so they can be large.
+  router.on('POST', '/api/import', async (ctx) => {
+    if (generations.size > 0) throw new HttpError(409, 'conflict', 'wait for the answers being written to finish');
+    const data = await ctx.body(NoemaExport, { maxBytes: 512 * 1024 * 1024 });
+    sendJson(ctx.res, 201, { ok: true, counts: repo.importAll(data) });
   });
 
   const server = createServer(async (req, res) => {

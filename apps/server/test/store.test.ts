@@ -131,11 +131,19 @@ test('daily backups are consistent copies, one per day, newest seven kept', () =
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('export contains every table', () => {
+test('export contains every table but the search index and the store facts', () => {
   const { db, repo } = fresh();
   repo.ensureDefaultNotebook();
   const out = repo.exportAll();
-  for (const key of ['notebooks', 'threads', 'messages', 'revisions', 'modelCalls', 'events'])
-    assert.ok(key in out, key);
+  const tables = (
+    db.sql.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as Array<{
+      name: string;
+    }>
+  ).map((r) => r.name);
+  for (const name of tables) {
+    const skipped = name === 'meta' || name === 'search' || name.startsWith('search_');
+    assert.equal(name in out.tables, !skipped, name);
+  }
+  assert.equal(out.schemaVersion, db.version);
   db.close();
 });

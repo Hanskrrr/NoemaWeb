@@ -20,6 +20,7 @@ import { AboutYouDialog } from './AboutYou.tsx';
 import { AddSourceDialog } from './AddSource.tsx';
 import { api } from './api.ts';
 import { ContextDialog } from './ContextView.tsx';
+import { ExportDialog } from './ExportImport.tsx';
 import { expectFound } from './found.ts';
 import { MapView } from './MapView.tsx';
 import { ConnectScreen, ModelDialog } from './ModelSettings.tsx';
@@ -94,6 +95,7 @@ function NotebookView({
   const [adding, setAdding] = useState(false);
   const [contextFor, setContextFor] = useState<{ messageId: string; revisionId?: string | undefined } | null>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   /** One line at the bottom after something went to the Trash, with Undo. */
   const [toast, setToast] = useState<{ text: string; undo: () => void } | null>(null);
   const [draft, setDraft] = useState<BranchDraft | null>(null);
@@ -468,6 +470,15 @@ function NotebookView({
         </button>
         <button
           type="button"
+          className="quiet about-open"
+          onClick={() => setExportOpen(true)}
+          title="Download a copy of everything, or a Markdown file to read; import a copy"
+          data-testid="export-open"
+        >
+          Export
+        </button>
+        <button
+          type="button"
           className="model"
           onClick={() => setSettingsOpen(true)}
           title="Model settings"
@@ -505,6 +516,7 @@ function NotebookView({
         />
       )}
       {aboutOpen && <AboutYouDialog notebookId={notebook.id} onClose={() => setAboutOpen(false)} />}
+      {exportOpen && <ExportDialog notebookId={notebook.id} onClose={() => setExportOpen(false)} />}
       {adding && (
         <AddSourceDialog
           notebookId={notebook.id}

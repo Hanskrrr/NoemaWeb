@@ -20,8 +20,8 @@ export interface Ctx {
   res: ServerResponse;
   url: URL;
   params: Record<string, string>;
-  /** Read and validate the JSON body. */
-  body<S extends z.ZodTypeAny>(schema: S): Promise<z.output<S>>;
+  /** Read and validate the JSON body (at most 1 MB unless `maxBytes` says more). */
+  body<S extends z.ZodTypeAny>(schema: S, opts?: { maxBytes?: number }): Promise<z.output<S>>;
 }
 
 export type Handler = (ctx: Ctx) => Promise<void> | void;
@@ -49,12 +49,12 @@ export function sendError(res: ServerResponse, status: number, code: string, mes
   sendJson(res, status, { error: { code, message } });
 }
 
-async function readBody(req: IncomingMessage): Promise<string> {
+async function readBody(req: IncomingMessage, max = MAX_BODY_BYTES): Promise<string> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, 'body_too_large', `request body over ${MAX_BODY_BYTES} bytes`);
+    if (size > max) throw new HttpError(413, 'body_too_large', `request body over ${max} bytes`);
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks).toString('utf8');
@@ -88,11 +88,11 @@ export class Router {
         res,
         url,
         params,
-        body: async (schema) => {
+        body: async (schema, opts) => {
           const type = req.headers['content-type'] ?? '';
           if (!type.includes('application/json'))
             throw new HttpError(415, 'unsupported_media_type', 'send application/json');
-          const raw = await readBody(req);
+          const raw = await readBody(req, opts?.maxBytes);
           let json: unknown;
           try {
             json = raw ? JSON.parse(raw) : {};

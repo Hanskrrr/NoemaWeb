@@ -2,7 +2,7 @@
 // never write SQL themselves.
 
 import { createHash } from 'node:crypto';
-import type { SQLInputValue } from 'node:sqlite';
+import type { SQLInputValue, StatementSync } from 'node:sqlite';
 import {
   type AnchorRef,
   type BranchSummary,
@@ -23,15 +23,18 @@ import {
   type MergedText,
   type Message,
   type MessageContext,
-  type MessageRevision,
   type MessageError,
+  type MessageRevision,
   type MessageStatus,
   makeSnippet,
+  type ImportResponse,
   type Note,
   type NoteBlock,
   type Notebook,
+  type NoemaExport,
   type OpenBranch,
   type Origin,
+  type ReadableNotebook,
   type Source,
   type SourceDetail,
   type SourceOrigin,
@@ -2655,23 +2658,193 @@ export class Repo {
   }
 
   /** Everything, as plain JSON. The notebook is the learner's, not ours. */
-  exportAll(): Record<string, unknown> {
-    const all = (table: string) => this.db.sql.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
+  /** The tables an export holds: all but the search index (rebuilt from the rest) and the store's own facts. */
+  private exportTables(): string[] {
+    return (
+      this.db.sql
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        .all() as Row[]
+    )
+      .map((r) => r.name as string)
+      .filter((name) => name !== 'meta' && name !== 'search' && !name.startsWith('search_'));
+  }
+
+  /** Everything in the store, table by table, in the order it was written. Never the model key (it is not here). */
+  exportAll(): NoemaExport {
+    const tables: NoemaExport['tables'] = {};
+    for (const name of this.exportTables()) {
+      tables[name] = this.db.sql.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all() as NoemaExport['tables'][string];
+    }
+    return { format: 'noema-export', version: 2, exportedAt: now(), schemaVersion: this.db.version, tables };
+  }
+
+  /** Whether the store holds nothing the learner made: no threads, notes or sources, and nothing written about them. */
+  isEmpty(): boolean {
+    const r = this.db.sql
+      .prepare(
+        `SELECT (SELECT count(*) FROM thread) + (SELECT count(*) FROM note) + (SELECT count(*) FROM source)
+              + (SELECT count(*) FROM notebook WHERE about_me <> '') AS n,
+                (SELECT count(*) FROM notebook) AS notebooks`,
+      )
+      .get() as { n: number; notebooks: number };
+    return r.n === 0 && r.notebooks <= 1;
+  }
+
+  /**
+   * Put an export back, into an empty store of the same schema version. One
+   * transaction: either all of it is in, or nothing changed. Foreign keys are
+   * checked at the end, every column against the table, and the search index
+   * is rebuilt. Anything that was being written when it was exported is
+   * marked as cut off, as after a restart.
+   */
+  importAll(data: NoemaExport): ImportResponse['counts'] {
+    if (data.schemaVersion !== this.db.version) {
+      throw new InvalidError(
+        `this export is from schema version ${data.schemaVersion}; this Noema is at ${this.db.version}. Use a Noema of the same version to import it.`,
+      );
+    }
+    const known = new Set(this.exportTables());
+    for (const name of Object.keys(data.tables)) {
+      if (!known.has(name)) throw new InvalidError(`the export has a table this Noema does not know: ${name}`);
+    }
+    try {
+      return this.importTables(data, known);
+    } catch (err) {
+      // A row the schema refuses (a missing thread, a wrong type): nothing was kept.
+      if (err instanceof Error && /constraint|datatype|cannot store/i.test(err.message)) {
+        throw new InvalidError(`the export does not hold together, so nothing was imported (${err.message})`);
+      }
+      throw err;
+    }
+  }
+
+  private importTables(data: NoemaExport, known: Set<string>): ImportResponse['counts'] {
+    return this.db.tx(() => {
+      if (!this.isEmpty()) throw new ConflictError('import only into an empty notebook: this one already has things in it');
+      this.db.sql.exec('PRAGMA defer_foreign_keys = ON');
+      for (const name of known) this.db.sql.exec(`DELETE FROM "${name}"`);
+      for (const [name, rows] of Object.entries(data.tables)) {
+        const columns = new Set(
+          (this.db.sql.prepare(`PRAGMA table_info("${name}")`).all() as Row[]).map((c) => c.name as string),
+        );
+        const statements = new Map<string, StatementSync>();
+        for (const row of rows) {
+          const keys = Object.keys(row);
+          for (const k of keys) if (!columns.has(k)) throw new InvalidError(`${name} has no column ${k}`);
+          const sig = keys.join(',');
+          let stmt = statements.get(sig);
+          if (!stmt) {
+            stmt = this.db.sql.prepare(
+              `INSERT INTO "${name}" (${keys.map((k) => `"${k}"`).join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`,
+            );
+            statements.set(sig, stmt);
+          }
+          stmt.run(...keys.map((k) => row[k] as SQLInputValue));
+        }
+      }
+      this.interruptLive();
+      this.recoverNotes();
+      this.failDraftingMerges();
+      this.rebuildSearch();
+      this.logEvent('store.imported', null, { schemaVersion: data.schemaVersion });
+      const count = (table: string) =>
+        (this.db.sql.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
+      return {
+        notebooks: count('notebook'),
+        threads: count('thread'),
+        messages: count('message'),
+        notes: count('note'),
+        sources: count('source'),
+      };
+    });
+  }
+
+  /** A notebook for reading as Markdown: what is not in the Trash, answers as the ones in use. */
+  readable(notebookId: string): ReadableNotebook | null {
+    const nb = this.db.sql.prepare('SELECT * FROM notebook WHERE id = ?').get(notebookId) as Row | undefined;
+    if (!nb) return null;
+    const threadRows = this.db.sql
+      .prepare(
+        `SELECT t.id, t.title, t.created_at, t.parent_thread_id, t.split_at,
+                a.exact AS a_exact, p.title AS parent_title,
+                sa.exact AS s_exact, s.title AS source_title
+         FROM thread t
+         LEFT JOIN anchor a ON a.id = t.origin_anchor_id
+         LEFT JOIN thread p ON p.id = t.parent_thread_id
+         LEFT JOIN source_anchor sa ON sa.id = t.source_anchor_id
+         LEFT JOIN source_version sv ON sv.id = sa.version_id
+         LEFT JOIN source s ON s.id = sv.source_id
+         WHERE t.notebook_id = ? AND t.deleted_at IS NULL
+         ORDER BY t.created_at`,
+      )
+      .all(notebookId) as Row[];
+    const turns = this.db.sql.prepare(
+      `SELECT m.role, r.content FROM message m JOIN message_revision r ON r.id = m.current_revision_id
+       WHERE m.thread_id = ? ORDER BY m.seq`,
+    );
+    const threads = threadRows.map((t) => {
+      const own = t.split_at !== null;
+      return {
+        id: t.id as string,
+        title: t.title as string,
+        createdAt: t.created_at as string,
+        parentId: own ? null : ((t.parent_thread_id as string | null) ?? null),
+        from: t.a_exact
+          ? { quote: t.a_exact as string, in: `an answer in “${(t.parent_title as string) || 'Untitled'}”` }
+          : t.s_exact
+            ? { quote: t.s_exact as string, in: `“${(t.source_title as string) || 'Untitled'}”` }
+            : undefined,
+        turns: (turns.all(t.id as string) as Row[]).map((m) => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content as string,
+        })),
+      };
+    });
+    const titleOf = new Map(threads.map((t) => [t.id, t.title]));
+    const questionOf = this.db.sql.prepare(
+      `SELECT COALESCE(q.id, m.id) AS id, r.content FROM message m
+       LEFT JOIN message q ON q.id = m.reply_to
+       JOIN message_revision r ON r.id = COALESCE(q.current_revision_id, m.current_revision_id)
+       WHERE m.id = ?`,
+    );
+    const blocks = this.db.sql.prepare(
+      'SELECT content FROM note_block WHERE note_id = ? AND deleted_at IS NULL ORDER BY pos',
+    );
+    const notes = (
+      this.db.sql
+        .prepare('SELECT id, title, refs FROM note WHERE notebook_id = ? AND deleted_at IS NULL ORDER BY created_at')
+        .all(notebookId) as Row[]
+    ).map((n) => {
+      let refs: Record<string, { threadId: string; messageId: string }> = {};
+      try {
+        refs = JSON.parse(n.refs as string);
+      } catch {
+        // Unreadable refs: the labels stay in the text, without the list.
+      }
+      return {
+        title: n.title as string,
+        blocks: (blocks.all(n.id as string) as Row[]).map((b) => b.content as string),
+        cites: Object.entries(refs)
+          .sort(([a], [b]) => Number(a.slice(1)) - Number(b.slice(1)))
+          .map(([label, ref]) => ({
+            label,
+            thread: titleOf.get(ref.threadId) ?? '',
+            question: ((questionOf.get(ref.messageId) as Row | undefined)?.content as string | undefined) ?? '',
+          })),
+      };
+    });
+    const sources = (
+      this.db.sql
+        .prepare('SELECT title, url FROM source WHERE notebook_id = ? AND deleted_at IS NULL ORDER BY created_at')
+        .all(notebookId) as Row[]
+    ).map((r) => ({ title: r.title as string, url: (r.url as string | null) ?? null }));
     return {
-      format: 'noema-export',
-      version: 1,
+      title: nb.title as string,
+      aboutMe: nb.about_me as string,
       exportedAt: now(),
-      schemaVersion: this.db.version,
-      notebooks: all('notebook'),
-      threads: all('thread'),
-      messages: all('message'),
-      anchors: all('anchor'),
-      notes: all('note'),
-      noteBlocks: all('note_block'),
-      noteRevisions: all('note_revision'),
-      revisions: all('message_revision'),
-      modelCalls: all('model_call'),
-      events: all('event'),
+      notes,
+      threads,
+      sources,
     };
   }
 }

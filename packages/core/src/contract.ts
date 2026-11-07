@@ -697,3 +697,32 @@ export const STREAM_EVENTS = ['snapshot', 'delta', 'status', 'end'] as const;
 /** Sent on every state-changing request; the server rejects requests without it. */
 export const CLIENT_HEADER = 'x-noema-client';
 export const CLIENT_HEADER_VALUE = 'web';
+
+// Export and import. The JSON export is the whole store, table by table
+// (everything but the search index, which is rebuilt): it can be imported
+// into an empty notebook and gives back the same notebook. The Markdown
+// export is for reading, not for importing.
+
+const Cell = z.union([z.string(), z.number(), z.null()]);
+const SqlName = z.string().regex(/^[a-z][a-z0-9_]*$/);
+export const NoemaExport = z.object({
+  format: z.literal('noema-export'),
+  version: z.literal(2),
+  exportedAt: z.string(),
+  /** The store's schema version (its last migration): an export is imported into the same version. */
+  schemaVersion: z.number().int().nonnegative(),
+  tables: z.record(SqlName, z.array(z.record(SqlName, Cell))),
+});
+export type NoemaExport = z.infer<typeof NoemaExport>;
+
+export const ImportResponse = z.object({
+  ok: z.literal(true),
+  counts: z.object({
+    notebooks: z.number().int(),
+    threads: z.number().int(),
+    messages: z.number().int(),
+    notes: z.number().int(),
+    sources: z.number().int(),
+  }),
+});
+export type ImportResponse = z.infer<typeof ImportResponse>;

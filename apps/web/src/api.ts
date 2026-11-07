@@ -10,6 +10,7 @@ import {
   CreateBranchResponse,
   DeleteThreadResponse,
   Health,
+  ImportResponse,
   type InsertBlockRequest,
   Merge,
   type MergeMode,
@@ -59,6 +60,11 @@ export class ApiFailure extends Error {
   }
 }
 
+/** A body that is already JSON text (a large file read from disk), sent as it is. */
+class RawJson {
+  constructor(readonly text: string) {}
+}
+
 async function call<S extends z.ZodTypeAny>(
   schema: S,
   method: string,
@@ -73,7 +79,7 @@ async function call<S extends z.ZodTypeAny>(
         [CLIENT_HEADER]: CLIENT_HEADER_VALUE,
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: body instanceof RawJson ? body.text : body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
     throw new ApiFailure(0, 'offline', 'Cannot reach the Noema server. Is it running?');
@@ -139,6 +145,11 @@ export const api = {
       'GET',
       `/api/messages/${messageId}/context${revisionId ? `?revision=${encodeURIComponent(revisionId)}` : ''}`,
     ),
+  /** The whole store as JSON, and one notebook as Markdown: plain links, the server names the files. */
+  exportUrl: '/api/export',
+  markdownUrl: (notebookId: string) => `/api/notebooks/${notebookId}/export.md`,
+  /** Put a JSON export back, into an empty store. `text` is the file as read. */
+  importCopy: (text: string) => call(ImportResponse, 'POST', '/api/import', new RawJson(text)),
   /** Ask the same question again: a new revision of the answer, made the one in use. Idempotent on its id. */
   regenerate: (messageId: string, revisionId: string) =>
     call(MessageResponse, 'POST', `/api/messages/${messageId}/regenerate`, { revisionId }),

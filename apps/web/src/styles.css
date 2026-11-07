@@ -3164,3 +3164,73 @@ button.cite.current {
 .context-part details > button.quiet.inline {
   font-size: 0.86rem;
 }
+
+/* Export and import */
+
+a.button,
+label.button {
+  display: inline-block;
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: 6px;
+  padding: 0.35rem 0.8rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+a.button.quiet-button,
+label.button.quiet-button {
+  background: transparent;
+  color: var(--accent);
+}
+
+label.button.disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.export-dialog {
+  width: min(34rem, calc(100vw - 2rem));
+}
+
+.export-option {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem 1.2rem;
+  padding: 0.8rem 0;
+  border-top: 1px solid var(--rule);
+}
+
+.export-option:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.export-option > div {
+  min-width: 0;
+}
+
+.export-option h3 {
+  margin: 0 0 0.2rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.export-option .form-note {
+  margin: 0;
+}
+
+.export-option .button {
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+}
+
+@media (max-width: 520px) {
+  .export-option {
+    flex-direction: column;
+  }
+}

@@ -12,6 +12,8 @@ export interface StreamRequest {
   light?: boolean | undefined;
   /** What the call is for; the fake model answers titles differently. */
   purpose?: 'answer' | 'title' | 'headline' | 'note' | 'suggest' | 'merge' | undefined;
+  /** Which revision of an answer this is: 2 and up when the learner asked again. Real providers ignore it; the fake answers differently, so tests can tell revisions apart. */
+  revision?: number | undefined;
   signal: AbortSignal;
 }
 

@@ -33,10 +33,13 @@ const OPEN_BY_DEFAULT = new Set<SentPart['kind']>(['about_me', 'source', 'questi
 
 export function ContextDialog({
   messageId,
+  revisionId,
   onClose,
   onEditAboutMe,
 }: {
   messageId: string;
+  /** The revision shown, when it is not the one in use. */
+  revisionId?: string | undefined;
   onClose: () => void;
   onEditAboutMe: () => void;
 }) {
@@ -51,7 +54,7 @@ export function ContextDialog({
 
   useEffect(() => {
     let cancelled = false;
-    api.messageContext(messageId).then(
+    api.messageContext(messageId, revisionId).then(
       (c) => !cancelled && setContext(c),
       (err: unknown) => {
         if (cancelled) return;
@@ -67,7 +70,7 @@ export function ContextDialog({
     return () => {
       cancelled = true;
     };
-  }, [messageId]);
+  }, [messageId, revisionId]);
 
   const parts = context?.request ? describeSent(context.manifest, context.request) : null;
   const left = context?.manifest.omitted.length ?? 0;

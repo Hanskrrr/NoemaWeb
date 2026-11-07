@@ -6,30 +6,32 @@ import {
   AskRequest,
   CreateBranchRequest,
   CreateNoteRequest,
+  CreateSourceRequest,
   CreateThreadRequest,
   describeError,
   EditBlockRequest,
   EditMergeRequest,
   InsertBlockRequest,
   isLive,
-  type Message,
   MergeNoteRequest,
+  type Message,
   MoveBlockRequest,
   MoveOutRequest,
   RedraftMergeRequest,
+  RegenerateRequest,
+  RenameSourceRequest,
   RenameThreadRequest,
   RewriteRequest,
   SearchOpenedRequest,
-  CreateSourceRequest,
-  RenameSourceRequest,
   SourceThreadRequest,
   SplitOffRequest,
   SplitThreadRequest,
   StartMergeRequest,
   SuggestRequest,
   UpdateModelSettingsRequest,
-  UpdateNoteRequest,
   UpdateNotebookRequest,
+  UpdateNoteRequest,
+  UseRevisionRequest,
 } from '@noema/core';
 import { Generations } from './chat/generation.ts';
 import { fullTranscript, MergeWriter } from './chat/merges.ts';
@@ -495,9 +497,39 @@ export function createApp(deps: AppDeps): App {
     sendJson(res, 200, { ok: true });
   });
 
-  // What the model was sent for this answer, word for word when it was recorded.
-  router.on('GET', '/api/messages/:id/context', ({ res, params }) => {
-    const context = repo.contextOf(params.id as string);
+  // Ask the same question again: a new revision of the answer, generated like any other.
+  router.on('POST', '/api/messages/:id/regenerate', async (ctx) => {
+    const body = await ctx.body(RegenerateRequest);
+    const { message, question, created } = repo.regenerate(ctx.params.id as string, body.revisionId);
+    if (created) {
+      const thread = repo.getThread(message.threadId);
+      if (!thread) throw notFound('thread');
+      generations.start({
+        threadId: thread.id,
+        notebookId: thread.notebookId,
+        messageId: message.id,
+        revisionId: message.revisionId,
+        revision: message.revision,
+        question: { id: question.id, content: question.content, seq: question.seq },
+      });
+    }
+    sendJson(ctx.res, created ? 201 : 200, { message });
+  });
+
+  router.on('GET', '/api/messages/:id/revisions', ({ res, params }) => {
+    if (!repo.getMessage(params.id as string)) throw notFound('message');
+    sendJson(res, 200, { revisions: repo.revisionsOf(params.id as string) });
+  });
+
+  router.on('POST', '/api/messages/:id/current', async (ctx) => {
+    const body = await ctx.body(UseRevisionRequest);
+    sendJson(ctx.res, 200, { message: repo.useRevision(ctx.params.id as string, body.revisionId) });
+  });
+
+  // What the model was sent for this answer, word for word when it was recorded:
+  // for the revision shown (?revision=<id>), else the current one.
+  router.on('GET', '/api/messages/:id/context', ({ res, params, url }) => {
+    const context = repo.contextOf(params.id as string, url.searchParams.get('revision') ?? undefined);
     if (!context) throw notFound('context');
     sendJson(res, 200, context);
   });

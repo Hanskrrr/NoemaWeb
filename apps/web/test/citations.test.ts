@@ -12,6 +12,7 @@ const message = (n: number, role: Message['role'], replyTo: number | null): Mess
   replyTo: replyTo === null ? null : id(replyTo),
   revisionId: id(50 + n),
   revision: 1,
+  revisions: 1,
   content: `m${n}`,
   status: 'done',
   error: null,

@@ -23,6 +23,7 @@ import {
   type MergedText,
   type Message,
   type MessageContext,
+  type MessageRevision,
   type MessageError,
   type MessageStatus,
   makeSnippet,
@@ -155,6 +156,7 @@ function toMessage(r: Row): Message {
     replyTo: (r.reply_to as string | null) ?? null,
     revisionId: r.revision_id as string,
     revision: r.n as number,
+    revisions: Number(r.revisions ?? 1),
     content: r.content as string,
     status: r.status as MessageStatus,
     error: kind ? { kind, message: (r.error_message as string | null) ?? '' } : null,
@@ -168,7 +170,7 @@ function toMessage(r: Row): Message {
 const MESSAGE_SELECT = `
   SELECT m.id, m.thread_id, m.role, m.seq, m.reply_to, m.created_at,
          r.id AS revision_id, r.n, r.content, r.status, r.error_kind, r.error_message, r.model, r.updated_at,
-         r.headline
+         r.headline, (SELECT count(*) FROM message_revision x WHERE x.message_id = m.id) AS revisions
   FROM message m JOIN message_revision r ON r.id = m.current_revision_id`;
 
 export class ConflictError extends Error {
@@ -326,6 +328,86 @@ export class Repo {
   getMessage(id: string): Message | null {
     const row = this.db.sql.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(id) as Row | undefined;
     return row ? toMessage(row) : null;
+  }
+
+  /**
+   * Ask the same question again: a new revision of the answer, made current.
+   * The old revisions stay, with the passages side questions were asked from.
+   */
+  regenerate(messageId: string, revisionId: string): { message: Message; question: Message; created: boolean } {
+    return this.db.tx(() => {
+      const message = this.getMessage(messageId);
+      if (!message) throw new NotFoundError('message');
+      if (message.role !== 'assistant') throw new InvalidError('only an answer can be asked again');
+      const question = message.replyTo ? this.getMessage(message.replyTo) : null;
+      if (!question) throw new InvalidError('this answer has no question');
+      const known = this.db.sql.prepare('SELECT message_id FROM message_revision WHERE id = ?').get(revisionId) as
+        | { message_id: string }
+        | undefined;
+      if (known) {
+        if (known.message_id !== messageId) throw new ConflictError('that id belongs to another message');
+        return { message, question, created: false };
+      }
+      this.notInTrash(message.threadId);
+      if (message.status === 'pending' || message.status === 'streaming') {
+        throw new ConflictError('it is still being answered');
+      }
+      const at = now();
+      const { n } = this.db.sql
+        .prepare('SELECT max(n) + 1 AS n FROM message_revision WHERE message_id = ?')
+        .get(messageId) as { n: number };
+      this.db.sql
+        .prepare(
+          "INSERT INTO message_revision (id, message_id, n, content, status, created_at, updated_at) VALUES (?, ?, ?, '', 'pending', ?, ?)",
+        )
+        .run(revisionId, messageId, n, at, at);
+      this.db.sql.prepare('UPDATE message SET current_revision_id = ? WHERE id = ?').run(revisionId, messageId);
+      this.db.sql.prepare('UPDATE thread SET updated_at = ? WHERE id = ?').run(at, message.threadId);
+      this.logEvent('answer.regenerated', messageId, { revision: n });
+      return { message: this.getMessage(messageId) as Message, question, created: true };
+    });
+  }
+
+  /** Every revision of an answer, oldest first. */
+  revisionsOf(messageId: string): MessageRevision[] {
+    return (
+      this.db.sql
+        .prepare('SELECT * FROM message_revision WHERE message_id = ? ORDER BY n')
+        .all(messageId) as Row[]
+    ).map((r) => {
+      const kind = r.error_kind as ErrorKind | null;
+      return {
+        revisionId: r.id as string,
+        revision: r.n as number,
+        content: r.content as string,
+        status: r.status as MessageStatus,
+        error: kind ? { kind, message: (r.error_message as string | null) ?? '' } : null,
+        model: (r.model as string | null) ?? null,
+        headline: (r.headline as string | null | undefined) ?? null,
+        createdAt: r.created_at as string,
+      };
+    });
+  }
+
+  /** Make an earlier finished revision the one later questions use (and search finds). */
+  useRevision(messageId: string, revisionId: string): Message {
+    return this.db.tx(() => {
+      const message = this.getMessage(messageId);
+      if (!message) throw new NotFoundError('message');
+      this.notInTrash(message.threadId);
+      if (message.status === 'pending' || message.status === 'streaming') {
+        throw new ConflictError('it is still being answered');
+      }
+      const row = this.db.sql
+        .prepare('SELECT status, content FROM message_revision WHERE id = ? AND message_id = ?')
+        .get(revisionId, messageId) as { status: string; content: string } | undefined;
+      if (!row) throw new NotFoundError('revision');
+      this.db.sql.prepare('UPDATE message SET current_revision_id = ? WHERE id = ?').run(revisionId, messageId);
+      if (row.content) this.index('message', messageId, message.threadId, row.content);
+      else this.db.sql.prepare("DELETE FROM search WHERE target_id = ? AND kind = 'message'").run(messageId);
+      this.logEvent('answer.revision_chosen', messageId, { revisionId });
+      return this.getMessage(messageId) as Message;
+    });
   }
 
   findAsk(userMessageId: string): AskPair | null {
@@ -1980,7 +2062,7 @@ export class Repo {
   createBranch(
     parentThreadId: string,
     threadId: string,
-    at: { messageId: string; start: number; end: number },
+    at: { messageId: string; revisionId?: string | undefined; start: number; end: number },
     question: { id: string; content: string },
   ): { thread: Thread; pair: AskPair; created: boolean } {
     return this.db.tx(() => {
@@ -1995,10 +2077,17 @@ export class Repo {
       this.notInTrash(parentThreadId);
       const message = this.getMessage(at.messageId);
       if (!message || message.threadId !== parentThreadId) throw new InvalidError('that message is not in this thread');
-      if (isLive(message.status)) throw new ConflictError('wait for the answer to finish before branching from it');
+      // The passage is in the revision shown: the one in use, or an earlier one read again.
+      const revision = at.revisionId && at.revisionId !== message.revisionId
+        ? (this.db.sql
+            .prepare('SELECT id, content, status FROM message_revision WHERE id = ? AND message_id = ?')
+            .get(at.revisionId, message.id) as { id: string; content: string; status: MessageStatus } | undefined)
+        : { id: message.revisionId, content: message.content, status: message.status };
+      if (!revision) throw new InvalidError('that revision is not of this message');
+      if (isLive(revision.status)) throw new ConflictError('wait for the answer to finish before branching from it');
       let anchor: ReturnType<typeof createAnchor>;
       try {
-        anchor = createAnchor(message.revisionId, message.content, at.start, at.end);
+        anchor = createAnchor(revision.id, revision.content, at.start, at.end);
       } catch {
         throw new InvalidError('the selected range is outside the message');
       }
@@ -2012,7 +2101,7 @@ export class Repo {
         .run(
           anchorId,
           message.id,
-          message.revisionId,
+          revision.id,
           anchor.quote.exact,
           anchor.quote.prefix,
           anchor.quote.suffix,
@@ -2097,7 +2186,9 @@ export class Repo {
     const at = this.getMessage(origin.anchor.messageId);
     if (!at) return this.inheritedHistory(origin.parentThreadId);
     const through = at.role === 'assistant' ? at.seq : at.seq + 1;
-    return [...this.inheritedHistory(origin.parentThreadId), ...this.history(origin.parentThreadId, through + 1)];
+    // The answer the passage is in, as the revision it was asked from, even if it was asked again since.
+    const pinned = { messageId: origin.anchor.messageId, revisionId: origin.anchor.revisionId };
+    return [...this.inheritedHistory(origin.parentThreadId), ...this.history(origin.parentThreadId, through + 1, pinned)];
   }
 
   /**
@@ -2105,19 +2196,24 @@ export class Repo {
    * only. A thread merged in goes in front of the first question after the
    * merge (see pendingMerges for one with no question after it yet).
    */
-  history(threadId: string, beforeSeq: number): HistoryItem[] {
+  history(
+    threadId: string,
+    beforeSeq: number,
+    pinned: { messageId: string; revisionId: string } | null = null,
+  ): HistoryItem[] {
+    // Each answer as its current revision, except a pinned one (the answer a side question was asked from).
     const rows = this.db.sql
       .prepare(
         `SELECT u.id AS uid, u.seq AS useq, ur.content AS ucontent, a.id AS aid, ar.content AS acontent
          FROM message a
-         JOIN message_revision ar ON ar.id = a.current_revision_id
+         JOIN message_revision ar ON ar.id = CASE WHEN a.id = ? THEN ? ELSE a.current_revision_id END
          JOIN message u ON u.id = a.reply_to
          JOIN message_revision ur ON ur.id = u.current_revision_id
          WHERE a.thread_id = ? AND a.role = 'assistant' AND a.seq < ?
            AND ar.status IN ('done', 'stopped') AND ar.content <> ''
          ORDER BY a.seq`,
       )
-      .all(threadId, beforeSeq) as Row[];
+      .all(pinned?.messageId ?? null, pinned?.revisionId ?? null, threadId, beforeSeq) as Row[];
     const merges = this.mergedBefore(threadId, beforeSeq);
     return rows.flatMap((r) => {
       const useq = r.useq as number;
@@ -2279,17 +2375,21 @@ export class Repo {
   }
 
   /** What was sent for an answer: its latest model call, with the exact messages when they were recorded. */
-  contextOf(messageId: string): MessageContext | null {
+  contextOf(messageId: string, revisionId?: string): MessageContext | null {
     const message = this.getMessage(messageId);
     if (!message || message.role !== 'assistant') return null;
+    const revision = revisionId ?? message.revisionId;
     const row = this.db.sql
-      .prepare('SELECT * FROM model_call WHERE revision_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1')
-      .get(message.revisionId) as Row | undefined;
+      .prepare(
+        `SELECT mc.* FROM model_call mc JOIN message_revision r ON r.id = mc.revision_id
+         WHERE mc.revision_id = ? AND r.message_id = ? ORDER BY mc.started_at DESC, mc.rowid DESC LIMIT 1`,
+      )
+      .get(revision, messageId) as Row | undefined;
     if (!row) return null;
     const num = (v: unknown) => (typeof v === 'number' ? v : null);
     return {
       messageId,
-      revisionId: message.revisionId,
+      revisionId: revision,
       provider: row.provider as string,
       model: row.model as string,
       startedAt: row.started_at as string,

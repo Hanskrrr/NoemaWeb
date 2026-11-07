@@ -11,6 +11,20 @@ export interface MessageActions {
   onSplitOff?: (() => void) | undefined;
   /** On an answer: show what the model was sent for it. */
   onShowContext?: (() => void) | undefined;
+  /** On a finished answer: ask the same question again for a new answer, keeping this one. */
+  onAskAgain?: (() => void) | undefined;
+  /** On an answer asked more than once: which one is shown, and how to see the others. */
+  versions?: Versions | undefined;
+}
+
+export interface Versions {
+  /** The revision shown, of how many; and the one in use (shown by default, searched, sent with new questions). */
+  n: number;
+  of: number;
+  inUse: number;
+  onShow?: ((n: number) => void) | undefined;
+  /** Shown when the revision on the screen is not the one in use. */
+  onUse?: (() => void) | undefined;
 }
 
 export function MessageView({
@@ -21,12 +35,32 @@ export function MessageView({
   onOpenBranch,
   onSplitOff,
   onShowContext,
+  onAskAgain,
+  versions,
   slots,
 }: { message: Message; branches: BranchSummary[]; slots?: Slot[] } & MessageActions) {
   const { role, status } = message;
   const sent = role === 'assistant' && status !== 'pending' && onShowContext;
+  const earlier = versions && versions.n !== versions.inUse ? versions : null;
   return (
-    <article className={`message message-${role}`} data-testid="message" data-role={role} data-status={status}>
+    <article
+      className={`message message-${role}${earlier ? ' message-earlier' : ''}`}
+      data-testid="message"
+      data-role={role}
+      data-status={status}
+    >
+      {earlier && (
+        <div className="earlier-note" role="note" data-testid="earlier-note">
+          <span title="The answer in use is shown first, found by search, and sent with new questions.">
+            An earlier answer, {earlier.n} of {earlier.of}. New questions use answer {earlier.inUse}.
+          </span>
+          {earlier.onUse && (
+            <button type="button" onClick={earlier.onUse} data-testid="use-revision">
+              Use this one
+            </button>
+          )}
+        </div>
+      )}
       <div className="message-body" data-message-id={message.id}>
         {role === 'assistant' ? (
           <Markdown source={message.content} {...(slots ? { slots } : {})} />
@@ -41,17 +75,31 @@ export function MessageView({
         {role === 'assistant' && status === 'streaming' && <span className="caret" aria-hidden />}
       </div>
       <StatusLine message={message} onStop={onStop} onOpenSettings={onOpenSettings} />
-      {sent && (
-        <div className="message-actions">
-          <button
-            type="button"
-            className="quiet"
-            onClick={onShowContext}
-            title="See exactly what the AI was sent for this answer"
-            data-testid="show-context"
-          >
-            What was sent
-          </button>
+      {(sent || onAskAgain || versions) && (
+        <div className={`message-actions${versions ? ' has-versions' : ''}`}>
+          {versions && <VersionSwitch versions={versions} />}
+          {onAskAgain && (
+            <button
+              type="button"
+              className="quiet"
+              onClick={onAskAgain}
+              title="Ask the same question again for a new answer. This one is kept, with any side questions from it."
+              data-testid="ask-again"
+            >
+              ↻ Ask again
+            </button>
+          )}
+          {sent && (
+            <button
+              type="button"
+              className="quiet"
+              onClick={onShowContext}
+              title="See exactly what the AI was sent for this answer"
+              data-testid="show-context"
+            >
+              What was sent
+            </button>
+          )}
         </div>
       )}
       {onSplitOff && (
@@ -85,6 +133,38 @@ export function MessageView({
         </ul>
       )}
     </article>
+  );
+}
+
+function VersionSwitch({ versions }: { versions: Versions }) {
+  const { n, of, inUse, onShow } = versions;
+  return (
+    <span className="versions" data-testid="versions">
+      <button
+        type="button"
+        className="quiet"
+        onClick={() => onShow?.(n - 1)}
+        disabled={!onShow || n <= 1}
+        aria-label="Earlier answer"
+        data-testid="earlier-answer"
+      >
+        ‹
+      </button>
+      <span className="versions-count" aria-live="polite">
+        {n} / {of}
+        {n === inUse && of > 1 && <span className="sr-only"> (in use)</span>}
+      </span>
+      <button
+        type="button"
+        className="quiet"
+        onClick={() => onShow?.(n + 1)}
+        disabled={!onShow || n >= of}
+        aria-label="Later answer"
+        data-testid="later-answer"
+      >
+        ›
+      </button>
+    </span>
   );
 }
 

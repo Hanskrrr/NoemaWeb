@@ -86,6 +86,8 @@ export const Message = z.object({
   revisionId: Id,
   /** 1 for the first answer, 2+ after regenerate. Old revisions are kept. */
   revision: z.number().int().positive(),
+  /** How many revisions it has: more than one after asking again. */
+  revisions: z.number().int().positive(),
   content: z.string(),
   status: MessageStatus,
   error: MessageError.nullable(),
@@ -539,6 +541,8 @@ export const CreateBranchRequest = z.object({
   id: Id,
   anchor: z.object({
     messageId: Id,
+    /** The revision the passage is in, when it is not the one in use (an earlier answer, read again). */
+    revisionId: Id.optional(),
     start: z.number().int().nonnegative(),
     end: z.number().int().positive(),
   }),
@@ -547,6 +551,31 @@ export const CreateBranchRequest = z.object({
 export type CreateBranchRequest = z.infer<typeof CreateBranchRequest>;
 
 export const AskResponse = z.object({ user: Message, assistant: Message });
+
+/** Ask the same question again: a new revision of the answer, with an id the client made (so a retry cannot ask twice). */
+export const RegenerateRequest = z.object({ revisionId: Id });
+export type RegenerateRequest = z.infer<typeof RegenerateRequest>;
+
+/** One revision of an answer: every answer to the question is kept, with its passages. */
+export const MessageRevision = z.object({
+  revisionId: Id,
+  revision: z.number().int().positive(),
+  content: z.string(),
+  status: MessageStatus,
+  error: MessageError.nullable(),
+  model: z.string().nullable(),
+  headline: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type MessageRevision = z.infer<typeof MessageRevision>;
+export const MessageRevisions = z.object({ revisions: z.array(MessageRevision) });
+export type MessageRevisions = z.infer<typeof MessageRevisions>;
+
+/** Which revision is in use: shown first, searched, and sent with later questions. */
+export const UseRevisionRequest = z.object({ revisionId: Id });
+export type UseRevisionRequest = z.infer<typeof UseRevisionRequest>;
+export const MessageResponse = z.object({ message: Message });
+export type MessageResponse = z.infer<typeof MessageResponse>;
 export type AskResponse = z.infer<typeof AskResponse>;
 
 export const CreateBranchResponse = z.object({ thread: Thread, user: Message, assistant: Message });

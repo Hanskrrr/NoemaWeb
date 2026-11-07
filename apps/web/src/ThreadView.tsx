@@ -11,6 +11,7 @@ import {
   type Merge,
   type Message,
   type MessageError,
+  type MessageRevision,
   type MessageStatus,
   type NoteSummary,
   type Origin,
@@ -33,6 +34,8 @@ import { keys, storage } from './storage.ts';
 /** A passage to scroll to and highlight when a thread opens (after cancelling a branch). */
 export interface Focus {
   messageId: string;
+  /** The revision the passage is in, when it was an earlier answer read again. */
+  revisionId?: string | undefined;
   start: number;
   end: number;
 }
@@ -52,6 +55,8 @@ export interface BranchDraft {
   parentThreadId: string;
   parentTitle: string;
   messageId: string;
+  /** The revision the passage is in (an earlier answer, read again, or the one in use). */
+  revisionId?: string | undefined;
   start: number;
   end: number;
   exact: string;
@@ -101,6 +106,7 @@ function optimisticUser(threadId: string, id: string, content: string, seq: numb
     replyTo: null,
     revisionId: id,
     revision: 1,
+    revisions: 1,
     content,
     status: 'pending',
     error: null,
@@ -112,6 +118,20 @@ function optimisticUser(threadId: string, id: string, content: string, seq: numb
 }
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/** A message as one of its revisions: an earlier answer, read again. */
+function asRevision(m: Message, v: MessageRevision): Message {
+  return {
+    ...m,
+    revisionId: v.revisionId,
+    revision: v.revision,
+    content: v.content,
+    status: v.status,
+    error: v.error,
+    model: v.model,
+    headline: v.headline,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Highlights: where branches left (soft), and the passage Back returned to (strong)
@@ -214,8 +234,8 @@ export function ThreadView({
   onShowContext,
 }: {
   threadId: string;
-  /** Show what the model was sent for an answer. */
-  onShowContext?: (messageId: string) => void;
+  /** Show what the model was sent for an answer (for the revision shown, when it is not the one in use). */
+  onShowContext?: (messageId: string, revisionId?: string) => void;
   /** Every note: those made from this thread are named under its title. */
   notes?: NoteSummary[];
   /** Back to the passage of the source this thread was asked about. */
@@ -258,7 +278,19 @@ export function ThreadView({
   const [outbox, setOutbox] = useState<Outbox | null>(() => storage.getJson<Outbox | null>(keys.outbox(threadId), null));
   const watchers = useRef(new Map<string, () => void>());
   const bottom = useRef<HTMLDivElement>(null);
-  const byId = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages]);
+  /** Answers shown as an earlier revision (read again), by message. The rest show the one in use. */
+  const [viewing, setViewing] = useState<Map<string, MessageRevision>>(() => new Map());
+  const revisionsCache = useRef(new Map<string, MessageRevision[]>());
+  // What is on the screen: every message as the revision shown. Selections, marks and Back work on these.
+  const shown = useMemo(
+    () =>
+      messages.map((m) => {
+        const v = viewing.get(m.id);
+        return v && v.revisionId !== m.revisionId ? asRevision(m, v) : m;
+      }),
+    [messages, viewing],
+  );
+  const byId = useMemo(() => new Map(shown.map((m) => [m.id, m])), [shown]);
 
   const watch = useCallback(
     (id: string) => {
@@ -347,6 +379,7 @@ export function ThreadView({
 
   const live = messages.find((m) => m.role === 'assistant' && isLive(m.status));
   const lastContentLength = messages.at(-1)?.content.length ?? 0;
+  const lastStatus = messages.at(-1)?.status;
 
   // Follow the answer as it grows, unless the learner has scrolled up to read.
   const stick = useRef(!returningFrom && !focus && !focusMessage);
@@ -357,9 +390,10 @@ export function ThreadView({
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
+  // Once more when it ends, for the actions that appear under a finished answer.
   useEffect(() => {
-    if (lastContentLength >= 0 && stick.current) bottom.current?.scrollIntoView({ block: 'end' });
-  }, [lastContentLength]);
+    if (lastContentLength >= 0 && lastStatus && stick.current) bottom.current?.scrollIntoView({ block: 'end' });
+  }, [lastContentLength, lastStatus]);
 
   // Marks where branches left, redrawn as messages render.
   useEffect(() => {
@@ -367,10 +401,44 @@ export function ThreadView({
   }, [branches, byId, loaded]);
   useEffect(() => () => void highlight('noema-branches', null), []);
 
+  // Show an answer as one of its revisions (null: the one in use).
+  const revisionsOf = useCallback(async (messageId: string) => {
+    const cached = revisionsCache.current.get(messageId);
+    if (cached) return cached;
+    const { revisions } = await api.revisions(messageId);
+    revisionsCache.current.set(messageId, revisions);
+    return revisions;
+  }, []);
+  const showRevision = useCallback(
+    async (messageId: string, revisionId: string | null) => {
+      const revision = revisionId ? (await revisionsOf(messageId)).find((r) => r.revisionId === revisionId) : undefined;
+      setViewing((v) => {
+        const next = new Map(v);
+        if (revision) next.set(messageId, revision);
+        else next.delete(messageId);
+        return next;
+      });
+    },
+    [revisionsOf],
+  );
+
   // Back from a branch: scroll to the passage it left from and highlight it.
+  // If the passage is in an earlier answer (asked again since), that answer is shown first.
   const returned = useRef(false);
+  const showingFor = useRef<string | null>(null);
   useEffect(() => {
     if (!loaded || returned.current || (!returningFrom && !focus && !focusMessage)) return;
+    const wanted = returningFrom
+      ? branches.find((b) => b.threadId === returningFrom)?.anchor
+      : focus?.revisionId
+        ? { messageId: focus.messageId, revisionId: focus.revisionId }
+        : undefined;
+    const at = wanted ? byId.get(wanted.messageId) : undefined;
+    if (wanted && at && at.revisionId !== wanted.revisionId && showingFor.current !== wanted.revisionId) {
+      showingFor.current = wanted.revisionId;
+      showRevision(wanted.messageId, wanted.revisionId).catch(() => {});
+      return;
+    }
     returned.current = true;
     if (focusMessage) {
       const article = document.querySelector(`[data-message-id="${focusMessage}"]`)?.closest('article');
@@ -390,7 +458,7 @@ export function ThreadView({
     highlight('noema-return', range);
     const target = range.startContainer.parentElement;
     target?.scrollIntoView({ block: 'center' });
-  }, [loaded, returningFrom, focus, focusMessage, branches, byId]);
+  }, [loaded, returningFrom, focus, focusMessage, branches, byId, showRevision]);
   useEffect(() => () => void highlight('noema-return', null), []);
   useEffect(() => () => clearFound(), []);
 
@@ -429,6 +497,7 @@ export function ThreadView({
       parentThreadId: thread.id,
       parentTitle: thread.title,
       messageId: message.id,
+      revisionId: message.revisionId,
       start: anchor.position.start,
       end: anchor.position.end,
       exact: anchor.quote.exact,
@@ -450,6 +519,46 @@ export function ThreadView({
   const stop = async (id: string) => {
     try {
       await api.stop(id);
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
+
+  // Ask the same question again: a new answer, kept beside the old ones, made the one in use.
+  const askAgain = async (messageId: string) => {
+    try {
+      const { message } = await api.regenerate(messageId, ulid());
+      revisionsCache.current.delete(messageId);
+      await showRevision(messageId, null);
+      dispatch({ type: 'upsert', message });
+      onChanged();
+      if (!isTerminal(message.status)) watch(message.id);
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
+
+  // Flip through an answer's revisions.
+  const flip = async (messageId: string, n: number) => {
+    const inUse = messages.find((m) => m.id === messageId);
+    if (!inUse) return;
+    try {
+      const target = (await revisionsOf(messageId)).find((r) => r.revision === n);
+      if (target) await showRevision(messageId, target.revisionId === inUse.revisionId ? null : target.revisionId);
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
+
+  // Make the revision shown the one in use: it is then searched and sent with new questions.
+  const useShown = async (messageId: string) => {
+    const v = viewing.get(messageId);
+    if (!v) return;
+    try {
+      const { message } = await api.useRevision(messageId, v.revisionId);
+      dispatch({ type: 'upsert', message });
+      await showRevision(messageId, null);
+      onChanged();
     } catch (err) {
       setNotice(errorText(err));
     }
@@ -581,6 +690,7 @@ export function ThreadView({
     );
   }
 
+  const byIdInUse = new Map(messages.map((m) => [m.id, m]));
   const branchesByMessage = new Map<string, BranchSummary[]>();
   for (const b of branches) {
     const list = branchesByMessage.get(b.anchor.messageId) ?? [];
@@ -679,7 +789,7 @@ export function ThreadView({
               onUndo={() => void undoMerged(x)}
             />
           ))}
-        {messages.map((m) => {
+        {shown.map((m) => {
           const card = (x: Merge) => (
             <MergeCard
               key={x.id}
@@ -696,6 +806,9 @@ export function ThreadView({
           });
           const after = mine.filter((x) => !inline.some((i) => i.key === x.id));
           const canCut = m.role === 'user' && m.seq > 0 && isTerminal(m.status) && !live;
+          const inUse = byIdInUse.get(m.id);
+          const canAskAgain =
+            m.role === 'assistant' && !live && !thread?.deletedAt && inUse !== undefined && isTerminal(inUse.status);
           return (
             <div key={m.id} className="message-slot">
               {cutting === m.id && (
@@ -712,7 +825,23 @@ export function ThreadView({
                 onOpenSettings={onOpenSettings}
                 onOpenBranch={(id) => onNavigate(id)}
                 onSplitOff={canCut && cutting !== m.id ? () => setCutting(m.id) : undefined}
-                onShowContext={onShowContext ? () => onShowContext(m.id) : undefined}
+                onShowContext={
+                  onShowContext
+                    ? () => onShowContext(m.id, viewing.has(m.id) ? m.revisionId : undefined)
+                    : undefined
+                }
+                onAskAgain={canAskAgain ? () => void askAgain(m.id) : undefined}
+                versions={
+                  m.role === 'assistant' && m.revisions > 1 && inUse
+                    ? {
+                        n: m.revision,
+                        of: m.revisions,
+                        inUse: inUse.revision,
+                        onShow: live ? undefined : (n: number) => void flip(m.id, n),
+                        onUse: viewing.has(m.id) && !live && !thread?.deletedAt ? () => void useShown(m.id) : undefined,
+                      }
+                    : undefined
+                }
                 {...(inline.length > 0 ? { slots: inline } : {})}
               />
               {after.map(card)}
@@ -733,7 +862,7 @@ export function ThreadView({
         <div ref={bottom} />
       </main>
       {messages.filter((m) => m.role === 'user').length >= 3 && (
-        <Outline items={outlineOf(messages, branchesByMessage, merges, byId)} label="Questions in this thread" />
+        <Outline items={outlineOf(shown, branchesByMessage, merges, byId)} label="Questions in this thread" />
       )}
 
       {notice && (
@@ -1142,7 +1271,12 @@ export function DraftView({
       } else if (branch) {
         await api.createBranch(branch.parentThreadId, {
           id,
-          anchor: { messageId: branch.messageId, start: branch.start, end: branch.end },
+          anchor: {
+            messageId: branch.messageId,
+            ...(branch.revisionId ? { revisionId: branch.revisionId } : {}),
+            start: branch.start,
+            end: branch.end,
+          },
           question: { id: current.question, content },
         });
       } else {

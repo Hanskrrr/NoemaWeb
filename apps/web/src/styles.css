@@ -2401,6 +2401,56 @@ button.quiet.inline.faint:hover {
   color: var(--ink-faint);
 }
 
+.message-actions {
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* An answer asked more than once: the switch stays visible, so the learner knows there are others. */
+.message-actions.has-versions {
+  opacity: 1;
+}
+
+.versions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  margin-right: auto;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.versions button.quiet {
+  padding: 0.1rem 0.4rem;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.versions button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.earlier-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
+  margin-bottom: 0.6rem;
+  padding: 0.45rem 0.6rem 0.45rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--rule));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 6%, var(--sheet));
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.earlier-note button {
+  font-size: 0.85rem;
+}
+
 .message-actions button.quiet:hover,
 .message-actions button.quiet:focus-visible {
   color: var(--accent);

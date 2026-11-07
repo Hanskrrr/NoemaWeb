@@ -16,6 +16,8 @@ import {
   type Message,
   MessageContext,
   type MessageError,
+  MessageResponse,
+  MessageRevisions,
   type MessageStatus,
   ModelSettingsResponse,
   ModelSettingsView,
@@ -131,7 +133,19 @@ export const api = {
   restoreNote: (noteId: string) => call(Note, 'POST', `/api/notes/${noteId}/restore`, {}),
   trash: (notebookId: string) => call(Trash, 'GET', `/api/notebooks/${notebookId}/trash`),
   /** What the model was sent for an answer. */
-  messageContext: (messageId: string) => call(MessageContext, 'GET', `/api/messages/${messageId}/context`),
+  messageContext: (messageId: string, revisionId?: string) =>
+    call(
+      MessageContext,
+      'GET',
+      `/api/messages/${messageId}/context${revisionId ? `?revision=${encodeURIComponent(revisionId)}` : ''}`,
+    ),
+  /** Ask the same question again: a new revision of the answer, made the one in use. Idempotent on its id. */
+  regenerate: (messageId: string, revisionId: string) =>
+    call(MessageResponse, 'POST', `/api/messages/${messageId}/regenerate`, { revisionId }),
+  revisions: (messageId: string) => call(MessageRevisions, 'GET', `/api/messages/${messageId}/revisions`),
+  /** Make one revision of an answer the one in use: shown, searched, and sent with later questions. */
+  useRevision: (messageId: string, revisionId: string) =>
+    call(MessageResponse, 'POST', `/api/messages/${messageId}/current`, { revisionId }),
   // Sources: what the learner reads.
   sources: (notebookId: string) => call(SourceList, 'GET', `/api/notebooks/${notebookId}/sources`),
   addSource: (notebookId: string, body: { id: string; title?: string; text?: string; url?: string }) =>

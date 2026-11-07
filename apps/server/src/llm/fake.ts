@@ -3,6 +3,7 @@
 //   [[fail:KIND]]     fail before the first token with that error kind
 //   [[error-midway]]  fail with a network error halfway through the answer
 //   [[slow]]          stream slowly (for reload and stop tests)
+// Asked again (a revision after the first), it adds a line saying which one.
 
 import type { ErrorKind } from '@noema/core';
 import { type ModelProvider, ProviderError, type StreamEvent, type StreamRequest, sleep } from './provider.ts';
@@ -132,7 +133,8 @@ export class FakeProvider implements ModelProvider {
     const fail = /\[\[fail:([a-z_]+)\]\]/.exec(question);
     if (fail) throw new ProviderError(fail[1] as ErrorKind, `fake failure: ${fail[1]}`);
     const slow = question.includes('[[slow]]');
-    const answer = fakeAnswer(question);
+    const again = req.revision && req.revision > 1 ? `\n\nAsked again: this is answer ${req.revision}.` : '';
+    const answer = fakeAnswer(question) + again;
     const parts = chunks(answer, slow ? 2 : 6);
     const delay = slow ? Math.max(this.delayMs, 25) : this.delayMs;
     const breakAt = question.includes('[[error-midway]]') ? Math.floor(parts.length / 2) : -1;

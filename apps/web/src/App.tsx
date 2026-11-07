@@ -92,7 +92,7 @@ function NotebookView({
   const [sources, setSources] = useState<Source[]>([]);
   const [trash, setTrash] = useState<Trash>({ threads: [], notes: [], sources: [] });
   const [adding, setAdding] = useState(false);
-  const [contextFor, setContextFor] = useState<string | null>(null);
+  const [contextFor, setContextFor] = useState<{ messageId: string; revisionId?: string | undefined } | null>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
   /** One line at the bottom after something went to the Trash, with Undo. */
   const [toast, setToast] = useState<{ text: string; undo: () => void } | null>(null);
@@ -304,7 +304,12 @@ function NotebookView({
         branch={showDraft}
         onCreated={(id) => void openNew(id)}
         onCancel={() => {
-          setFocus({ messageId: showDraft.messageId, start: showDraft.start, end: showDraft.end });
+          setFocus({
+            messageId: showDraft.messageId,
+            revisionId: showDraft.revisionId,
+            start: showDraft.start,
+            end: showDraft.end,
+          });
           setDraft(null);
         }}
       />
@@ -329,7 +334,7 @@ function NotebookView({
         onBackToSource={backToSource}
         beside={beside !== null}
         notes={notes}
-        onShowContext={setContextFor}
+        onShowContext={(messageId: string, revisionId?: string) => setContextFor({ messageId, revisionId })}
         onDeleted={(t, count) => {
           void refresh();
           const sides = count - 1;
@@ -489,8 +494,9 @@ function NotebookView({
       )}
       {contextFor && (
         <ContextDialog
-          key={contextFor}
-          messageId={contextFor}
+          key={`${contextFor.messageId}:${contextFor.revisionId ?? ''}`}
+          messageId={contextFor.messageId}
+          revisionId={contextFor.revisionId}
           onClose={() => setContextFor(null)}
           onEditAboutMe={() => {
             setContextFor(null);

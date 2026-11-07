@@ -45,6 +45,8 @@ export interface StartArgs {
   notebookId: string;
   messageId: string;
   revisionId: string;
+  /** Which revision this is; 1 unless the learner asked again. */
+  revision?: number;
   question: { id: string; content: string; seq: number };
 }
 
@@ -198,6 +200,7 @@ export class Generations {
       const stream = provider.stream({
         messages,
         maxTokens: this.config.maxOutputTokens ?? undefined,
+        revision: args.revision,
         signal: entry.controller.signal,
       });
       for await (const ev of stream) {

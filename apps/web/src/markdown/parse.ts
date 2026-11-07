@@ -17,13 +17,106 @@ import { math } from 'micromark-extension-math';
  * footnotes, bare links) and $math$. Single tildes are not strikethrough:
  * Chinese text writes ranges as "3~5 天", and one line can hold two of them.
  */
-export function parseMarkdown(source: string): Root {
-  const root = fromMarkdown(source, {
+export function parseMarkdown(source: string, options: { tex?: boolean } = {}): Root {
+  const text = options.tex ? texToDollars(source) : source;
+  const root = fromMarkdown(text, {
     extensions: [gfm({ singleTilde: false }), math()],
     mdastExtensions: [gfmFromMarkdown(), mathFromMarkdown()],
   });
   unescapeCellPipes(root, false);
   return root;
+}
+
+/**
+ * Many models write math with LaTeX's own delimiters, \( … \) and \[ … \],
+ * which Markdown reads as escaped brackets. They are rewritten to dollars of
+ * the same length, so every offset still points at the same character of the
+ * revision (anchors are offsets into it). Code is left alone, and a pair never
+ * spans a blank line or a backslash that is itself escaped.
+ * - \[ and \] each alone on their line become a $$ block (lines inside are
+ *   taken as they are);
+ * - otherwise \[ … \] and \( … \) become `$ … $` (inline math, padded
+ *   with spaces that KaTeX ignores); a formula from \[ is drawn displayed.
+ */
+export function texToDollars(source: string): string {
+  if (!source.includes('\\(') && !source.includes('\\[')) return source;
+  const out = source.split('');
+  const n = source.length;
+  const lineStart = (at: number) => source.lastIndexOf('\n', at - 1) + 1;
+  const lineEnd = (at: number) => {
+    const e = source.indexOf('\n', at);
+    return e < 0 ? n : e;
+  };
+  // Only quote markers and spaces before it, only spaces after it: alone on its line.
+  const alone = (at: number, len: number) =>
+    /^[ \t]*(?:>[ \t]?)*[ \t]*$/.test(source.slice(lineStart(at), at)) &&
+    /^[ \t]*$/.test(source.slice(at + len, lineEnd(at)));
+  const blank = (line: string) => /^[ \t>]*$/.test(line);
+  // Is the backslash at `at` unescaped (an even number of backslashes before it)?
+  const unescaped = (at: number) => {
+    let k = at - 1;
+    while (k >= 0 && source[k] === '\\') k--;
+    return (at - 1 - k) % 2 === 0;
+  };
+  let fence: string | null = null;
+  let i = 0;
+  while (i < n) {
+    // Fenced code: whole lines.
+    if (i === 0 || source[i - 1] === '\n') {
+      const f = /^ {0,3}(?:>[ \t]?)*[ \t]*(`{3,}|~{3,})/.exec(source.slice(i, lineEnd(i)));
+      if (fence) {
+        if (f?.[1] && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+        i = lineEnd(i) + 1;
+        continue;
+      }
+      if (f?.[1]) {
+        fence = f[1];
+        i = lineEnd(i) + 1;
+        continue;
+      }
+    }
+    const c = source[i];
+    if (c === '`') {
+      // A code span: to the next run of as many backticks, within the paragraph.
+      let run = 1;
+      while (source[i + run] === '`') run++;
+      const ticks = '`'.repeat(run);
+      let j = source.indexOf(ticks, i + run);
+      while (j >= 0 && source[j + run] === '`') j = source.indexOf(ticks, j + run + 1);
+      const between = j >= 0 ? source.slice(i + run, j) : '';
+      if (j >= 0 && !between.split('\n').slice(1, -1).some(blank)) {
+        i = j + run;
+        continue;
+      }
+      i += run;
+      continue;
+    }
+    if (c === '\\' && (source[i + 1] === '(' || source[i + 1] === '[') && unescaped(i)) {
+      const close = source[i + 1] === '(' ? '\\)' : '\\]';
+      let j = source.indexOf(close, i + 2);
+      while (j >= 0 && !unescaped(j)) j = source.indexOf(close, j + 1);
+      const inside = j >= 0 ? source.slice(i + 2, j) : '';
+      if (j < 0 || inside.split('\n').slice(1, -1).some(blank) || /\n[ \t>]*\n/.test(inside)) {
+        i += 2;
+        continue;
+      }
+      if (close === '\\]' && alone(i, 2) && alone(j, 2)) {
+        out[i] = '$';
+        out[i + 1] = '$';
+        out[j] = '$';
+        out[j + 1] = '$';
+      } else {
+        out[i] = '$';
+        out[i + 1] = ' ';
+        out[j] = ' ';
+        out[j + 1] = '$';
+      }
+      i = j + 2;
+      continue;
+    }
+    i++;
+  }
+  return out.join('');
 }
 
 /**

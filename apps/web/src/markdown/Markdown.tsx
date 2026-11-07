@@ -151,6 +151,20 @@ function render(node: Nodes, source: string, index: number, cites: Cites | null)
       );
     }
     case 'inlineMath':
+      // Written \[ … \] on one line with text: drawn displayed, still inside its paragraph.
+      if (r && source.startsWith('\\[', r.start)) {
+        return (
+          <span
+            key={key}
+            className="math math-display math-display-inline"
+            data-s={r.start}
+            data-e={r.end}
+            data-atomic=""
+            // biome-ignore lint/security/noDangerouslySetInnerHtml: KaTeX output, trust disabled
+            dangerouslySetInnerHTML={{ __html: renderMath(node.value, true) }}
+          />
+        );
+      }
       return (
         <span
           key={key}
@@ -295,8 +309,12 @@ export interface Slot {
   node: ReactNode;
 }
 
-export function Markdown({ source, slots }: { source: string; slots?: Slot[] }) {
-  const tree = useMemo(() => parseMarkdown(source), [source]);
+/**
+ * `tex` (on by default): also read \( … \) and \[ … \] as math, as models
+ * write it. Off for sources, whose pages escape brackets as \[ and \].
+ */
+export function Markdown({ source, slots, tex = true }: { source: string; slots?: Slot[]; tex?: boolean }) {
+  const tree = useMemo(() => parseMarkdown(source, { tex }), [source, tex]);
   const cites = useContext(CiteContext);
   if (!slots || slots.length === 0) return <div className="md">{render(tree, source, 0, cites)}</div>;
   const blocks = tree.children as Nodes[];

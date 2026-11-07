@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { codeRegion, type Leaf, leafToSource, leaves, parseMarkdown, sourceToLeaf } from '../src/markdown/parse.ts';
+import { codeRegion, type Leaf, leafToSource, leaves, parseMarkdown, sourceToLeaf, texToDollars } from '../src/markdown/parse.ts';
 
 const SRC = [
   'Gradient **descent** takes $x_{t+1} = x_t - \\eta \\nabla f$ steps.',
@@ -167,4 +167,58 @@ test('math in a table cell: an escaped pipe is a bar to KaTeX, as GFM reads it; 
   };
   walk(parseMarkdown(src) as never);
   assert.deepEqual(values, ['E=\\tfrac{1}{2}\\Vert v\\Vert^{2}', '|x|', '\\|x\\|']);
+});
+
+test('math written \\( … \\) and \\[ … \\] is read as math, every offset kept, code and escapes left alone', () => {
+  const src = [
+    'A circle \\(S^1\\) and a map \\(f:S^1\\to\\mathbb R\\). Let',
+    '\\[',
+    'g(t)=f(t)-f(t+\\pi).',
+    '\\]',
+    '> quoted:',
+    '> \\[',
+    '> h(x)=0',
+    '> \\]',
+    'Inline display \\[ a^2+b^2=c^2 \\] in a line, and `\\(code\\)`.',
+    '',
+    '```',
+    '\\(not math\\)',
+    '```',
+    'An escaped \\\\(paren\\\\) stays, and \\( never closed.',
+  ].join('\n');
+  const out = texToDollars(src);
+  assert.equal(out.length, src.length, 'the same length: offsets still point at the same characters');
+  const math: Array<{ type: string; value: string; text: string }> = [];
+  const walk = (n: { type: string; value?: string; children?: unknown[]; position?: { start: { offset?: number }; end: { offset?: number } } }) => {
+    if ((n.type === 'inlineMath' || n.type === 'math') && n.value !== undefined) {
+      math.push({ type: n.type, value: n.value.trim(), text: src.slice(n.position?.start.offset, n.position?.end.offset) });
+    }
+    for (const c of n.children ?? []) walk(c as typeof n);
+  };
+  walk(parseMarkdown(src, { tex: true }) as never);
+  assert.deepEqual(
+    math.map((m) => [m.type, m.value]),
+    [
+      ['inlineMath', 'S^1'],
+      ['inlineMath', 'f:S^1\\to\\mathbb R'],
+      ['math', 'g(t)=f(t)-f(t+\\pi).'],
+      ['math', 'h(x)=0'],
+      ['inlineMath', 'a^2+b^2=c^2'],
+    ],
+  );
+  assert.ok(math[0]?.text.startsWith('\\(S^1'), 'the node covers the original delimiters');
+  assert.ok(out.includes('`\\(code\\)`') && out.includes('\n\\(not math\\)\n'), 'code is left alone');
+  assert.ok(out.includes('\\\\(paren\\\\)') && out.includes('\\( never closed.'), 'escaped and unclosed are left alone');
+  // The text around the formulas still maps to the raw text and back (selections, anchors).
+  for (const leaf of leaves(parseMarkdown(src, { tex: true }), src).filter((l) => !l.atomic)) {
+    const raw = src.slice(leaf.start, leaf.end);
+    for (let from = 0; from < leaf.value.length; from += 3) {
+      const to = Math.min(leaf.value.length, from + 4);
+      const r = leafToSource(leaf.value, raw, leaf.start, from, to);
+      assert.ok(r && r.start >= leaf.start && r.end <= leaf.end, `${leaf.kind} ${from}-${to}`);
+    }
+  }
+  // Off (for sources): a page's escaped brackets are text.
+  const plain = parseMarkdown('Smith et al. \\[2020\\]');
+  assert.equal(JSON.stringify(plain).includes('inlineMath'), false);
 });

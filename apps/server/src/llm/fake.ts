@@ -3,6 +3,7 @@
 //   [[fail:KIND]]     fail before the first token with that error kind
 //   [[error-midway]]  fail with a network error halfway through the answer
 //   [[slow]]          stream slowly (for reload and stop tests)
+//   [[tex]]           answer with math written \( … \) and \[ … \], as many models do
 // Asked again (a revision after the first), it adds a line saying which one.
 
 import type { ErrorKind } from '@noema/core';
@@ -32,6 +33,22 @@ export function fakeAnswer(question: string): string {
     '| --- | ---: |',
     '| Forward | $O(n)$ |',
     '| ~~Backward~~ | 3~5 ms or 4~6 ms |',
+  ].join('\n');
+}
+
+/** Math with LaTeX's own delimiters, inline, displayed, in a quote and in code. */
+export function texAnswer(): string {
+  return [
+    'On a circle \\(S^1\\), a map \\(f:S^1\\to\\mathbb R\\) has a point where',
+    '\\[',
+    'f(t)=f(t+\\pi).',
+    '\\]',
+    '> Quoted:',
+    '> \\[',
+    '> g(-x)=-g(x)',
+    '> \\]',
+    '',
+    'In code it stays as written: `\\(x\\)`.',
   ].join('\n');
 }
 
@@ -134,7 +151,7 @@ export class FakeProvider implements ModelProvider {
     if (fail) throw new ProviderError(fail[1] as ErrorKind, `fake failure: ${fail[1]}`);
     const slow = question.includes('[[slow]]');
     const again = req.revision && req.revision > 1 ? `\n\nAsked again: this is answer ${req.revision}.` : '';
-    const answer = fakeAnswer(question) + again;
+    const answer = (question.includes('[[tex]]') ? texAnswer() : fakeAnswer(question)) + again;
     const parts = chunks(answer, slow ? 2 : 6);
     const delay = slow ? Math.max(this.delayMs, 25) : this.delayMs;
     const breakAt = question.includes('[[error-midway]]') ? Math.floor(parts.length / 2) : -1;

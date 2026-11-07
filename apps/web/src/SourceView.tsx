@@ -35,7 +35,10 @@ const questionsLabel = (n: number) => (n === 1 ? '1 question' : `${n} questions`
 const BLOCK = 'p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, table, .math-display';
 
 /** A paper is long: drawn again only when its text or what was asked in it changes, not on every selection. */
-const SourceText = memo(Markdown);
+// A page's escaped brackets (\[2021\]) are text, not math: no \( \[ reading.
+const SourceText = memo(function SourceText(props: { source: string; slots?: Slot[] }) {
+  return <Markdown {...props} tex={false} />;
+});
 
 export function SourceView({
   sourceId,

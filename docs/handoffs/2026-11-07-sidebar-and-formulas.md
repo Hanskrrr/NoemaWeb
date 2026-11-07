@@ -1,4 +1,4 @@
-# Handoff 2026-11-07: the Sources list overlapping, and formulas in a paper
+# Handoff 2026-11-07: the Sources list overlapping, and formulas in a paper and in answers
 
 The founder saw the Sources list in the sidebar overlap and formulas display badly. I looked at a copy of his notebook (kept outside the repository) with this build.
 
@@ -25,6 +25,21 @@ The founder saw the Sources list in the sidebar overlap and formulas display bad
 
 Restart `pnpm dev`, open the paper and press **Read it again** in the note above the text. The three threads asked about it stay with version 1 and open it there.
 
+## Then: formulas in answers
+
+The founder said the formulas in a thread were still wrong. The model he uses writes math with LaTeX's own delimiters, `\( … \)` and `\[ … \]`, although the system prompt asks for dollars; Markdown reads those as escaped brackets, so every formula in his answers showed as raw TeX.
+
+- **The renderer reads them as math** (`texToDollars` in `apps/web/src/markdown/parse.ts`): before parsing, each pair outside code is rewritten to dollars of the same length, so every offset still points at the same character and anchors stay exact. `\[` and `\]` alone on their lines become a `$$` block (lines inside taken as they are, also in a quote); otherwise a pair becomes `$ … $`, and a formula written `\[ … \]` inside a line is drawn displayed. Escaped backslashes, unclosed pairs and pairs across a blank line are left alone. On for answers, notes and merges; off for sources, whose pages escape brackets as `\[`.
+- **The fake model** answers `[[tex]]` with this kind of math.
+- The system prompt is unchanged (changing it resets the provider's cache); old answers render without it.
+
+| Check | Result |
+| --- | --- |
+| `node --test` | 205 pass. New: `\(` and `\[` read as math, inline, as a block and in a quote; code, escaped and unclosed pairs left alone; same length; the text around still maps to the raw text and back; sources unchanged |
+| Playwright (sandbox, Chromium) | 56 pass, twice in a row. New in `chat.spec.ts`: an answer with `\( \)` and `\[ \]` has its inline, displayed and quoted formulas drawn, code as written, and no delimiter left in the text |
+| The thread he named, on a fresh copy of his notebook | 154 formulas drawn (50 displayed), none left as raw text, no KaTeX error |
+
 ## Next
 
 - Unchanged: memory and the "asked before" reminder, to discuss.
+- The Markdown export keeps answers as written (`\(`); some editors read only dollars.

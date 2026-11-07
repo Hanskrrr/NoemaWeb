@@ -81,3 +81,21 @@ test('New thread starts empty and appears in the sidebar after the first questio
   // The title is written by the model after the first answer (the test model writes "About …").
   await expect(page.locator('[data-testid=thread-link].active')).toHaveText('About A brand new topic');
 });
+
+test('math written \\( … \\) and \\[ … \\], as many models write it, is drawn as math', async ({ page, request }) => {
+  await freshThread(request);
+  await page.goto('/');
+  await ask(page, 'Explain the circle case [[tex]]');
+  const answer = lastAnswer(page);
+  await expect(answer).toHaveAttribute('data-status', 'done');
+  await expect(answer.locator('.math-inline .katex')).toHaveCount(2);
+  await expect(answer.locator('.math-display .katex-display')).toHaveCount(2);
+  await expect(answer.locator('blockquote .math-display')).toHaveCount(1);
+  await expect(answer.locator('code')).toContainText('\\(x\\)');
+  const text = await answer.locator('.md').evaluate((el) => {
+    const copy = el.cloneNode(true) as HTMLElement;
+    for (const m of copy.querySelectorAll('.katex, code')) m.remove();
+    return copy.textContent ?? '';
+  });
+  expect(text).not.toMatch(/\\[([\])]/);
+});

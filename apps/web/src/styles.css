@@ -407,6 +407,12 @@ button.quiet:hover {
   margin: 0 0 0.85em;
 }
 
+/* Display math written inline (\[ … \] in a paragraph): its own line, inside the paragraph. */
+.math-display-inline {
+  display: block;
+  margin: 0.4em 0;
+}
+
 /* KaTeX's 1.21em is larger than the serif text around it; a little smaller fits more of a wide formula. */
 .md .katex {
   font-size: 1.1em;

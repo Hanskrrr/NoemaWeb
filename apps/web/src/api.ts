@@ -64,7 +64,10 @@ export class ApiFailure extends Error {
 
 /** A body that is already JSON text (a large file read from disk), sent as it is. */
 class RawJson {
-  constructor(readonly text: string) {}
+  readonly text: string;
+  constructor(text: string) {
+    this.text = text;
+  }
 }
 
 async function call<S extends z.ZodTypeAny>(

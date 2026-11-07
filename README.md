@@ -9,7 +9,14 @@ A learning notebook for studying hard material with an AI, on your own computer.
 - See exactly what the AI was sent for any answer, and tell it about yourself once.
 - Everything stays in one file on your computer, and nothing is lost when a tab closes or the server restarts.
 
-This is a working prototype. Where it stands and what comes next: [docs/status.md](docs/status.md).
+This is a working prototype, built by a small team.
+
+## Working on Noema
+
+- [docs/architecture.md](docs/architecture.md): how it works, and the ideas the code depends on.
+- [docs/codebase.md](docs/codebase.md): what every folder and file is for, and where to make common changes.
+- [docs/status.md](docs/status.md): what is built so far, what is missing, what is next.
+- [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md): how work is done here, and the rules.
 
 ## Run it
 
@@ -54,10 +61,7 @@ packages/core     pure TypeScript, no I/O: ids, anchors, search text, context as
 apps/server       node:http + node:sqlite: store, model clients, generation, SSE, routes
 apps/web          Vite + React: the shell, the offset-preserving Markdown renderer, selection -> anchor
 e2e               Playwright specs, always against the fake model
-docs/adr          engineering decisions, one page each
-docs/handoffs     one note per build session
-docs/status.md    what is built, milestone by milestone, and what is next
-docs/push-log.md  how each push was made
+docs              how it works, the codebase, status, decisions (adr/) and session notes (handoffs/)
 ```
 
-Rules for working in this repo, for people and agents: [AGENTS.md](AGENTS.md).
+Folder by folder: [docs/codebase.md](docs/codebase.md).

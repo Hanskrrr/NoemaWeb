@@ -6,6 +6,8 @@ Rules for anyone changing this code, human or agent. CLAUDE.md imports this file
 
 The v0.1 prototype of Noema, a local, single-user learning notebook. Product scope: PARADIGM §0 and the prototype brief in the `NoemaLearningNote` workspace (`docs/handoffs/2026-10-17-prototype-brief.md`), plus the 2026-11-04 architecture and reliability handoffs there. This repo links to those; it does not copy them.
 
+Read first: [docs/architecture.md](docs/architecture.md) (how it works), [docs/codebase.md](docs/codebase.md) (where things are), [docs/status.md](docs/status.md) (what is built), and the newest file in `docs/handoffs/`.
+
 ## Commands
 
 - `pnpm dev`, `pnpm test`, `pnpm e2e`, `pnpm typecheck`, `pnpm lint`, `pnpm check` (see README).
@@ -50,5 +52,6 @@ Anything outside the fence goes into `ideas.md`, not into code.
 - One milestone per branch, merged when its acceptance tests pass. Write the acceptance tests first.
 - Record engineering decisions in `docs/adr/` (one page: context, decision, consequences, how to reverse).
 - End every working session with a handoff in `docs/handoffs/YYYY-MM-DD-topic.md`: what changed, what was verified and how, what wasn't, what's next.
+- Keep `docs/status.md` current when a milestone moves, and `docs/codebase.md` when files are added or move.
 - Commit in small steps with conventional messages. Push and open pull requests only when the founder asks.
 - Log every push in `docs/push-log.md`: what was pushed, the checks before it, how it was pushed, and the result.

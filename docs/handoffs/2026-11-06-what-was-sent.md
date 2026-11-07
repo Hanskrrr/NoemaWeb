@@ -8,6 +8,7 @@ The founder agreed to M5 and asked which memory system to use. I recommended bui
 - **About you** in the header: a few lines (up to 4,000 characters) sent with every question in the notebook. The dialog above links to it, and says when nothing about you was sent.
 - **Server.** Migration 012: `model_call.request`, the exact messages. `GET /api/messages/:id/context`. Answers from before show their manifest only, with a note.
 - **Core.** `describeSent(manifest, request)`.
+- **A fix from the founder's first real paper.** He had added an arXiv paper with many aligned equations; it was read from arXiv's HTML version as designed, but LaTeXML's aligned equations (`align`) came out as Markdown tables with the formulas in cells: 73 of them. They now come out as one `aligned` block with each row's number. The extractor is now `noema-html-2`; **Read again** on that source makes a version 2 with the fix, and anything asked about version 1 stays there.
 
 ## Verified
 
@@ -16,6 +17,7 @@ The founder agreed to M5 and asked which memory system to use. I recommended bui
 | `node --test` | 184 pass. New: the parts of a request with About me (holding a heading of its own), a source, inherited turns, a merged thread and a passage, put back together exactly, their sizes adding up to the manifest's; a request with nothing but the question; older turns left out; **the M5 acceptance test**: the request kept for an answer is exactly what the model received, and its parts are named by the manifest; no context for a question or an unknown message; an older answer without the words |
 | Playwright (sandbox, Chromium) | 49 pass, twice in a row. New, `e2e/context.spec.ts`: About you written in the header, then shown word for word in What was sent with the conversation and the question; from there, changing it; for a question about a source, the section of the text and the passage |
 | Screens | What was sent for a question about a source, and About you |
+| The founder's paper, converted again from the HTML kept with it (on his Mac) | 225,000 characters in 0.12 s; tables 73 → 6 (the 6 left are the paper's real tables); 79 aligned blocks; 307 display formulas and 1,365 inline ones, **all rendered by KaTeX without an error** |
 
 ## Not verified
 

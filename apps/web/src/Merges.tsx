@@ -4,11 +4,16 @@
 // passage a side question came from, and carries it in front of its next
 // question. Undo stops carrying it.
 
-import type { Merge, Thread } from '@noema/core';
+import { type Merge, readableQuote, type Thread } from '@noema/core';
 import { useEffect, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { CiteContext, Markdown } from './markdown/Markdown.tsx';
 import { keys, storage } from './storage.ts';
+
+const shortQuote = (exact: string) => {
+  const q = readableQuote(exact);
+  return q.length > 80 ? `${q.slice(0, 80)}…` : q;
+};
 
 function errorText(err: unknown): string {
   return err instanceof ApiFailure ? err.message : 'Something went wrong. Try again.';
@@ -93,7 +98,7 @@ export function MergeCard({
         {merge.quote && (
           <>
             {' '}
-            about <q>{merge.quote.length > 80 ? `${merge.quote.slice(0, 80)}…` : merge.quote}</q>
+            about <q>{shortQuote(merge.quote)}</q>
           </>
         )}
       </div>

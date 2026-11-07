@@ -3,7 +3,7 @@
 // thread). The note stays where it is; step through its citations in the
 // order they appear, or open the thread at that exchange.
 
-import type { CiteRefs, ThreadDetail } from '@noema/core';
+import { type CiteRefs, readableQuote, type ThreadDetail } from '@noema/core';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { exchangeOf } from './citations.ts';
@@ -79,7 +79,7 @@ export function RefPane({
         </p>
         {where && (
           <blockquote className="ref-passage" data-testid="ref-passage">
-            “{where.quote.length > 400 ? `${where.quote.slice(0, 400)}…` : where.quote}”
+            “{readableQuote(where.quote).length > 400 ? `${readableQuote(where.quote).slice(0, 400)}…` : readableQuote(where.quote)}”
             <span className="ref-passage-from"> — {where.from}</span>
           </blockquote>
         )}

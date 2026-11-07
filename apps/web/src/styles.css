@@ -407,6 +407,44 @@ button.quiet:hover {
   margin: 0 0 0.85em;
 }
 
+/* KaTeX's 1.21em is larger than the serif text around it; a little smaller fits more of a wide formula. */
+.md .katex {
+  font-size: 1.1em;
+}
+
+/*
+ * A numbered equation: KaTeX pins the number to the right edge, over the
+ * formula when the formula is wide. Here the number stays at the right edge
+ * beside the formula while there is room, and goes below it (as in LaTeX)
+ * when there is not. A formula wider than the column scrolls.
+ */
+.math-display .katex-display > .katex > .katex-html:has(> .eq-body) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+
+.math-display .katex-display > .katex > .katex-html:has(> .eq-body)::before {
+  content: '';
+  flex: 1 0 0;
+}
+
+.math-display .eq-body {
+  flex: 0 0 auto;
+}
+
+/* Aligned rows: each number level with its row, so they stay beside the rows. */
+.math-display .katex-display > .katex > .katex-html:has(> .eq-rows) {
+  flex-wrap: nowrap;
+}
+
+.math-display .katex-display > .katex > .katex-html > .tag {
+  position: static;
+  flex: 1 0 auto;
+  text-align: right;
+  padding-left: 1em;
+}
+
 .image-alt,
 .link-disabled {
   color: var(--ink-soft);
@@ -1145,7 +1183,9 @@ button.danger {
   background: transparent;
   border: 0;
   border-radius: 6px;
-  padding: 0 0.5rem 0.35rem 1.35rem;
+  /* No padding below: a clamped box shows the next line in it. The space is a margin. */
+  padding: 0 0.5rem 0 1.35rem;
+  margin-bottom: 0.35rem;
   font: italic 0.78rem / 1.35 var(--serif);
   color: var(--ink-faint);
 }

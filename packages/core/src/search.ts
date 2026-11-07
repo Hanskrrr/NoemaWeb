@@ -95,6 +95,24 @@ export function plainText(markdown: string): string {
     .join('\n');
 }
 
+/**
+ * A passage as the learner reads it, for quoting it in lists and cards:
+ * plainText, without Markdown's backslash escapes ("\[2021\]" reads
+ * "[2021]") outside math, on one line unless asked to keep paragraphs.
+ */
+export function readableQuote(markdown: string, oneLine = true): string {
+  const text = plainText(markdown)
+    .split(/(\$\$[\s\S]*?\$\$|\$[^$\n]+\$)/)
+    .map((part, i) => (i % 2 ? part : part.replace(/\\([!-/:-@[-`{-~])/g, '$1')))
+    .join('');
+  return oneLine
+    ? text.replace(/\s+/g, ' ').trim()
+    : text
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
 export interface Snippet {
   text: string;
   /** Match ranges inside `text`, for highlighting. */

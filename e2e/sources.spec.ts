@@ -321,3 +321,44 @@ test('a source goes to the Trash with Undo; the threads asked about it stay', as
   await expect(page.locator(`[data-testid=source-link][data-source-id="${src.id}"]`)).toBeVisible();
   await expect(page.getByTestId('source-pane')).toContainText('short trunk');
 });
+
+test('a long passage in the sidebar shows two lines and no more; a numbered formula never sits on its number', async ({
+  page,
+  request,
+}) => {
+  const long =
+    'Several models of a pendulum try to capture its swing at large angles \\[Smith et al., 2020\\], among them the small-angle approximation and the elliptic solution, which agree only near rest.';
+  const wide = Array.from({ length: 14 }, (_, i) => `a_{${i}}x^{${i}}`).join(' + ');
+  const text = `# Layout check\n\n${long}\n\n$$\n${wide} \\tag{48}\n$$\n\nA short one:\n\n$$\nz_{t+1} = z_t + K\\nabla L(z_t) \\tag{49}\n$$`;
+  const src = await addSource(request, { text });
+  await page.goto(`/#/s/${src.id}`);
+  await selectInSource(
+    page,
+    'Several models of a pendulum try to capture its swing at large angles [Smith et al., 2020], among them the small-angle approximation',
+  );
+  await page.getByTestId('ask-source').click();
+  await answered(page, 'Which one should I use?');
+
+  // The passage under the thread in the sidebar: clamped to two lines, nothing of a third, and readable.
+  await showList(page, 'sources');
+  const link = page.getByTestId('passage-link').filter({ hasText: 'Several models of a pendulum' }).first();
+  await expect(link).toContainText('[Smith et al., 2020]');
+  const fits = await link.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return el.clientHeight <= Math.ceil(2 * Number.parseFloat(style.lineHeight)) + 1;
+  });
+  expect(fits).toBe(true);
+
+  // Numbers beside or below their formulas, never over them.
+  await page.getByTestId('back').first().click();
+  const overlaps = await page.getByTestId('source-text').evaluate((root) =>
+    [...root.querySelectorAll('.eq-body')].map((body) => {
+      const tag = body.parentElement?.querySelector(':scope > .tag');
+      if (!tag) return 'no number';
+      const a = body.getBoundingClientRect();
+      const b = tag.getBoundingClientRect();
+      return a.right > b.left + 1 && a.bottom > b.top + 1 && b.bottom > a.top + 1 ? 'overlap' : 'clear';
+    }),
+  );
+  expect(overlaps).toEqual(['clear', 'clear']);
+});

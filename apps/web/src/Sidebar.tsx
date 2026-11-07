@@ -17,7 +17,7 @@
 // sits under that thread too; the Notes list has every note, each saying
 // where it came from.
 
-import type { NoteSummary, Source, Thread, Trash } from '@noema/core';
+import { type NoteSummary, readableQuote, type Source, type Thread, type Trash } from '@noema/core';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { NotesIcon, SourcesIcon, ThreadsIcon, TrashIcon } from './icons.tsx';
 import { sourceFamily } from './reading.ts';
@@ -106,7 +106,7 @@ export function tree(threads: Thread[]): SidebarTree {
 /** How a top-level thread came out of another, or how a side question hangs under its thread. */
 function markOf(t: Thread, depth: number, byId: Map<string, Thread>): { glyph: string; label: string } | null {
   const from = (id: string | null) => byId.get(id ?? '')?.title || 'another thread';
-  if (t.sourceId) return { glyph: '›', label: `Asked about “${t.sourceQuote ?? 'a passage'}”` };
+  if (t.sourceId) return { glyph: '›', label: `Asked about “${t.sourceQuote ? readableQuote(t.sourceQuote) : 'a passage'}”` };
   if (t.continuedFromId) return { glyph: '↪', label: `Split off from “${from(t.continuedFromId)}” at a question` };
   if (t.splitAt) return { glyph: '↗', label: `A side question of “${from(t.parentThreadId)}”, made its own thread` };
   if (depth > 0) return { glyph: '↳', label: 'A side question' };
@@ -301,7 +301,7 @@ export function Sidebar({
             data-testid="passage-link"
             data-thread-id={t.id}
           >
-            “{t.sourceQuote ?? t.originQuote}”
+            “{readableQuote(t.sourceQuote ?? t.originQuote ?? '')}”
           </button>
         )}
         {own.length > 0 && !closed && (

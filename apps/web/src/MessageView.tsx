@@ -1,4 +1,4 @@
-import type { BranchSummary, Message } from '@noema/core';
+import { type BranchSummary, type Message, readableQuote } from '@noema/core';
 import { Markdown, type Slot } from './markdown/Markdown.tsx';
 
 const SETTINGS_ERRORS = new Set(['auth', 'quota', 'not_configured']);
@@ -123,7 +123,7 @@ export function MessageView({
                 type="button"
                 className="branch-link"
                 onClick={() => onOpenBranch(b.threadId)}
-                title={`From “${b.anchor.exact}”`}
+                title={`From “${readableQuote(b.anchor.exact)}”`}
                 data-testid="branch-link"
               >
                 <span aria-hidden>↳</span> {b.title || 'Side question'}

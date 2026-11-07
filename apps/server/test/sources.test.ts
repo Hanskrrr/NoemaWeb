@@ -16,7 +16,7 @@ import {
   type Trash,
   ulid,
 } from '@noema/core';
-import { importPage, readingAddresses } from '../src/ingest/fetch.ts';
+import { EXTRACTOR, importPage, readingAddresses } from '../src/ingest/fetch.ts';
 import { api, newThread, readEvents, startServer, type TestServer } from './helpers.ts';
 
 // Sources (M3): what the learner reads, pasted or read from an address, kept
@@ -174,6 +174,38 @@ test('search finds a passage of a source, and says where it starts', async () =>
   assert.equal((await api<SearchResponse>(s, 'GET', '/api/search?q=giraffe')).json.hits.filter((h) => h.sourceId === src.id).length, 1);
 });
 
+test('a page read by an earlier reader is read again from the copy kept, without the network', async () => {
+  const { notebookId } = await newThread(s);
+  const table =
+    '<article><h1>Norms</h1><p>A table of lengths.</p><table><tr><th>Vector</th><th>Length</th></tr>' +
+    '<tr><td>Velocity</td><td><math alttext="E=\\tfrac{1}{2}\\|v\\|^{2}" display="inline"><mi>E</mi></math></td></tr></table></article>';
+  pages.set('/norms', { type: 'text/html', body: table });
+  const src = (await addSource(notebookId, { url: `${base}/norms` })).json;
+  const v1 = await detail(src.id);
+  assert.equal(v1.rereadable, false, 'read by this reader');
+  assert.ok(v1.version.content.includes('\\Vert v\\Vert ^{2}'), 'a norm in a cell is written \\Vert');
+  // As if an earlier Noema had read it, into something else; then the page goes away.
+  s.db.sql
+    .prepare("UPDATE source_version SET extractor = 'noema-html-1', content = 'old reading', content_hash = 'old' WHERE id = ?")
+    .run(v1.version.id);
+  pages.delete('/norms');
+  assert.equal((await detail(src.id)).rereadable, true);
+  const r = await api<RefetchResponse>(s, 'POST', `/api/sources/${src.id}/reread`);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.changed, true);
+  const v2 = await detail(src.id);
+  assert.equal(v2.version.seq, 2);
+  assert.equal(v2.rereadable, false);
+  assert.ok(v2.version.content.includes('\\Vert v\\Vert ^{2}'));
+  // Again: nothing changes, and it stays quiet.
+  const same = await api<RefetchResponse>(s, 'POST', `/api/sources/${src.id}/reread`);
+  assert.equal(same.json.changed, false);
+  // Pasted text has no page kept.
+  const pasted = (await addSource(notebookId, { text: '# Plain\n\nJust text.' })).json;
+  assert.equal((await detail(pasted.id)).rereadable, false);
+  assert.equal((await api(s, 'POST', `/api/sources/${pasted.id}/reread`)).status, 400);
+});
+
 test('a page read from its address: the article as Markdown, kept with the HTML; read again makes a version only when changed', async () => {
   const { notebookId } = await newThread(s);
   pages.set('/post', { type: 'text/html; charset=utf-8', body: blog });
@@ -192,7 +224,7 @@ test('a page read from its address: the article as Markdown, kept with the HTML;
     extractor: string;
   };
   assert.equal(raw.raw, blog);
-  assert.equal(raw.extractor, 'noema-html-2');
+  assert.equal(raw.extractor, EXTRACTOR);
 
   // A question about it, then the page changes.
   const asked = await askAbout(src.id, v1.version.id, v1.version.content, 'Softmax saturates', 'Why?');

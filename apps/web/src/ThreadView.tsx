@@ -16,6 +16,7 @@ import {
   type NoteSummary,
   type Origin,
   type Pin,
+  readableQuote,
   resolveAnchor,
   type SourceOrigin,
   type Thread,
@@ -1216,7 +1217,8 @@ function ContinuedFromCard({
 /** A thread asked about a passage of a source: the passage, and the way back to it in the text. */
 function SourceOriginCard({ origin, beside, onBack }: { origin: SourceOrigin; beside: boolean; onBack: () => void }) {
   const exact = origin.passage.exact;
-  const quote = exact.length > 600 ? `${exact.slice(0, 600)}…` : exact;
+  const readable = readableQuote(exact, false);
+  const quote = readable.length > 600 ? `${readable.slice(0, 600)}…` : readable;
   return (
     <section
       className="origin source-origin"
@@ -1271,7 +1273,8 @@ function OriginCard({
   /** Two or more side questions deep: straight back to where the detours began. */
   onBackToMain?: (() => void) | undefined;
 }) {
-  const quote = exact.length > 600 ? `${exact.slice(0, 600)}…` : exact;
+  const readable = readableQuote(exact, false);
+  const quote = readable.length > 600 ? `${readable.slice(0, 600)}…` : readable;
   return (
     <section className="origin" data-testid="origin" data-exact={exact} aria-label="Where this branch started">
       <div className="origin-top">

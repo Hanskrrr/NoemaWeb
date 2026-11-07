@@ -176,6 +176,11 @@ export const SourceDetail = z.object({
   version: SourceVersion,
   /** Every version, newest first. */
   versions: z.array(z.object({ id: Id, seq: z.number().int(), createdAt: z.string() })),
+  /**
+   * The latest version was read from a page by an earlier Noema, and the page
+   * is kept: it can be read again from that copy, without the network.
+   */
+  rereadable: z.boolean(),
   /** Threads asked about passages of this version, in the order asked. */
   threads: z.array(
     z.object({

@@ -173,6 +173,8 @@ export const api = {
     call(SourceDetail, 'GET', `/api/sources/${id}${version ? `?version=${encodeURIComponent(version)}` : ''}`),
   renameSource: (id: string, title: string) => call(Source, 'PATCH', `/api/sources/${id}`, { title }),
   refetchSource: (id: string) => call(RefetchResponse, 'POST', `/api/sources/${id}/refetch`, {}),
+  /** Read the page again from the copy kept with it, with this Noema's reader (no network). */
+  rereadSource: (id: string) => call(RefetchResponse, 'POST', `/api/sources/${id}/reread`, {}),
   deleteSource: (id: string) => call(Ok, 'DELETE', `/api/sources/${id}`),
   restoreSource: (id: string) => call(Source, 'POST', `/api/sources/${id}/restore`, {}),
   askAboutSource: (

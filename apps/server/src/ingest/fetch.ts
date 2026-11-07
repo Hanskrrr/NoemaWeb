@@ -6,7 +6,9 @@
 import { htmlToMarkdown } from '@noema/core';
 
 // 2: aligned equations (LaTeXML align) as one aligned block, not a table.
-export const EXTRACTOR = 'noema-html-2';
+// 3: pipes in a table cell's math written \vert and \Vert, so a norm keeps its cell;
+//    aligned equations as align* with each row's \tag, numbers in the margin.
+export const EXTRACTOR = 'noema-html-3';
 
 export class FetchProblem extends Error {
   constructor(message: string) {

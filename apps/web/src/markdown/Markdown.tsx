@@ -61,6 +61,23 @@ function withCites(key: string | number, text: string, cites: Cites): ReactNode 
 
 const mathCache = new Map<string, string>();
 
+/**
+ * A numbered display equation: the formula wrapped apart from its number, so
+ * the number can follow it instead of being pinned over it (styles.css,
+ * .eq-body). Numbers of aligned rows (`eq-rows`) stay level with their rows;
+ * a single equation's number may go below it, as in LaTeX, when the line is
+ * too long.
+ */
+export function numberAside(html: string): string {
+  const open = '<span class="katex-html" aria-hidden="true">';
+  const a = html.indexOf(open);
+  const t = html.lastIndexOf('<span class="tag">');
+  if (a < 0 || t < a) return html;
+  const s = a + open.length;
+  const rows = html.indexOf('vlist', t) >= 0 ? ' eq-rows' : '';
+  return `${html.slice(0, s)}<span class="eq-body${rows}">${html.slice(s, t)}</span>${html.slice(t)}`;
+}
+
 function renderMath(value: string, display: boolean): string {
   const key = `${display ? 'D' : 'I'}${value}`;
   let html = mathCache.get(key);
@@ -72,6 +89,7 @@ function renderMath(value: string, display: boolean): string {
       strict: 'ignore',
       output: 'htmlAndMathml',
     });
+    if (display) html = numberAside(html);
     if (mathCache.size > 5000) mathCache.clear(); // a long paper has many formulas
     mathCache.set(key, html);
   }

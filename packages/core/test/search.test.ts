@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ftsQuery, makeSnippet, parseQuery, plainText, searchText } from '../src/index.ts';
+import { ftsQuery, makeSnippet, parseQuery, plainText, readableQuote, searchText } from '../src/index.ts';
 
 test('CJK runs become unigrams and bigrams; other words pass through', () => {
   assert.equal(searchText('机器学习 is fun'), '机 器 学 习 机器 器学 学习 is fun');
@@ -37,4 +37,12 @@ test('plain text drops citation labels and Markdown marks, keeping the words', (
     'Variance\n\nThe sum of d terms.\nquoted\n\nconst x = 1;\n',
   );
   assert.equal(plainText('1. 方差 [E1]'), '方差');
+});
+
+test('a quote reads as text: no escapes outside math, no heading marks, one line', () => {
+  assert.equal(
+    readableQuote('###### Summary\n\nSmith et al. \\[2020\\] use $\\|x\\|_2$ and \\*stars\\*.'),
+    'Summary Smith et al. [2020] use $\\|x\\|_2$ and *stars*.',
+  );
+  assert.equal(readableQuote('One.\n\n\n\nTwo \\_x', false), 'One.\n\nTwo _x');
 });

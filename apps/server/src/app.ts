@@ -12,6 +12,7 @@ import {
   describeError,
   EditBlockRequest,
   EditMergeRequest,
+  htmlToMarkdown,
   InsertBlockRequest,
   isLive,
   MergeNoteRequest,
@@ -337,7 +338,7 @@ export function createApp(deps: AppDeps): App {
   });
 
   router.on('GET', '/api/sources/:id', ({ res, params, url }) => {
-    const detail = repo.sourceDetail(params.id as string, url.searchParams.get('version') ?? undefined);
+    const detail = repo.sourceDetail(params.id as string, url.searchParams.get('version') ?? undefined, EXTRACTOR);
     if (!detail) throw notFound('source');
     sendJson(res, 200, detail);
   });
@@ -364,6 +365,28 @@ export function createApp(deps: AppDeps): App {
         extractor: EXTRACTOR,
       }),
     );
+  });
+
+  // Read the page again from the copy kept with it, with this Noema's reader: no network.
+  // For a page read by an earlier version of the reader (formulas and tables come out better).
+  router.on('POST', '/api/sources/:id/reread', ({ res, params }) => {
+    const source = repo.getSource(params.id as string);
+    if (!source) throw notFound('source');
+    const page = repo.latestPage(source.id);
+    if (!page || !page.extractor.startsWith('noema-html')) {
+      throw new HttpError(400, 'invalid', 'there is no page kept with it to read again');
+    }
+    const read = htmlToMarkdown(page.raw, page.fetchedUrl ? { url: page.fetchedUrl } : {});
+    const result = repo.addSourceVersion(source.id, {
+      content: read.markdown,
+      origin: page.origin,
+      fetchedUrl: page.fetchedUrl,
+      raw: page.raw,
+      extractor: EXTRACTOR,
+    });
+    // The same text from the same page: it was read as well as this Noema can.
+    if (!result.changed) repo.markLatestRead(source.id, EXTRACTOR);
+    sendJson(res, 200, result);
   });
 
   router.on('DELETE', '/api/sources/:id', ({ res, params }) => {

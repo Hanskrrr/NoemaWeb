@@ -656,18 +656,37 @@ function list(el: El, ctx: Ctx): string {
   return items.join('\n');
 }
 
+/**
+ * A table cell's text, with every pipe escaped so the row keeps its cells.
+ * Inside math a pipe is written as \vert or \Vert instead: a Markdown parser
+ * reads "\\|" (LaTeX's \| escaped) as a backslash and the end of the cell.
+ */
 function cellText(el: El, ctx: Ctx): string {
   return collapse(flat(inline(el, ctx), ctx))
-    .replace(/\\\n/g, ' ')
-    .replace(/\|/g, '\\|');
+    .split(/((?<!\\)\$(?:\\[\s\S]|[^$\\])+\$)/)
+    .map((part, i) =>
+      i % 2
+        ? // Math: on one line, its \\ row breaks kept (a matrix keeps its rows).
+          part
+            .replace(/\s*\n\s*/g, ' ')
+            .replace(/\\\|/g, '\\Vert ')
+            .replace(/\|/g, '\\vert ')
+        : // Text: a line break (a backslash at the end of a line) becomes a space.
+          part
+            .replace(/\\\n/g, ' ')
+            .replace(/\n/g, ' ')
+            .replace(/\|/g, '\\|'),
+    )
+    .join('');
 }
 
 /** Classes LaTeXML gives equation tables: one equation, or aligned rows (align, eqnarray). */
 const EQUATION_TABLE = /\bltx_(eqn_table|equationgroup|eqn_align|eqn_eqnarray)\b/;
 
 /**
- * Aligned equations laid out in a table (LaTeXML's align): one `aligned`
- * block, a row per row, the cells joined by &, each row's number at its end.
+ * Aligned equations laid out in a table (LaTeXML's align): one `align*`
+ * block, a row per row, the cells joined by &, each numbered row with its
+ * \tag (drawn in the margin like a single equation's number, not as a column).
  */
 function alignedEquations(el: El): string | null {
   const rows = [...walk(el)].filter((e) => e.name === 'tr');
@@ -683,10 +702,10 @@ function alignedEquations(el: El): string | null {
         return maths.length > 0 ? maths.map(texOf).join(' ') : textOf(c).replace(/\s+/g, ' ').trim();
       });
     if (parts.every((p) => p === '') && !tag) continue;
-    lines.push(`${parts.join(' & ')}${tag ? ` && \\text{(${tag})}` : ''}`);
+    lines.push(`${parts.join(' & ')}${tag ? ` \\tag{${tag}}` : ''}`);
   }
   if (lines.length === 0) return null;
-  return `$$\n\\begin{aligned}\n${lines.join(' \\\\\n')}\n\\end{aligned}\n$$`;
+  return `$$\n\\begin{align*}\n${lines.join(' \\\\\n')}\n\\end{align*}\n$$`;
 }
 
 function table(el: El, ctx: Ctx): string[] {

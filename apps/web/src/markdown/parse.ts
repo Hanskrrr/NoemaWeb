@@ -18,10 +18,23 @@ import { math } from 'micromark-extension-math';
  * Chinese text writes ranges as "3~5 天", and one line can hold two of them.
  */
 export function parseMarkdown(source: string): Root {
-  return fromMarkdown(source, {
+  const root = fromMarkdown(source, {
     extensions: [gfm({ singleTilde: false }), math()],
     mdastExtensions: [gfmFromMarkdown(), mathFromMarkdown()],
   });
+  unescapeCellPipes(root, false);
+  return root;
+}
+
+/**
+ * In a table cell a pipe is written `\|`, inside code and math too (GFM):
+ * `$\|x\|$` in a cell is |x|. The table extension takes the backslash out of
+ * code, not out of math, so KaTeX drew a norm. (A norm in a cell is written
+ * \Vert.) Math is drawn whole, so its offsets do not move.
+ */
+function unescapeCellPipes(node: Nodes, inCell: boolean): void {
+  if (inCell && node.type === 'inlineMath') node.value = node.value.replace(/\\\|/g, '|');
+  if ('children' in node) for (const child of node.children) unescapeCellPipes(child as Nodes, inCell || node.type === 'tableCell');
 }
 
 export function nodeRange(node: Nodes): { start: number; end: number } | null {

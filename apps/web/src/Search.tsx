@@ -4,7 +4,7 @@
 // words marked there. With nothing typed, it lists the side questions you
 // never came back from.
 
-import type { OpenBranch, SearchHit } from '@noema/core';
+import { type OpenBranch, readableQuote, type SearchHit } from '@noema/core';
 import { Fragment, type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { api } from './api.ts';
 import { dayOf, kindOf, snippetParts, whereOf, whereParts } from './hits.ts';
@@ -296,7 +296,7 @@ export function ComeBack({
           type="button"
           className="quiet inline"
           onClick={() => onOpen(b.threadId)}
-          title={b.quote ? `From “${b.quote}” in ${b.parentTitle || 'Untitled'}` : undefined}
+          title={b.quote ? `From “${readableQuote(b.quote)}” in ${b.parentTitle || 'Untitled'}` : undefined}
           data-testid="come-back-item"
           data-thread-id={b.threadId}
         >

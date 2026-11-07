@@ -660,7 +660,33 @@ export class Repo {
   }
 
   /** A version of a source (the latest by default), with the threads asked about its passages. */
-  sourceDetail(id: string, versionId?: string): SourceDetail | null {
+  /** The page the latest version was read from, as kept, and what read it. */
+  latestPage(sourceId: string): { raw: string; extractor: string; origin: 'paste' | 'url'; fetchedUrl: string | null } | null {
+    const r = this.db.sql
+      .prepare(
+        `SELECT raw, extractor, origin, fetched_url FROM source_version WHERE source_id = ? ORDER BY seq DESC LIMIT 1`,
+      )
+      .get(sourceId) as Row | undefined;
+    if (!r || !r.raw || !r.extractor) return null;
+    return {
+      raw: r.raw as string,
+      extractor: r.extractor as string,
+      origin: r.origin as 'paste' | 'url',
+      fetchedUrl: (r.fetched_url as string | null) ?? null,
+    };
+  }
+
+  /** Reading the kept page again gave the same text: record that this reader read it. */
+  markLatestRead(sourceId: string, extractor: string): void {
+    this.db.sql
+      .prepare(
+        'UPDATE source_version SET extractor = ? WHERE id = (SELECT id FROM source_version WHERE source_id = ? ORDER BY seq DESC LIMIT 1)',
+      )
+      .run(extractor, sourceId);
+  }
+
+  /** `extractor`: the one this Noema reads pages with, to say whether the latest version can be read better. */
+  sourceDetail(id: string, versionId?: string, extractor?: string): SourceDetail | null {
     const source = this.getSource(id);
     if (!source) return null;
     const version = this.getVersion(versionId ?? source.latestVersionId);
@@ -702,7 +728,9 @@ export class Repo {
          WHERE v.source_id = ? AND a.version_id <> ? AND t.deleted_at IS NULL`,
       )
       .get(id, version.id) as { n: number };
-    return { source, version: shown, versions, threads, elsewhere: elsewhere.n };
+    const page = extractor ? this.latestPage(id) : null;
+    const rereadable = Boolean(page && page.extractor.startsWith('noema-html') && page.extractor !== extractor);
+    return { source, version: shown, versions, threads, elsewhere: elsewhere.n, rereadable };
   }
 
   /** A thread asked about a passage of a source, with its first question, in one step. Idempotent on the thread id. */

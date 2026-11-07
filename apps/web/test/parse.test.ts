@@ -150,3 +150,21 @@ test('task lists and footnotes parse', () => {
   );
   assert.ok(tree.children.some((n) => n.type === 'footnoteDefinition'));
 });
+
+test('math in a table cell: an escaped pipe is a bar to KaTeX, as GFM reads it; outside tables nothing changes', () => {
+  const src = [
+    '| Vector | Energy |',
+    '| --- | --- |',
+    '| Velocity | $E=\\tfrac{1}{2}\\Vert v\\Vert^{2}$ |',
+    '| Absolute | $\\|x\\|$ |',
+    '',
+    'Outside: $\\|x\\|$',
+  ].join('\n');
+  const values: string[] = [];
+  const walk = (n: { type: string; value?: string; children?: unknown[] }) => {
+    if (n.type === 'inlineMath' && n.value) values.push(n.value);
+    for (const c of n.children ?? []) walk(c as typeof n);
+  };
+  walk(parseMarkdown(src) as never);
+  assert.deepEqual(values, ['E=\\tfrac{1}{2}\\Vert v\\Vert^{2}', '|x|', '\\|x\\|']);
+});

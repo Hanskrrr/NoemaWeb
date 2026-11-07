@@ -5,7 +5,7 @@
 // maps above it. Everything is a way back to the exact place. Built from
 // what is stored; no model involved.
 
-import type { MapExchange, MapNode, ThreadMap } from '@noema/core';
+import { type MapExchange, type MapNode, readableQuote, type ThreadMap } from '@noema/core';
 import { useEffect, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
 
@@ -79,7 +79,7 @@ export function MapView({ threadId, ...go }: { threadId: string } & Go) {
             title="Jump to this passage"
             data-testid="map-from"
           >
-            {map.path.length === 0 ? 'Made its own thread from' : 'Asked about'} “{root.origin.exact}” in{' '}
+            {map.path.length === 0 ? 'Made its own thread from' : 'Asked about'} “{readableQuote(root.origin.exact)}” in{' '}
             {map.parent.title || 'Untitled'}
           </button>
         )}
@@ -189,7 +189,7 @@ function ExchangeView({ node, exchange: e, go }: { node: MapNode; exchange: MapE
                     title="Jump to this passage"
                     data-testid="map-passage"
                   >
-                    “{b.origin.exact}”
+                    “{readableQuote(b.origin.exact)}”
                   </button>
                 )}
                 {b.split ? (

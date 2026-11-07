@@ -116,7 +116,7 @@ test('pasted fragments and broken HTML still come out readable', () => {
   assert.deepEqual(htmlToMarkdown('plain text, no tags').markdown, 'plain text, no tags');
 });
 
-test('aligned equations (LaTeXML align): one aligned block, the cells joined by &, each row with its number', () => {
+test('aligned equations (LaTeXML align): one align* block, the cells joined by &, each numbered row with its tag', () => {
   const html = `<html><body><article>
 <p>The midpoint and half-difference:</p>
 <table id="S3.E5" class="ltx_equationgroup ltx_eqn_align ltx_eqn_table">
@@ -151,14 +151,30 @@ test('aligned equations (LaTeXML align): one aligned block, the cells joined by 
       'The midpoint and half-difference:',
       [
         '$$',
-        '\\begin{aligned}',
-        '\\displaystyle\\bar{w}_{t} & \\displaystyle=\\tfrac{1}{2}(w_{t}+w_{t+1}) && \\text{(5)} \\\\',
-        '\\displaystyle\\|\\hat{\\delta}_{t}\\| & \\displaystyle=\\tfrac{1}{2}|w_{t}-w_{t+1}| && \\text{(6)} \\\\',
+        '\\begin{align*}',
+        '\\displaystyle\\bar{w}_{t} & \\displaystyle=\\tfrac{1}{2}(w_{t}+w_{t+1}) \\tag{5} \\\\',
+        '\\displaystyle\\|\\hat{\\delta}_{t}\\| & \\displaystyle=\\tfrac{1}{2}|w_{t}-w_{t+1}| \\tag{6} \\\\',
         ' & \\displaystyle\\quad+\\eta',
-        '\\end{aligned}',
+        '\\end{align*}',
         '$$',
       ].join('\n'),
       'Then it moves.',
     ].join('\n\n'),
   );
+});
+
+test('math in a table cell keeps its matrix rows, and a norm is written \\Vert so the cell holds', () => {
+  const html = `<article><h1>Maps</h1><p>Some matrices.</p><table class="ltx_tabular">
+<tr><th>Map</th><th>A</th></tr>
+<tr><td>Rotation</td><td><math alttext="\\begin{pmatrix}\\cos\\theta&amp;-\\sin\\theta\\\\
+\\sin\\theta&amp;\\cos\\theta\\end{pmatrix}" display="inline"><mi>A</mi></math></td></tr>
+<tr><td>With a norm, | in text</td><td><math alttext="\\|m\\|^{2}+|x|" display="inline"><mi>m</mi></math></td></tr>
+</table></article>`;
+  const { markdown } = htmlToMarkdown(html);
+  const rows = markdown.split('\n').filter((l) => l.startsWith('| '));
+  assert.equal(
+    rows[2],
+    '| Rotation | $\\begin{pmatrix}\\cos\\theta&-\\sin\\theta\\\\ \\sin\\theta&\\cos\\theta\\end{pmatrix}$ |',
+  );
+  assert.equal(rows[3], '| With a norm, \\| in text | $\\Vert m\\Vert ^{2}+\\vert x\\vert $ |');
 });

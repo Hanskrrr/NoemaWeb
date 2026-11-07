@@ -3,7 +3,7 @@
 // thread; a passage is pinned from a selection in the thread or in the
 // source beside it.
 
-import type { Pin } from '@noema/core';
+import { type Pin, readableQuote } from '@noema/core';
 
 /** Something was pinned or unpinned from outside the thread (the source beside it): the thread reloads its pins. */
 export const PINS_CHANGED_EVENT = 'noema:pins-changed';
@@ -13,7 +13,7 @@ export function pinsChanged(threadId: string): void {
 }
 
 const short = (text: string, max = 140) => {
-  const t = text.replace(/\s+/g, ' ').trim();
+  const t = readableQuote(text);
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 };
 

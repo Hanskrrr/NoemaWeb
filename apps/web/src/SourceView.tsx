@@ -8,6 +8,7 @@
 import {
   createAnchor,
   type NoteSummary,
+  readableQuote,
   type Source,
   type SourceDetail,
   sourceHeadings,
@@ -27,7 +28,7 @@ import { DraftView, type SourceDraft } from './ThreadView.tsx';
 
 const errorText = (err: unknown) => (err instanceof ApiFailure ? err.message : 'Something went wrong.');
 const short = (text: string, max = 140) => {
-  const one = text.replace(/\s+/g, ' ').trim();
+  const one = readableQuote(text);
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 };
 const questionsLabel = (n: number) => (n === 1 ? '1 question' : `${n} questions`);
@@ -296,14 +297,17 @@ export function SourceView({
     }
   };
 
-  const readAgain = async () => {
+  // From the page (Read again), or from the copy kept with it, read better by this Noema.
+  const readAgain = async (fromCopy = false) => {
     setBusy('Reading it again…');
     try {
-      const r = await api.refetchSource(sourceId);
+      const r = fromCopy ? await api.rereadSource(sourceId) : await api.refetchSource(sourceId);
       onChanged();
       if (r.changed) {
         setNotice(
-          `The page has changed: this is version ${r.source.versions}. What you asked stays with the version you asked it about.`,
+          fromCopy
+            ? `Read again: this is version ${r.source.versions}. What you asked stays with the version you asked it about.`
+            : `The page has changed: this is version ${r.source.versions}. What you asked stays with the version you asked it about.`,
         );
         if (version) onVersion(undefined);
         else await load();
@@ -582,6 +586,17 @@ export function SourceView({
             asked here was asked about this version.
             <button type="button" className="quiet" onClick={() => onVersion(undefined)} data-testid="source-latest">
               Read the latest
+            </button>
+          </div>
+        )}
+        {detail.rereadable && !version && !source.deletedAt && !notice && (
+          <div className="source-notice" role="note" data-testid="source-reread">
+            <span>
+              This page was read by an earlier Noema. Formulas and tables now come out better: read it again from the
+              copy kept, without going online. What you asked stays with this version.
+            </span>
+            <button type="button" onClick={() => void readAgain(true)} disabled={busy !== null}>
+              {busy ?? 'Read it again'}
             </button>
           </div>
         )}

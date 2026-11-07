@@ -5,7 +5,8 @@
 
 import { htmlToMarkdown } from '@noema/core';
 
-export const EXTRACTOR = 'noema-html-1';
+// 2: aligned equations (LaTeXML align) as one aligned block, not a table.
+export const EXTRACTOR = 'noema-html-2';
 
 export class FetchProblem extends Error {
   constructor(message: string) {

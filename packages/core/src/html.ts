@@ -662,9 +662,40 @@ function cellText(el: El, ctx: Ctx): string {
     .replace(/\|/g, '\\|');
 }
 
+/** Classes LaTeXML gives equation tables: one equation, or aligned rows (align, eqnarray). */
+const EQUATION_TABLE = /\bltx_(eqn_table|equationgroup|eqn_align|eqn_eqnarray)\b/;
+
+/**
+ * Aligned equations laid out in a table (LaTeXML's align): one `aligned`
+ * block, a row per row, the cells joined by &, each row's number at its end.
+ */
+function alignedEquations(el: El): string | null {
+  const rows = [...walk(el)].filter((e) => e.name === 'tr');
+  const lines: string[] = [];
+  for (const row of rows) {
+    const cells = row.children.filter((c): c is El => typeof c !== 'string' && (c.name === 'td' || c.name === 'th'));
+    const number = cells.find((c) => hasClass(c, 'ltx_eqn_eqno'));
+    const tag = number ? /^\((\d+(?:\.\d+)*[a-z]?)\)$/.exec(textOf(number).trim())?.[1] : undefined;
+    const parts = cells
+      .filter((c) => c !== number && !/\bltx_eqn_\w*pad\w*\b/.test(c.attrs.class ?? ''))
+      .map((c) => {
+        const maths = [...walk(c)].filter((e) => e.name === 'math');
+        return maths.length > 0 ? maths.map(texOf).join(' ') : textOf(c).replace(/\s+/g, ' ').trim();
+      });
+    if (parts.every((p) => p === '') && !tag) continue;
+    lines.push(`${parts.join(' & ')}${tag ? ` && \\text{(${tag})}` : ''}`);
+  }
+  if (lines.length === 0) return null;
+  return `$$\n\\begin{aligned}\n${lines.join(' \\\\\n')}\n\\end{aligned}\n$$`;
+}
+
 function table(el: El, ctx: Ctx): string[] {
   // An equation laid out in a table (LaTeXML): the formula, with its number.
   const formulas = [...walk(el)].filter((e) => e.name === 'math' && e.attrs.display === 'block');
+  if (formulas.length === 0 && EQUATION_TABLE.test(el.attrs.class ?? '')) {
+    const aligned = alignedEquations(el);
+    if (aligned) return [aligned];
+  }
   if (formulas.length > 0) {
     const tag = /^\((\d+(?:\.\d+)*[a-z]?)\)$/.exec(textOf(find(el, (e) => hasClass(e, 'ltx_tag')) ?? el).trim())?.[1];
     return formulas.map((f, i) => displayMath(texOf(f), i === formulas.length - 1 ? tag : undefined));

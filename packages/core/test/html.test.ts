@@ -115,3 +115,50 @@ test('pasted fragments and broken HTML still come out readable', () => {
   assert.deepEqual(htmlToMarkdown('').markdown, '');
   assert.deepEqual(htmlToMarkdown('plain text, no tags').markdown, 'plain text, no tags');
 });
+
+test('aligned equations (LaTeXML align): one aligned block, the cells joined by &, each row with its number', () => {
+  const html = `<html><body><article>
+<p>The midpoint and half-difference:</p>
+<table id="S3.E5" class="ltx_equationgroup ltx_eqn_align ltx_eqn_table">
+<tbody id="S3.E5X"><tr class="ltx_equation ltx_eqn_row ltx_align_baseline">
+<td class="ltx_eqn_cell ltx_eqn_center_padleft"></td>
+<td class="ltx_td ltx_align_right ltx_eqn_cell"><math alttext="\\displaystyle\\bar{w}_{t}" display="inline"><mi>w</mi></math></td>
+<td class="ltx_td ltx_align_left ltx_eqn_cell"><math alttext="\\displaystyle=\\tfrac{1}{2}(w_{t}+w_{t+1})" display="inline"><mi>w</mi></math></td>
+<td class="ltx_eqn_cell ltx_eqn_center_padright"></td>
+<td rowspan="1" class="ltx_eqn_cell ltx_eqn_eqno ltx_align_middle ltx_align_right"><span class="ltx_tag ltx_tag_equation">(5)</span></td>
+</tr></tbody>
+<tbody id="S3.E6X"><tr class="ltx_equation ltx_eqn_row ltx_align_baseline">
+<td class="ltx_eqn_cell ltx_eqn_center_padleft"></td>
+<td class="ltx_td ltx_align_right ltx_eqn_cell"><math alttext="\\displaystyle\\|\\hat{\\delta}_{t}\\|" display="inline"><mi>d</mi></math></td>
+<td class="ltx_td ltx_align_left ltx_eqn_cell"><math alttext="\\displaystyle=\\tfrac{1}{2}|w_{t}-w_{t+1}|" display="inline"><mi>d</mi></math></td>
+<td class="ltx_eqn_cell ltx_eqn_center_padright"></td>
+<td rowspan="1" class="ltx_eqn_cell ltx_eqn_eqno ltx_align_middle ltx_align_right"><span class="ltx_tag ltx_tag_equation">(6)</span></td>
+</tr></tbody>
+<tbody><tr class="ltx_equation ltx_eqn_row ltx_align_baseline">
+<td class="ltx_eqn_cell ltx_eqn_center_padleft"></td>
+<td class="ltx_td ltx_eqn_cell"></td>
+<td class="ltx_td ltx_align_left ltx_eqn_cell"><math alttext="\\displaystyle\\quad+\\eta" display="inline"><mi>e</mi></math></td>
+<td class="ltx_eqn_cell ltx_eqn_center_padright"></td>
+<td class="ltx_eqn_cell ltx_eqn_eqno"></td>
+</tr></tbody>
+</table>
+<p>Then it moves.</p>
+</article></body></html>`;
+  const { markdown } = htmlToMarkdown(html);
+  assert.equal(
+    markdown,
+    [
+      'The midpoint and half-difference:',
+      [
+        '$$',
+        '\\begin{aligned}',
+        '\\displaystyle\\bar{w}_{t} & \\displaystyle=\\tfrac{1}{2}(w_{t}+w_{t+1}) && \\text{(5)} \\\\',
+        '\\displaystyle\\|\\hat{\\delta}_{t}\\| & \\displaystyle=\\tfrac{1}{2}|w_{t}-w_{t+1}| && \\text{(6)} \\\\',
+        ' & \\displaystyle\\quad+\\eta',
+        '\\end{aligned}',
+        '$$',
+      ].join('\n'),
+      'Then it moves.',
+    ].join('\n\n'),
+  );
+});

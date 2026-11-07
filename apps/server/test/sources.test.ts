@@ -192,7 +192,7 @@ test('a page read from its address: the article as Markdown, kept with the HTML;
     extractor: string;
   };
   assert.equal(raw.raw, blog);
-  assert.equal(raw.extractor, 'noema-html-1');
+  assert.equal(raw.extractor, 'noema-html-2');
 
   // A question about it, then the page changes.
   const asked = await askAbout(src.id, v1.version.id, v1.version.content, 'Softmax saturates', 'Why?');

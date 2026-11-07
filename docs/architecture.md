@@ -10,7 +10,8 @@ Noema is a notebook for studying hard material (a paper, a course) with an AI. W
 - **Sources beside the conversation.** A web page, an arXiv paper or pasted text sits in a reading pane; questions are tied to the passage they were asked about, in the version that was shown.
 - **Finding things again.** Search lands on the exact message, note block or passage; a map of each thread; side questions you never came back from.
 - **Notes from conversations.** A thread rewritten as a study note, made of blocks you edit, whose citations open the exchange they came from.
-- **Context you can see.** Under any answer, exactly what the AI was sent.
+- **Context you can see.** Under any answer, exactly what the AI was sent. Passages pinned to a thread go with every question in it. Ask again for another answer; the first is kept.
+- **Your data, as files.** Export everything as JSON (it imports back into an empty Noema) or as Markdown to read.
 
 It is a **local, single-user prototype**: one person, one computer, their own model key. The product thinking behind it (PARADIGM, interviews, the prototype brief) lives in the founder's `NoemaLearningNote` workspace; ask him for access. The scope fence in AGENTS.md lists what v0.1 deliberately leaves out.
 
@@ -43,7 +44,7 @@ The server binds to loopback only and checks Host, Origin and a custom `x-noema-
 
 1. **The tab sends it with ids it made.** `POST /api/threads/:id/messages` with a ULID for the question, generated in the browser. Sending the same request again returns the same question, so a retry after a lost reply never duplicates it.
 2. **The server saves it first.** `repo.createAsk` writes the question and an empty answer (status `pending`) in one transaction, then returns both. Only then is the model called.
-3. **The server assembles the context** (`packages/core/src/context.ts`): the system prompt, About you, the section of the source being read (if any), the conversation the thread inherits from the thread it came from, the thread's own turns, then the question with the passage it is about. Stable parts come first so the provider's prompt cache keeps hitting; when the budget is tight, the oldest turns are dropped first. A **manifest** of what went in, and the exact messages, are stored with the model call (`model_call`), and are what "What was sent" shows.
+3. **The server assembles the context** (`packages/core/src/context.ts`): the system prompt, About you, the section of the source being read (if any), the passages pinned to the thread (and to the threads it is a side question of), the conversation the thread inherits from the thread it came from, the thread's own turns, then the question with the passage it is about. Stable parts come first so the provider's prompt cache keeps hitting; when the budget is tight, the oldest turns are dropped first. A **manifest** of what went in, and the exact messages, are stored with the model call (`model_call`), and are what "What was sent" shows.
 4. **The answer streams on the server** (`apps/server/src/chat/generation.ts`). Text is flushed to SQLite every 200 ms. The provider client retries only before the first token; after that a failure is final and the partial text is kept (ADR 0003).
 5. **The tab watches.** `GET /api/messages/:id/events` is a server-sent-events stream: first a snapshot of everything so far, then deltas, status changes and the end. Closing or reloading the tab stops nothing; reopening gets the snapshot again.
 6. **Afterwards, small jobs.** The model writes a title for a new thread and a one-line headline for the exchange (used on the map, the catalog and in search). The search index is updated. An append-only `event` table records what the learner did (a branch returned from, a search opened), for the measures in the brief.
@@ -51,7 +52,7 @@ The server binds to loopback only and checks Host, Origin and a custom `x-noema-
 
 ## Ideas the code depends on
 
-**Immutable revisions.** A message's text is a revision; once finished, it never changes. A source's text is a version; reading the page again makes a new version only if the text changed. Everything that points at text points at one revision or version.
+**Immutable revisions.** A message's text is a revision; once finished, it never changes. **Ask again** makes a new revision of an answer and makes it the one in use (shown first, searched, sent with later questions); the learner can choose another (ADR 0017). A source's text is a version; reading the page again makes a new version only if the text changed. Everything that points at text (side questions, pins) points at one revision or version.
 
 **Anchors** (`packages/core/src/anchor.ts`). A passage is stored the W3C way: the exact quote with some text before and after, plus UTF-16 offsets into the raw Markdown of that revision. To draw it, the stored position is used if the text there still matches, else the quote if it occurs once; otherwise it is unresolved.
 
@@ -72,14 +73,15 @@ Merging one thread into another adds a card and a summary the learner accepted; 
 
 ## The database
 
-One SQLite file, `data/noema.db`, in WAL mode, with numbered migrations in `apps/server/src/store/migrations/` (the version is in `PRAGMA user_version`; never edit an applied migration, add a new one). A copy goes to `data/backups/` once a day.
+One SQLite file, `data/noema.db`, in WAL mode, with numbered migrations in `apps/server/src/store/migrations/` (the version is in `PRAGMA user_version`; never edit an applied migration, add a new one). A copy goes to `data/backups/` once a day. The JSON export is every table but `search` and `meta`, and imports into an empty store of the same version (ADR 0018).
 
 | Table | What it holds |
 | --- | --- |
 | `notebook` | The notebook: title and About you |
 | `thread` | Threads, with how each came to be (branch, own thread, split-off, source passage), title and where it came from, Trash |
 | `message`, `message_revision` | Questions and answers; each answer's text, status, model and headline, per revision |
-| `anchor` | A passage of a message revision that a side question was asked about |
+| `anchor` | A passage of a message revision that a side question was asked about, or that was pinned |
+| `pin` | A passage pinned to a thread: of a message (through `anchor`) or of a source (through `source_anchor`) |
 | `model_call` | Each call to the model: provider, model, timings, token counts, the manifest and the exact messages sent |
 | `note`, `note_block`, `note_revision` | Notes, their blocks, and every saved version |
 | `thread_merge` | Merges between threads: draft, accepted text, state |

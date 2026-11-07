@@ -27,7 +27,8 @@ Imported by both the server and the web app. No I/O.
 | `src/contract.ts` | The HTTP API as Zod schemas: every request and response body. Change the API here first |
 | `src/ids.ts` | ULIDs (sortable ids), made on whichever side creates the thing |
 | `src/anchor.ts` | Passages: create an anchor from offsets, resolve it in a revision (position, then quote, else unresolved) |
-| `src/context.ts` | What goes to the model and in what order; the manifest; `describeSent` splits what was sent into named parts |
+| `src/context.ts` | What goes to the model and in what order (with pinned passages); the manifest; `describeSent` splits what was sent into named parts |
+| `src/readable.ts` | A notebook as one Markdown file, for reading (the Markdown export) |
 | `src/blocks.ts` | Splitting a note's Markdown into blocks |
 | `src/cite.ts` | `[E3]` citation labels in notes |
 | `src/search.ts` | Search text for FTS5 (Chinese and Japanese as characters and pairs), queries and snippets |
@@ -47,7 +48,7 @@ Imported by both the server and the web app. No I/O.
 | `src/http/router.ts`, `guard.ts`, `sse.ts`, `static.ts` | A small router; the Host/Origin/header guard; server-sent events; serving the built web app |
 | `src/store/db.ts` | `node:sqlite` with WAL, foreign keys and migrations |
 | `src/store/migrations/NNN_*.sql` | The schema, one numbered file per change; each starts with a comment saying why |
-| `src/store/repo.ts` | **All SQL.** Threads, messages, anchors, notes, merges, sources, search, the Trash, export |
+| `src/store/repo.ts` | **All SQL.** Threads, messages and their revisions, anchors, pins, notes, merges, sources, search, the Trash, export and import |
 | `src/chat/generation.ts` | Answering a question: context, the model call, streaming to watchers, saving as it goes |
 | `src/chat/prompt.ts` | The system prompt |
 | `src/chat/titles.ts`, `headlines.ts` | Titles for new threads, and a one-line headline for each exchange, written by the model afterwards |
@@ -73,7 +74,9 @@ React 19 and Vite, no router or state library. One stylesheet with light and dar
 | `src/storage.ts` | `localStorage` for small conveniences: drafts, the last place, folded lists |
 | `src/Sidebar.tsx`, `icons.tsx` | The rail of icons and the lists of threads, sources, notes and the Trash |
 | `src/ThreadView.tsx` | A thread: messages, the composer, select to ask a side question, Back, split-off, delete, drafts of new threads |
-| `src/MessageView.tsx`, `Composer.tsx` | One question or answer; the box to ask in |
+| `src/MessageView.tsx`, `Composer.tsx` | One question or answer (Ask again, and the ‹ 1 / 2 › switch between answers); the box to ask in |
+| `src/Pinned.tsx` | The pinned passages at the top of a thread |
+| `src/ExportImport.tsx` | Export (JSON and Markdown) and import |
 | `src/SourceView.tsx`, `AddSource.tsx`, `reading.ts` | The reading pane beside the thread, adding a source, and which threads belong to which source |
 | `src/NoteView.tsx`, `RefPane.tsx`, `citations.ts` | A note of blocks; a citation's exchange beside the note |
 | `src/Merges.tsx` | Merging threads: the picker, the draft, the card |
@@ -88,7 +91,7 @@ React 19 and Vite, no router or state library. One stylesheet with light and dar
 
 ## `e2e`: the app end to end
 
-Playwright specs against the real server and the built app, with the fake model. `playwright.config.ts` starts the servers; `helpers.ts` has shared steps (ask and wait for the answer, select a word, show a sidebar list). One spec per area. The brief's acceptance tests have "acceptance" in their names (`find.spec.ts`, `sources.spec.ts`; M5's is in `apps/server/test/context-view.test.ts`), except the detour test, which is `branch.spec.ts`.
+Playwright specs against the real server and the built app, with the fake model. `playwright.config.ts` starts the servers (one with the fake model, one with no model for the first run, and an empty one to import into; `ports.ts`); `helpers.ts` has shared steps (ask and wait for the answer, select a word, show a sidebar list). One spec per area. The brief's acceptance tests have "acceptance" in their names (`find.spec.ts`, `sources.spec.ts`; M5's are in `apps/server/test/context-view.test.ts` and `export-import.test.ts`), except the detour test, which is `branch.spec.ts`.
 
 ## `docs`
 

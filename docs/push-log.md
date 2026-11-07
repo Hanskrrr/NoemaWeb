@@ -2,11 +2,11 @@
 
 How each push to GitHub (`Hanskrrr/NoemaWeb`) was made, so the next one can be made the same way. Newest first. Add an entry for every push: what, the checks before it, how, and the result.
 
-## Next push: `notebook-features`, guides for collaborators
+## Next push: `notebook-features`, guides for collaborators and the rest of M5
 
-- **What.** Three commits on top of `1bf0921`: guides for collaborators (`docs/architecture.md`, `docs/codebase.md`, `CONTRIBUTING.md`, a fuller `docs/status.md`, links from the README and AGENTS.md), and this log. Docs only.
-- **Checks before pushing.** `node --test`: 185 pass. Every relative link in the new docs resolves. No notebook content in them.
-- **How.** A plain push from the Mac; no force needed:
+- **What.** The commits on top of `1bf0921`: guides for collaborators (`docs/architecture.md`, `docs/codebase.md`, `CONTRIBUTING.md`, a fuller `docs/status.md`, links from the README and AGENTS.md) and this log; then the rest of M5: ask again (ADR 0017), export and import (ADR 0018), pins with migration 013 (ADR 0019), and the docs for them. No force needed.
+- **Checks before pushing.** `node --test`: 200 pass. Playwright in the Claude sandbox: 54 pass, twice. tsc on the Mac for core, server, web and the root project (see the 2026-11-07 handoff). No notebook content in code, tests or docs: the tests and fixtures use made-up text.
+- **How.** A plain push from the Mac:
 
   ```sh
   cd ~/Code/CodeFactory/AgenticSys/NoemaLearningNote/NoemaWeb

@@ -6,7 +6,7 @@ A learning notebook for studying hard material with an AI, on your own computer.
 - Read a web page, an arXiv paper or pasted text beside the conversation, and ask about any passage of it.
 - Find any question, answer, note or passage again with ⌘K.
 - Turn a thread into a study note you edit block by block; its citations open the exchange they came from.
-- See exactly what the AI was sent for any answer, and tell it about yourself once.
+- See exactly what the AI was sent for any answer, tell it about yourself once, pin the passages it should keep in view, and ask again for another answer without losing the first.
 - Everything stays in one file on your computer, and nothing is lost when a tab closes or the server restarts.
 
 This is a working prototype, built by a small team.
@@ -46,7 +46,7 @@ Without Vite: `pnpm build && pnpm start`, then open http://127.0.0.1:8787.
 
 - Everything is in one SQLite file, `data/noema.db` (git-ignored). The server opens it in WAL mode.
 - A consistent copy goes to `data/backups/` once a day; the newest seven are kept.
-- `GET /api/export` downloads everything as JSON.
+- **Export** in the header downloads a copy of everything as JSON, which imports into an empty Noema and gives the same notebook back, or a Markdown file to read anywhere.
 - Your API key is in `data/settings.json`, readable only by your user account. It is never stored in the database, so exports and backups never contain it, and the server never sends it back to the browser.
 - The server listens on 127.0.0.1 only and refuses requests addressed to any other host or sent from other sites. There is no login, so do not put it on a network.
 

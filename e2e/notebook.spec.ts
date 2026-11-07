@@ -1,5 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
-import { ask, currentThreadId, doubleClickWord, freshThread, highlighted, lastAnswer } from './helpers.ts';
+import { ask, currentThreadId, doubleClickWord, freshThread, highlighted, lastAnswer, showList } from './helpers.ts';
 
 // The notebook around a conversation: your own titles, the sidebar and map as
 // ways back to the exact place, and a thread rewritten as an editable note
@@ -116,7 +116,7 @@ test('a side question becomes its own thread, and can be put back', async ({ pag
   await expect(page.getByTestId('unsplit')).toBeVisible();
   // Its own thread now: listed at the top level, right after the thread it came from.
   await expect(nested).toHaveCount(0);
-  const own = page.locator(`nav.sidebar > ul > li:has(> .thread-row [data-thread-id="${branch}"])`);
+  const own = page.locator(`.sidebar-list > li:has(> .thread-row [data-thread-id="${branch}"])`);
   await expect(own).toContainText('↗');
   await expect(own.locator('xpath=preceding-sibling::li[1]').locator(`[data-thread-id="${parent}"]`).first()).toBeVisible();
   // Back still goes to the passage.
@@ -265,6 +265,7 @@ test('write or ask the AI anywhere, accept its suggestions, move, delete, undo a
 });
 
 test('a blank note: write it yourself, with AI help on request', async ({ page }) => {
+  await showList(page, 'notes');
   await page.getByTestId('new-note').click();
   const note = page.getByTestId('note');
   await expect(page.getByTestId('note-rename')).toContainText('Untitled note');

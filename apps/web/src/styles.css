@@ -500,18 +500,147 @@ button.quiet:hover {
 }
 
 .sidebar {
-  width: 16rem;
   flex-shrink: 0;
   position: sticky;
   top: 3.1rem;
   align-self: flex-start;
-  max-height: calc(100vh - 3.1rem);
-  overflow-y: auto;
-  padding: 0.9rem 0.6rem 2rem;
+  height: calc(100vh - 3.1rem);
+  display: flex;
   background: var(--sidebar);
   border-right: 1px solid var(--rule);
-  min-height: calc(100vh - 3.1rem);
   font-size: 0.9rem;
+}
+
+/* The rail: one icon per list; the panel beside it shows one list at a time. */
+.rail {
+  flex: none;
+  width: 3.7rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.7rem 0 0.9rem;
+  background: color-mix(in srgb, var(--ink) 3%, var(--sidebar));
+}
+
+.sidebar:not(.collapsed) .rail {
+  border-right: 1px solid var(--rule);
+}
+
+.rail-space {
+  flex: 1;
+}
+
+.rail-button {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  width: 3.1rem;
+  padding: 0.45rem 0 0.35rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-faint);
+}
+
+.rail-button:hover,
+.rail-button:focus-visible {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.rail-button.current {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+}
+
+.rail-button.current::before {
+  content: '';
+  position: absolute;
+  left: -0.3rem;
+  top: 0.55rem;
+  bottom: 0.55rem;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.rail-button.empty {
+  opacity: 0.55;
+}
+
+.rail-label {
+  font-size: 0.62rem;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+.rail-badge {
+  position: absolute;
+  top: 0.15rem;
+  right: 0.3rem;
+  min-width: 1.05rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--ink-faint);
+  color: var(--sidebar);
+  font-size: 0.62rem;
+  line-height: 1.05rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.rail-dot {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.8rem;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.sidebar-panel {
+  width: 15rem;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.85rem 0.6rem 2rem;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 1.9rem;
+  margin-bottom: 0.6rem;
+  padding: 0 0.1rem 0 0.5rem;
+}
+
+.panel-head h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--ink-faint);
+}
+
+.panel-count {
+  font-weight: normal;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-action {
+  font-size: 0.82rem;
+  padding: 0.25rem 0.65rem;
 }
 
 .sidebar ul {
@@ -534,11 +663,6 @@ button.quiet:hover {
 
 .merged-tag {
   color: var(--ink-faint);
-}
-
-.new-thread {
-  width: 100%;
-  margin-bottom: 0.8rem;
 }
 
 .thread-link {
@@ -618,18 +742,6 @@ button.quiet:hover {
   background: none;
 }
 
-.sidebar-trash {
-  margin-top: 1rem;
-  padding-top: 0.6rem;
-  border-top: 1px solid var(--rule);
-}
-
-.trash-toggle {
-  font-size: 0.8rem;
-  color: var(--ink-faint);
-  padding-left: 0.3rem;
-}
-
 .trash-item {
   display: flex;
   align-items: center;
@@ -679,8 +791,11 @@ button.quiet:hover {
 }
 
 .sidebar-empty {
+  margin: 0 0 0.8rem;
   color: var(--ink-faint);
   padding: 0 0.5rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
 }
 
 .sidebar-toggle {
@@ -698,14 +813,14 @@ button.quiet:hover {
   }
 
   .sidebar.open {
-    display: block;
+    display: flex;
     position: fixed;
     z-index: 8;
     top: 3.1rem;
     left: 0;
     bottom: 0;
-    width: min(18rem, 85vw);
-    max-height: none;
+    height: auto;
+    max-width: 92vw;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
   }
 }
@@ -1040,22 +1155,6 @@ button.danger {
   color: var(--accent);
 }
 
-.sidebar-notes {
-  margin-top: 1.2rem;
-  padding-top: 0.8rem;
-  border-top: 1px solid var(--rule);
-}
-
-.sidebar-notes h2 {
-  margin: 0 0 0.3rem;
-  padding: 0 0.5rem;
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
-  color: var(--ink-faint);
-}
-
 .note-busy {
   color: var(--ink-faint);
 }
@@ -1264,22 +1363,6 @@ button.cite:hover {
 
 .origin-foot > button.quiet:first-child {
   padding-left: 0;
-}
-
-.sidebar-notes-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding-right: 0.2rem;
-}
-
-.sidebar-notes-head h2 {
-  margin: 0;
-}
-
-.sidebar-notes-head button.quiet {
-  font-size: 0.8rem;
 }
 
 /* Map: the way up, and threads made their own */
@@ -2680,11 +2763,6 @@ button.quiet.inline.faint:hover {
 .asked-list .branch-links {
   flex-basis: 100%;
   margin: 0;
-}
-
-/* The sidebar's sources. */
-.sidebar-sources + .sidebar-notes {
-  margin-top: 0.6rem;
 }
 
 /* Adding a source. */

@@ -1,5 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
-import { answered, currentThreadId, doubleClickWord, freshThread } from './helpers.ts';
+import { answered, currentThreadId, doubleClickWord, freshThread, showList } from './helpers.ts';
 
 // Notes written by hand get a catalog; text holding several blocks becomes
 // several blocks; and threads that came from one another stay together in
@@ -7,6 +7,7 @@ import { answered, currentThreadId, doubleClickWord, freshThread } from './helpe
 
 async function newNote(page: Page) {
   const before = page.url();
+  await showList(page, 'notes');
   await page.getByTestId('new-note').click();
   await expect(page).not.toHaveURL(before);
   await expect(page.getByTestId('note').getByTestId('block')).toHaveCount(0);
@@ -86,7 +87,7 @@ test('threads that became their own are listed at the top level, right after the
   await answered(page, 'An unrelated thread about cooking rice');
 
   // Own threads are their own, at the top level, right after the thread they came from; side questions stay under it.
-  const tops = page.locator('nav.sidebar > ul > li');
+  const tops = page.locator('.sidebar-list > li');
   const ids = await tops.evaluateAll((lis) =>
     lis.map((li) => li.querySelector(':scope > .thread-row [data-testid=thread-link]')?.getAttribute('data-thread-id')),
   );

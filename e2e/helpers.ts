@@ -90,3 +90,10 @@ export function currentThreadId(page: Page): string {
   if (!m?.[1]) throw new Error(`not on a thread: ${page.url()}`);
   return m[1];
 }
+
+/** Show one of the sidebar's lists (threads, sources, notes, trash), without hiding it if it is already shown. */
+export async function showList(page: Page, list: 'threads' | 'sources' | 'notes' | 'trash'): Promise<void> {
+  const button = page.getByTestId(`rail-${list}`);
+  if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click();
+  await expect(button).toHaveAttribute('aria-pressed', 'true');
+}

@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test';
-import { answered, currentThreadId, doubleClickWord, freshThread, highlighted, lastAnswer, ulidish } from './helpers.ts';
+import { answered, currentThreadId, doubleClickWord, freshThread, highlighted, lastAnswer, showList, ulidish } from './helpers.ts';
 
 // Sources (M3): paste text or read a page; a reading pane with the thread
 // beside it; select in the text to ask; versioned anchors. The milestone's
@@ -163,7 +163,9 @@ test('a side question of a source thread stays beside the text; the sidebar keep
   const item = source.locator('xpath=ancestor::li[1]');
   await expect(item.locator(`[data-testid=thread-link][data-thread-id="${asked}"]`)).toBeVisible();
   await expect(item.locator(`[data-testid=thread-link][data-thread-id="${side}"]`)).toBeVisible();
-  await expect(page.locator('.sidebar > ul [data-testid=thread-link]').filter({ hasText: 'small gradient' })).toHaveCount(0);
+  await showList(page, 'threads');
+  await expect(page.locator('.sidebar-list [data-testid=thread-link]').filter({ hasText: 'small gradient' })).toHaveCount(0);
+  await showList(page, 'sources');
 
   // The passage counts both questions; its margin mark is darker than for one.
   await source.click();
@@ -213,6 +215,7 @@ test('a web page read from its address, read again when it changes; what was ask
   try {
     await freshThread(request);
     await page.goto('/');
+    await showList(page, 'sources');
     await page.getByTestId('add-source').click();
     // A PDF is refused with a reason.
     await page.getByTestId('source-url-input').fill(`${local.base}/paper.pdf`);
@@ -263,6 +266,7 @@ test('pasting from a web page keeps its structure; search finds a passage and op
 }) => {
   await freshThread(request);
   await page.goto('/');
+  await showList(page, 'sources');
   await page.getByTestId('add-source').click();
   await page.getByTestId('source-mode-paste').click();
   await page.getByTestId('source-text-input').evaluate((el) => {
@@ -307,11 +311,12 @@ test('a source goes to the Trash with Undo; the threads asked about it stay', as
   await expect(page.getByTestId('app-toast')).toContainText('“Tapir notes” moved to the Trash.');
   await expect(page.locator(`[data-testid=source-link][data-source-id="${src.id}"]`)).toHaveCount(0);
   // Its thread is still listed, now with the other threads, and opens on its own.
+  await showList(page, 'threads');
   await page.locator(`[data-testid=thread-link][data-thread-id="${asked}"]`).click();
   await expect(page.getByTestId('source-origin')).toContainText('(in the Trash)');
   await expect(page.getByTestId('source-pane')).toHaveCount(0);
 
-  await page.getByTestId('trash-toggle').click();
+  await showList(page, 'trash');
   await page.locator(`[data-testid=trash-item][data-id="${src.id}"] [data-testid=trash-restore]`).click();
   await expect(page.locator(`[data-testid=source-link][data-source-id="${src.id}"]`)).toBeVisible();
   await expect(page.getByTestId('source-pane')).toContainText('short trunk');

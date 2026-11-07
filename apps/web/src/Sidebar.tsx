@@ -1,4 +1,10 @@
-// Threads, sources, notes and the Trash. A thread's side questions (↳) sit under it,
+// Threads, sources, notes and the Trash, one at a time: a rail of icons on
+// the left picks which list the panel shows, and the panel follows what is
+// open (a note shows Notes, a thread asked about a source shows Sources).
+// Clicking the icon of the list already shown hides the panel, for more room
+// to read; clicking any icon shows it again.
+//
+// A thread's side questions (↳) sit under it,
 // in the order opened, and fold away with its caret. Threads that left a
 // thread to be their own, a side question made its own thread (↗) or a
 // thread split off at a question (↪), are threads of their own: listed at
@@ -10,7 +16,8 @@
 // everything asked about it stay together.
 
 import type { NoteSummary, Source, Thread, Trash } from '@noema/core';
-import { useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
+import { NotesIcon, SourcesIcon, ThreadsIcon, TrashIcon } from './icons.tsx';
 import { sourceFamily } from './reading.ts';
 import { keys, storage } from './storage.ts';
 
@@ -104,6 +111,10 @@ function markOf(t: Thread, depth: number, byId: Map<string, Thread>): { glyph: s
   return null;
 }
 
+export type SidebarSection = 'threads' | 'sources' | 'notes' | 'trash';
+const SECTIONS: SidebarSection[] = ['threads', 'sources', 'notes', 'trash'];
+const NAMES: Record<SidebarSection, string> = { threads: 'Threads', sources: 'Sources', notes: 'Notes', trash: 'Trash' };
+
 export function Sidebar({
   threads,
   sources,
@@ -154,7 +165,42 @@ export function Sidebar({
   for (const { children: kids } of bySource.values()) for (const [k, v] of kids) children.set(k, v);
   const byId = new Map(threads.map((t) => [t.id, t]));
   const [folded, setFolded] = useState<string[]>(() => storage.getJson<string[]>(keys.sidebarFolded, []));
-  const [trashOpen, setTrashOpen] = useState(false);
+  const notesBusy = notes.some((n) => n.status === 'generating');
+
+  // Which list the open thread, source or note is in.
+  const sectionOf = (id: string | null): SidebarSection | null => {
+    if (!id) return null;
+    if (byId.has(id)) return underSource(id) ? 'sources' : 'threads';
+    if (listed.has(id)) return 'sources';
+    if (notes.some((n) => n.id === id)) return 'notes';
+    return null;
+  };
+  const [section, setSection] = useState<SidebarSection>(() => {
+    const saved = storage.get(keys.sidebarSection) as SidebarSection | null;
+    return saved && SECTIONS.includes(saved) ? saved : 'threads';
+  });
+  const [collapsed, setCollapsed] = useState(() => storage.get(keys.sidebarCollapsed) === '1');
+  const show = (next: SidebarSection) => {
+    setSection(next);
+    storage.set(keys.sidebarSection, next);
+  };
+  const hide = (closed: boolean) => {
+    setCollapsed(closed);
+    storage.set(keys.sidebarCollapsed, closed ? '1' : '0');
+  };
+  // Opening something elsewhere (search, a link, the text) shows the list it is in.
+  const wanted = sectionOf(activeId);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only when what is open changes, not when the learner picks a list
+  useEffect(() => {
+    if (wanted) show(wanted);
+  }, [activeId, wanted]);
+  const pick = (next: SidebarSection) => {
+    if (next === section && !collapsed && !open) hide(true);
+    else {
+      show(next);
+      hide(false);
+    }
+  };
 
   const fold = (id: string, closed: boolean) => {
     const next = closed ? [...new Set([...folded, id])] : folded.filter((x) => x !== id);
@@ -285,35 +331,98 @@ export function Sidebar({
     );
   };
 
-  return (
-    <nav className={`sidebar${open ? ' open' : ''}`} aria-label="Threads and notes">
-      <button type="button" className="new-thread" onClick={onNew} data-testid="new-thread">
-        + New thread
+  const counts: Record<SidebarSection, number> = {
+    threads: roots.length,
+    sources: sources.length,
+    notes: notes.length,
+    trash: inTrash,
+  };
+  const icons: Record<SidebarSection, ReactNode> = {
+    threads: <ThreadsIcon />,
+    sources: <SourcesIcon />,
+    notes: <NotesIcon />,
+    trash: <TrashIcon />,
+  };
+  const panelShown = !collapsed || open;
+
+  const railButton = (x: SidebarSection) => {
+    const current = x === section && panelShown;
+    return (
+      <button
+        key={x}
+        type="button"
+        className={`rail-button${current ? ' current' : ''}${x === 'trash' && inTrash === 0 ? ' empty' : ''}`}
+        onClick={() => pick(x)}
+        aria-pressed={current}
+        aria-controls="sidebar-panel"
+        title={current ? `Hide the list of ${NAMES[x].toLowerCase()}` : `${NAMES[x]} · ${counts[x]}`}
+        data-testid={`rail-${x}`}
+      >
+        {icons[x]}
+        <span className="rail-label">{NAMES[x]}</span>
+        {x === 'trash' && inTrash > 0 && (
+          <span className="rail-badge" data-testid="trash-count">
+            {inTrash}
+          </span>
+        )}
+        {x === 'notes' && notesBusy && <span className="rail-dot" title="A note is being written" />}
       </button>
-      {roots.length === 0 ? <p className="sidebar-empty">No threads yet.</p> : <ul>{roots.map((t) => item(t, 0))}</ul>}
-      <section className="sidebar-notes sidebar-sources" aria-label="Sources">
-        <div className="sidebar-notes-head">
-          <h2>Sources</h2>
-          <button type="button" className="quiet" onClick={onAddSource} data-testid="add-source">
-            + Add source
-          </button>
-        </div>
-        {sources.length > 0 && <ul>{sources.map(sourceItem)}</ul>}
-      </section>
-      <section className="sidebar-notes" aria-label="Notes">
-        <div className="sidebar-notes-head">
-          <h2>Notes</h2>
-          <button type="button" className="quiet" onClick={onNewNote} data-testid="new-note">
-            + New note
-          </button>
-        </div>
-        {notes.length > 0 && (
-          <ul>
+    );
+  };
+
+  const head = (title: string, action?: { label: string; onClick: () => void; testId: string }) => (
+    <div className="panel-head">
+      <h2>
+        {title}
+        {counts[section] > 0 && <span className="panel-count">{counts[section]}</span>}
+      </h2>
+      {action && (
+        <button type="button" className="panel-action" onClick={action.onClick} data-testid={action.testId}>
+          {action.label}
+        </button>
+      )}
+    </div>
+  );
+
+  let panel: ReactNode;
+  if (section === 'threads') {
+    panel = (
+      <>
+        {head('Threads', { label: '+ New thread', onClick: onNew, testId: 'new-thread' })}
+        {roots.length === 0 ? (
+          <p className="sidebar-empty">No threads yet. Ask anything to start one.</p>
+        ) : (
+          <ul className="sidebar-list">{roots.map((t) => item(t, 0))}</ul>
+        )}
+      </>
+    );
+  } else if (section === 'sources') {
+    panel = (
+      <>
+        {head('Sources', { label: '+ Add source', onClick: onAddSource, testId: 'add-source' })}
+        {sources.length === 0 ? (
+          <p className="sidebar-empty">
+            Nothing to read yet. Add a web page or an arXiv paper, or paste text, and ask about any passage.
+          </p>
+        ) : (
+          <ul className="sidebar-list">{sources.map(sourceItem)}</ul>
+        )}
+      </>
+    );
+  } else if (section === 'notes') {
+    panel = (
+      <>
+        {head('Notes', { label: '+ New note', onClick: onNewNote, testId: 'new-note' })}
+        {notes.length === 0 ? (
+          <p className="sidebar-empty">No notes yet. Write one, or rewrite a thread as a note.</p>
+        ) : (
+          <ul className="sidebar-list">
             {notes.map((n) => (
               <li key={n.id}>
                 <button
                   type="button"
                   className={`thread-link note-link${n.id === activeId ? ' active' : ''}`}
+                  aria-current={n.id === activeId ? 'page' : undefined}
                   onClick={() => onOpenNote(n.id)}
                   data-testid="note-link"
                   data-note-id={n.id}
@@ -326,21 +435,18 @@ export function Sidebar({
             ))}
           </ul>
         )}
-      </section>
-      {inTrash > 0 && (
-        <section className="sidebar-trash" aria-label="Trash">
-          <button
-            type="button"
-            className="quiet trash-toggle"
-            onClick={() => setTrashOpen((o) => !o)}
-            aria-expanded={trashOpen}
-            data-testid="trash-toggle"
-          >
-            <span aria-hidden>{trashOpen ? '▾' : '▸'} </span>
-            Trash · {inTrash}
-          </button>
-          {trashOpen && (
-            <ul>
+      </>
+    );
+  } else {
+    panel = (
+      <>
+        {head('Trash')}
+        {inTrash === 0 ? (
+          <p className="sidebar-empty">The Trash is empty.</p>
+        ) : (
+          <>
+            <p className="sidebar-empty">Restore puts it back as it was, with its side questions.</p>
+            <ul className="sidebar-list">
               {trash.threads.map((t) => (
                 <li key={t.threadId} className="trash-item" data-testid="trash-item" data-id={t.threadId}>
                   <button type="button" className="thread-link" onClick={() => onOpenTrashed('thread', t.threadId)}>
@@ -379,14 +485,40 @@ export function Sidebar({
                     <span aria-hidden>▤ </span>
                     {n.title || 'Untitled'}
                   </button>
-                  <button type="button" className="quiet" onClick={() => onRestoreNote(n.noteId)} data-testid="trash-restore">
+                  <button
+                    type="button"
+                    className="quiet"
+                    onClick={() => onRestoreNote(n.noteId)}
+                    data-testid="trash-restore"
+                  >
                     Restore
                   </button>
                 </li>
               ))}
             </ul>
-          )}
-        </section>
+          </>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <nav
+      className={`sidebar${open ? ' open' : ''}${panelShown ? '' : ' collapsed'}`}
+      aria-label="Threads, sources and notes"
+      data-section={section}
+    >
+      <div className="rail" aria-label="Lists">
+        {railButton('threads')}
+        {railButton('sources')}
+        {railButton('notes')}
+        <span className="rail-space" />
+        {railButton('trash')}
+      </div>
+      {panelShown && (
+        <div className="sidebar-panel" id="sidebar-panel" aria-label={NAMES[section]} data-testid="sidebar-panel">
+          {panel}
+        </div>
       )}
     </nav>
   );

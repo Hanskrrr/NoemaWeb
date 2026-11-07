@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { answered, currentThreadId, doubleClickWord, freshThread } from './helpers.ts';
+import { answered, currentThreadId, doubleClickWord, freshThread, showList } from './helpers.ts';
 
 // The Trash: threads and notes are deleted to it and restored from it, and a
 // thread's side questions fold away in the sidebar.
@@ -36,7 +36,7 @@ test('a thread goes to the Trash with its side questions, and comes back with Un
   await page.getByTestId('thread-delete').click();
   await page.getByTestId('thread-delete-yes').click();
   await expect(page.locator(`[data-testid=thread-link][data-thread-id="${main}"]`)).toHaveCount(0);
-  await page.getByTestId('trash-toggle').click();
+  await showList(page, 'trash');
   const item = page.locator(`[data-testid=trash-item][data-id="${main}"]`);
   await expect(item).toContainText('+ 1');
   // Open it to read: marked, with no box to ask in.
@@ -51,6 +51,7 @@ test('a thread goes to the Trash with its side questions, and comes back with Un
 
 test('a note goes to the Trash and comes back', async ({ page }) => {
   await page.goto('/#/new');
+  await showList(page, 'notes');
   await page.getByTestId('new-note').click();
   await page.getByTestId('note-rename').click();
   await page.getByTestId('note-title-input').fill('Pangolin facts');

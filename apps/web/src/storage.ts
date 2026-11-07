@@ -47,4 +47,6 @@ export const keys = {
   lastPlace: 'noema:last-place',
   /** Threads whose side questions are folded away in the sidebar. */
   sidebarFolded: 'noema:sidebar-folded',
+  sidebarSection: 'noema:sidebar-section',
+  sidebarCollapsed: 'noema:sidebar-collapsed',
 };

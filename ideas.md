@@ -10,7 +10,7 @@ Things worth doing that are outside the v0.1 scope fence or not yet scheduled. A
 - Semantic search with sqlite-vec, only if keyword search misses in real use.
 - An MCP server over the notebook, so other tools can read it.
 - A desktop shell (Tauri or Electron) around the same server and web app.
-- **"You've asked this before"** (insight I2; from DeepSeek Super Agent's router, which keeps context across sessions): when a new question is close to an earlier exchange anywhere in the notebook, show that exchange next to the answer. The search index and hits it needs exist now (M4); what is left is the chip and choosing when a match is close enough. No embeddings until search misses in real use.
+- **"Asked before", next steps** (built, ADR 0020): give the model the earlier exchange, labelled *asked before*, so it explains differently instead of repeating; suggest merging two threads that asked the same thing; embeddings only if matching by words misses in real use.
 - **Bookmarks** (brief M4): mark a passage to find again without asking about it. Search and the map may make them unnecessary; wait for real use.
 - **Search filters**: only notes, only this thread, by date. Add when a real search returns too much.
 - **Ask in several branches at once**: select a passage and send two or three side questions that run in parallel, each its own branch (Super Agent runs workers in parallel and keeps their state in a database, which is how answers already work here).

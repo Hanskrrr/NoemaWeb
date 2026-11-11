@@ -52,6 +52,7 @@ export function SourceView({
   notes,
   children,
   onOpenThread,
+  onOpenMessage,
   onOpenNote,
   onVersion,
   onAsked,
@@ -81,6 +82,8 @@ export function SourceView({
   /** The thread open beside the text. */
   children?: ReactNode;
   onOpenThread: (threadId: string) => void;
+  /** Open a thread at one of its exchanges (one that already asked what is being asked). */
+  onOpenMessage: (threadId: string, messageId: string) => void;
   onVersion: (versionId: string | undefined) => void;
   onAsked: (threadId: string) => void;
   onChanged: () => void;
@@ -402,6 +405,10 @@ export function SourceView({
         onAsked(id);
       }}
       onCancel={() => setDraft(null)}
+      onOpenAsked={(threadId, messageId) => {
+        setDraft(null);
+        onOpenMessage(threadId, messageId);
+      }}
     />
   ) : (
     (children ?? (

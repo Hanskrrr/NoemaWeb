@@ -662,6 +662,48 @@ export const SearchOpenedRequest = z.object({
 });
 export type SearchOpenedRequest = z.infer<typeof SearchOpenedRequest>;
 
+// Asked before: earlier exchanges that already asked what the learner is
+// about to ask (core/asked.ts), so the app can point at them before a new
+// thread or side question is made.
+
+export const AskedRequest = z.object({
+  /** What is typed so far. */
+  text: z.string().max(8000),
+  /** The passage it is about, for a side question or a question about a source. */
+  passage: z.string().max(8000).optional(),
+  /** The thread being asked in or from: it and the threads it came from are not reminders. */
+  threadId: Id.optional(),
+});
+export type AskedRequest = z.infer<typeof AskedRequest>;
+
+export const AskedHit = z.object({
+  /** The earlier question. */
+  messageId: Id,
+  threadId: Id,
+  threadTitle: z.string(),
+  question: z.string(),
+  /** The passage it was asked about, if any. */
+  passage: z.string().nullable(),
+  /** The one-line summary of the exchange. */
+  headline: z.string().nullable(),
+  askedAt: z.string(),
+  /** `same`: the same question as far as words can tell; `related`: its subject was asked about there. */
+  strength: z.enum(['same', 'related']),
+  /** The subject words they share. */
+  terms: z.array(z.string()),
+});
+export type AskedHit = z.infer<typeof AskedHit>;
+export const AskedResponse = z.object({ hits: z.array(AskedHit) });
+
+/** What the learner did with a reminder. Never the words. */
+export const AskedEventRequest = z.object({
+  action: z.enum(['shown', 'opened', 'asked_there', 'asked_anyway', 'dismissed']),
+  strength: z.enum(['same', 'related']),
+  /** Where: a new thread, a side question, or a question about a source. */
+  place: z.enum(['thread', 'branch', 'source']),
+});
+export type AskedEventRequest = z.infer<typeof AskedEventRequest>;
+
 export const SearchResponse = z.object({
   query: z.string(),
   /** The words searched for, to mark them where a hit opens. */

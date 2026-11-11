@@ -28,6 +28,7 @@ Imported by both the server and the web app. No I/O.
 | `src/ids.ts` | ULIDs (sortable ids), made on whichever side creates the thing |
 | `src/anchor.ts` | Passages: create an anchor from offsets, resolve it in a revision (position, then quote, else unresolved) |
 | `src/context.ts` | What goes to the model and in what order (with pinned passages); the manifest; `describeSent` splits what was sent into named parts |
+| `src/asked.ts` | "Asked before": whether a question being written repeats an earlier exchange, by its subject words |
 | `src/readable.ts` | A notebook as one Markdown file, for reading (the Markdown export) |
 | `src/blocks.ts` | Splitting a note's Markdown into blocks |
 | `src/cite.ts` | `[E3]` citation labels in notes |
@@ -76,6 +77,7 @@ React 19 and Vite, no router or state library. One stylesheet with light and dar
 | `src/ThreadView.tsx` | A thread: messages, the composer, select to ask a side question, Back, split-off, delete, drafts of new threads |
 | `src/MessageView.tsx`, `Composer.tsx` | One question or answer (Ask again, and the ‹ 1 / 2 › switch between answers); the box to ask in |
 | `src/Pinned.tsx` | The pinned passages at the top of a thread |
+| `src/AskedBefore.tsx` | The reminder above the box that a question was asked before |
 | `src/ExportImport.tsx` | Export (JSON and Markdown) and import |
 | `src/SourceView.tsx`, `AddSource.tsx`, `reading.ts` | The reading pane beside the thread, adding a source, and which threads belong to which source |
 | `src/NoteView.tsx`, `RefPane.tsx`, `citations.ts` | A note of blocks; a citation's exchange beside the note |

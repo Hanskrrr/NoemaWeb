@@ -3,6 +3,9 @@
 
 import { createServer, type Server } from 'node:http';
 import {
+  askedBefore,
+  AskedEventRequest,
+  AskedRequest,
   AskRequest,
   CreateBranchRequest,
   CreateNoteRequest,
@@ -617,6 +620,44 @@ export function createApp(deps: AppDeps): App {
   router.on('POST', '/api/search/opened', async (ctx) => {
     const body = await ctx.body(SearchOpenedRequest);
     repo.logEvent('search.opened', null, body);
+    sendJson(ctx.res, 200, { ok: true });
+  });
+
+  // Asked before: earlier exchanges that already asked what is being typed.
+  router.on('POST', '/api/notebooks/:id/asked', async (ctx) => {
+    const notebookId = ctx.params.id as string;
+    if (!repo.getNotebook(notebookId)) throw notFound('notebook');
+    const body = await ctx.body(AskedRequest);
+    const candidates = repo.askedCandidates(notebookId);
+    const byId = new Map(candidates.map((c) => [c.id, c]));
+    const found = askedBefore({ text: body.text, passage: body.passage }, candidates, {
+      exceptThreads: body.threadId ? repo.lineage(body.threadId) : [],
+    });
+    const hits = found.flatMap((m) => {
+      const c = byId.get(m.id);
+      return c
+        ? [
+            {
+              messageId: c.id,
+              threadId: c.threadId,
+              threadTitle: c.title,
+              question: c.question,
+              passage: c.passage ?? null,
+              headline: c.headline ?? null,
+              askedAt: c.askedAt,
+              strength: m.strength,
+              terms: m.terms,
+            },
+          ]
+        : [];
+    });
+    sendJson(ctx.res, 200, { hits });
+  });
+
+  // For the measure "reminders that were followed": what was done with one, never the words.
+  router.on('POST', '/api/asked/events', async (ctx) => {
+    const body = await ctx.body(AskedEventRequest);
+    repo.logEvent(`asked_before.${body.action}`, null, { strength: body.strength, place: body.place });
     sendJson(ctx.res, 200, { ok: true });
   });
 

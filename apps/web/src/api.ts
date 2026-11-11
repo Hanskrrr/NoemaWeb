@@ -3,6 +3,9 @@
 
 import {
   ApiError,
+  type AskedEventRequest,
+  type AskedRequest,
+  AskedResponse,
   AskResponse,
   CLIENT_HEADER,
   CLIENT_HEADER_VALUE,
@@ -118,6 +121,10 @@ export const api = {
   returnFromBranch: (threadId: string) => call(Ok, 'POST', `/api/threads/${threadId}/return`, {}),
   search: (q: string) => call(SearchResponse, 'GET', `/api/search?q=${encodeURIComponent(q)}`),
   searchOpened: (body: SearchOpenedRequest) => call(Ok, 'POST', '/api/search/opened', body),
+  /** Earlier exchanges that already asked what is being typed. */
+  asked: (notebookId: string, body: AskedRequest) =>
+    call(AskedResponse, 'POST', `/api/notebooks/${notebookId}/asked`, body),
+  askedEvent: (body: AskedEventRequest) => call(Ok, 'POST', '/api/asked/events', body),
   openBranches: (notebookId: string) =>
     call(OpenBranchesResponse, 'GET', `/api/notebooks/${notebookId}/open-branches`),
   setAside: (threadId: string) => call(Ok, 'POST', `/api/threads/${threadId}/set-aside`, {}),

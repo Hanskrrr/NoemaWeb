@@ -2,10 +2,10 @@
 
 How each push to GitHub (`Hanskrrr/NoemaWeb`) was made, so the next one can be made the same way. Newest first. Add an entry for every push: what, the checks before it, how, and the result.
 
-## Next push: `notebook-features`, guides for collaborators and the rest of M5
+## Next push: `notebook-features`, asked before
 
-- **What.** The commits on top of `1bf0921`: guides for collaborators (`docs/architecture.md`, `docs/codebase.md`, `CONTRIBUTING.md`, a fuller `docs/status.md`, links from the README and AGENTS.md) and this log; then the rest of M5: ask again (ADR 0017), export and import (ADR 0018), pins with migration 013 (ADR 0019), and the docs for them. No force needed.
-- **Checks before pushing.** `node --test`: 200 pass. Playwright in the Claude sandbox: 54 pass, twice. tsc on the Mac for core, server, web and the root project (see the 2026-11-07 handoff). No notebook content in code, tests or docs: the tests and fixtures use made-up text.
+- **What.** The commits on top of `5bb1ccb`: "asked before" (ADR 0020) and its docs. No migration; no force needed.
+- **Checks before pushing.** See the 2026-11-11 handoff: `node --test`, Playwright in the Claude sandbox, tsc on the Mac. No notebook content in code, tests or docs.
 - **How.** A plain push from the Mac:
 
   ```sh
@@ -14,6 +14,13 @@ How each push to GitHub (`Hanskrrr/NoemaWeb`) was made, so the next one can be m
   ```
 
 - **Result.** Not pushed yet. Record here the commit pushed, when, and by whom.
+
+## 2026-11-07: `notebook-features`, guides for collaborators, the rest of M5, and fixes
+
+- **What.** The commits on top of `1bf0921`, up to `5bb1ccb`: guides for collaborators (`docs/architecture.md`, `docs/codebase.md`, `CONTRIBUTING.md`, a fuller `docs/status.md`) and this log; the rest of M5: ask again (ADR 0017), export and import (ADR 0018), pins with migration 013 (ADR 0019); then the fixes of 2026-11-07 (the Sources list, formulas in papers and in answers). No force.
+- **Checks before pushing.** `node --test`: 205 pass, in the sandbox and on the Mac. Playwright in the Claude sandbox: 56 pass, twice. tsc on the Mac for core, server, web and the root project. No notebook content in code, tests or docs.
+- **How.** A plain push from the Mac: `git push origin notebook-features`.
+- **Result.** Pushed by the founder from his Mac: `origin/notebook-features` is `5bb1ccb`. The Mac's remote-tracking ref was written at 2026-11-07 23:44 UTC, which is the time of the push as far as the repository shows.
 
 ## 2026-11-06: `notebook-features`, rewritten without the founder's notebook content (force push)
 

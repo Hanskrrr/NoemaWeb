@@ -2,6 +2,7 @@
 // origin card with Back, and the marks where branches left.
 
 import {
+  type AskedHit,
   type BranchSummary,
   type Continuation,
   type ContinuedFrom,
@@ -24,6 +25,7 @@ import {
 } from '@noema/core';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ApiFailure, api, watchMessage } from './api.ts';
+import { AskedBefore, type AskedPlace } from './AskedBefore.tsx';
 import { arrive, clearFound } from './found.ts';
 import { Composer } from './Composer.tsx';
 import { EditableTitle } from './EditableTitle.tsx';
@@ -1042,6 +1044,8 @@ function ThreadHeader({
   /** Absent for a thread already in the Trash. */
   onDelete?: (() => void) | undefined;
 }) {
+  // A thread that already has a note: say so before writing another one.
+  const [another, setAnother] = useState(false);
   return (
     <header className="thread-head">
       <EditableTitle title={title} onRename={onRename} label="Thread title" />
@@ -1052,7 +1056,7 @@ function ThreadHeader({
         <button
           type="button"
           className="quiet"
-          onClick={onRewrite}
+          onClick={() => (notes.length > 0 ? setAnother(true) : onRewrite())}
           disabled={!canRewrite}
           title="Rewrite this thread and its branches as a study note"
           data-testid="rewrite"
@@ -1091,6 +1095,28 @@ function ThreadHeader({
               {n.title || 'Untitled'}
             </button>
           ))}
+        </p>
+      )}
+      {another && notes.length > 0 && (
+        <p className="thread-notes-line note-already" role="status" data-testid="note-already">
+          <span>
+            {notes.length === 1 ? 'This thread already has a note' : 'This thread already has notes'}, listed above. Open
+            it, or
+          </span>
+          <button
+            type="button"
+            className="quiet inline"
+            onClick={() => {
+              setAnother(false);
+              onRewrite();
+            }}
+            data-testid="rewrite-again"
+          >
+            write another
+          </button>
+          <button type="button" className="quiet inline" onClick={() => setAnother(false)}>
+            Cancel
+          </button>
         </p>
       )}
     </header>
@@ -1352,6 +1378,7 @@ export function DraftView({
   source = null,
   onCreated,
   onCancel,
+  onOpenAsked,
 }: {
   notebookId: string;
   branch: BranchDraft | null;
@@ -1359,8 +1386,32 @@ export function DraftView({
   source?: SourceDraft | null;
   onCreated: (threadId: string) => void;
   onCancel: () => void;
+  /** Open an earlier exchange that already asked this. */
+  onOpenAsked: (threadId: string, messageId: string) => void;
 }) {
   const [notice, setNotice] = useState<string | null>(null);
+  // What is typed, for the reminder that it was asked before; and the reminder showing, if any.
+  const [typed, setTyped] = useState('');
+  const reminder = useRef<AskedHit | null>(null);
+  const place: AskedPlace = source ? 'source' : branch ? 'branch' : 'thread';
+  const draftKey = source
+    ? keys.draft(`source:${source.versionId}:${source.start}-${source.end}`)
+    : branch
+      ? keys.draft(`branch:${branch.messageId}:${branch.start}-${branch.end}`)
+      : keys.draft('new');
+
+  // Ask in the earlier thread instead: no new thread is made.
+  const askThere = async (hit: AskedHit) => {
+    const content = typed.trim();
+    if (!content) return;
+    try {
+      await api.ask(hit.threadId, ulid(), content);
+      storage.remove(draftKey);
+      onCreated(hit.threadId);
+    } catch (err) {
+      setNotice(err instanceof ApiFailure ? err.message : 'Could not send the question.');
+    }
+  };
   // Reused across retries, so a send that reached the server but lost its reply is not repeated.
   const ids = useRef<{ thread: string; question: string; content: string } | null>(null);
 
@@ -1373,6 +1424,10 @@ export function DraftView({
     };
     ids.current = current;
     const id = current.thread;
+    // Asked here although a reminder was showing: counted, to learn whether reminders help.
+    if (reminder.current) {
+      api.askedEvent({ action: 'asked_anyway', strength: reminder.current.strength, place }).catch(() => {});
+    }
     try {
       if (source) {
         await api.askAboutSource(source.sourceId, {
@@ -1425,19 +1480,27 @@ export function DraftView({
           </button>
         </div>
       )}
+      <AskedBefore
+        key={draftKey}
+        notebookId={notebookId}
+        text={typed}
+        passage={source?.exact ?? branch?.exact}
+        threadId={branch?.parentThreadId}
+        place={place}
+        onOpen={(hit) => onOpenAsked(hit.threadId, hit.messageId)}
+        onAskThere={(hit) => void askThere(hit)}
+        onShowing={(hit) => {
+          reminder.current = hit;
+        }}
+      />
       <Composer
         key={source ? `${source.versionId}:${source.start}-${source.end}` : branch ? `${branch.messageId}:${branch.start}` : 'new'}
-        draftKey={
-          source
-            ? keys.draft(`source:${source.versionId}:${source.start}-${source.end}`)
-            : branch
-              ? keys.draft(`branch:${branch.messageId}:${branch.start}-${branch.end}`)
-              : keys.draft('new')
-        }
+        draftKey={draftKey}
         busy={false}
         autoFocus
         placeholder={source || branch ? 'Ask about this passage…' : 'Ask a question…'}
         onSend={send}
+        onDraft={setTyped}
       />
     </>
   );

@@ -8,7 +8,7 @@ Noema is a notebook for studying hard material (a paper, a course) with an AI. W
 
 - **Detours with a way back.** Select any passage of an answer or of what you are reading, ask a side question about it, and come back to that exact passage. Side questions can become threads of their own, be merged back, or be cut off at a question.
 - **Sources beside the conversation.** A web page, an arXiv paper or pasted text sits in a reading pane; questions are tied to the passage they were asked about, in the version that was shown.
-- **Finding things again.** Search lands on the exact message, note block or passage; a map of each thread; side questions you never came back from.
+- **Finding things again.** Search lands on the exact message, note block or passage; a map of each thread; side questions you never came back from; and a reminder, before a new thread or side question is made, that the question was asked before.
 - **Notes from conversations.** A thread rewritten as a study note, made of blocks you edit, whose citations open the exchange they came from.
 - **Context you can see.** Under any answer, exactly what the AI was sent. Passages pinned to a thread go with every question in it. Ask again for another answer; the first is kept.
 - **Your data, as files.** Export everything as JSON (it imports back into an empty Noema) or as Markdown to read.

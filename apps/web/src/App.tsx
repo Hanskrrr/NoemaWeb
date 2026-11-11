@@ -305,6 +305,10 @@ function NotebookView({
         notebookId={notebook.id}
         branch={showDraft}
         onCreated={(id) => void openNew(id)}
+        onOpenAsked={(threadId, messageId) => {
+          setDraft(null);
+          toMessage(threadId, messageId);
+        }}
         onCancel={() => {
           setFocus({
             messageId: showDraft.messageId,
@@ -317,7 +321,15 @@ function NotebookView({
       />
     );
   } else if (route?.kind === 'new') {
-    main = <DraftView notebookId={notebook.id} branch={null} onCreated={(id) => void openNew(id)} onCancel={() => {}} />;
+    main = (
+      <DraftView
+        notebookId={notebook.id}
+        branch={null}
+        onCreated={(id) => void openNew(id)}
+        onOpenAsked={toMessage}
+        onCancel={() => {}}
+      />
+    );
   } else if (route?.kind === 'thread') {
     thread = (
       <ThreadView
@@ -410,6 +422,7 @@ function NotebookView({
         notes={notes}
         onOpenNote={openNote}
         onOpenThread={open}
+        onOpenMessage={toMessage}
         onVersion={(version) => go({ kind: 'source', id: reading.id, version })}
         onAsked={(id) => void openNew(id)}
         onChanged={onRefresh}

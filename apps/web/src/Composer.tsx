@@ -13,7 +13,10 @@ export function Composer({
   placeholder = 'Ask a question…',
   onSend,
   onStop,
+  onDraft,
 }: {
+  /** Told what is in the box, as it changes (and what was kept from before). */
+  onDraft?: (text: string) => void;
   draftKey: string;
   busy: boolean;
   autoFocus?: boolean;
@@ -36,6 +39,10 @@ export function Composer({
     }, 150);
     return () => clearTimeout(t);
   }, [text, draftKey]);
+
+  const told = useRef(onDraft);
+  told.current = onDraft;
+  useEffect(() => told.current?.(text), [text]);
 
   const submit = async () => {
     const content = text.trim();

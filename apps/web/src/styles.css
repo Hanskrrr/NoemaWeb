@@ -3372,3 +3372,94 @@ label.button.disabled {
   background: var(--sheet);
   color: var(--accent);
 }
+
+/* Asked before: a quiet reminder above the question box. */
+
+.asked {
+  position: sticky;
+  bottom: 5.4rem;
+  z-index: 4;
+  width: calc(100% - 2rem);
+  max-width: 44rem;
+  margin: 0 auto 0.3rem;
+  padding: 0.55rem 0.7rem 0.6rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--rule));
+  border-radius: 10px;
+  background: var(--sheet);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+.asked-head {
+  margin: 0 0 0.3rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
+
+.asked ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.asked li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem 0.8rem;
+  min-width: 0;
+}
+
+.asked-what {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 0.1rem;
+}
+
+.asked-question {
+  font-family: var(--serif);
+  font-size: 0.98rem;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asked-how,
+.asked-where {
+  font-family: var(--sans, inherit);
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+}
+
+.asked-where {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asked-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.asked-actions button {
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.asked-dismiss {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+@media (max-width: 560px) {
+  .asked li {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

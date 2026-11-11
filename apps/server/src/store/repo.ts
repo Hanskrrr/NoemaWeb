@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import type { SQLInputValue, StatementSync } from 'node:sqlite';
 import {
   type AnchorRef,
+  type AskedCandidate,
   type BranchSummary,
   type ChatMessage,
   type ContextManifest,
@@ -1496,6 +1497,55 @@ export class Repo {
       continuedFrom: continuedFrom ? { threadId: continuedFrom.threadId, title: continuedFrom.title } : null,
       continuedIn: this.continuedIn(threadId),
     };
+  }
+
+  // Asked before ----------------------------------------------------------------
+
+  /**
+   * Every question in the notebook that is not in the Trash, oldest first,
+   * as what it asked: its words, the passage it was asked about (a thread's
+   * first question), its thread's title and its exchange's headline.
+   */
+  askedCandidates(notebookId: string): Array<AskedCandidate & { title: string; askedAt: string }> {
+    const rows = this.db.sql
+      .prepare(
+        `SELECT m.id, m.thread_id, m.created_at, r.content AS question, t.title, ar.headline,
+                CASE WHEN m.seq = (SELECT min(seq) FROM message WHERE thread_id = t.id)
+                     THEN COALESCE(a.exact, sa.exact) END AS passage
+         FROM message m
+         JOIN message_revision r ON r.id = m.current_revision_id
+         JOIN thread t ON t.id = m.thread_id
+         LEFT JOIN message am ON am.reply_to = m.id
+         LEFT JOIN message_revision ar ON ar.id = am.current_revision_id
+         LEFT JOIN anchor a ON a.id = t.origin_anchor_id
+         LEFT JOIN source_anchor sa ON sa.id = t.source_anchor_id
+         WHERE t.notebook_id = ? AND t.deleted_at IS NULL AND m.role = 'user'
+         ORDER BY m.created_at, m.rowid`,
+      )
+      .all(notebookId) as Row[];
+    return rows.map((r) => ({
+      id: r.id as string,
+      threadId: r.thread_id as string,
+      question: r.question as string,
+      passage: r.passage ? (r.passage as string).slice(0, 2000) : null,
+      title: (r.title as string | null) ?? '',
+      headline: (r.headline as string | null) ?? null,
+      askedAt: r.created_at as string,
+    }));
+  }
+
+  /** A thread and the threads it came from, as a side question or split off. */
+  lineage(threadId: string): string[] {
+    const out: string[] = [];
+    let id: string | null = threadId;
+    while (id && !out.includes(id)) {
+      out.push(id);
+      const t = this.db.sql.prepare('SELECT parent_thread_id, continued_from FROM thread WHERE id = ?').get(id) as
+        | Row
+        | undefined;
+      id = ((t?.parent_thread_id ?? t?.continued_from) as string | null | undefined) ?? null;
+    }
+    return out;
   }
 
   // Pins ----------------------------------------------------------------------

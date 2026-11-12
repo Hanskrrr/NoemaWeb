@@ -1,12 +1,21 @@
 import { readFileSync } from 'node:fs';
 import { expect, type Page, test } from '@playwright/test';
-import { answered, freshThread, highlighted, showList } from './helpers.ts';
+import { answered, freshThread, highlighted, lastAnswer, showList } from './helpers.ts';
 
 // PDF sources (ADR 0021): a PDF from this computer is read page by page into
 // the reading pane, asked about like any text, and opened at the page being
 // read. The fixture is a made-up three-slide deck.
 
 const SLIDES = new URL('../apps/server/test/fixtures/slides.pdf', import.meta.url);
+const FIGURE = new URL('../apps/server/test/fixtures/figure-slides.pdf', import.meta.url);
+
+async function addPdf(page: Page, url: URL, name: string): Promise<void> {
+  await page.getByTestId('add-source').click();
+  await page.getByTestId('source-mode-pdf').click();
+  await page.getByTestId('source-pdf-input').setInputFiles({ name, mimeType: 'application/pdf', buffer: readFileSync(url) });
+  await page.getByTestId('source-add').click();
+  await expect(page.getByTestId('source-file-name')).toHaveText(name);
+}
 
 async function selectInSource(page: Page, phrase: string): Promise<void> {
   await page.getByTestId('source-text').evaluate((root, p) => {
@@ -53,6 +62,9 @@ test('a PDF from this computer: read page by page, asked about, and opened at th
   await expect(pane.locator('h1').first()).toContainText('Week 5: Optimisation');
   await expect(page.getByTestId('source-file-name')).toHaveText('week5-slides.pdf');
   await expect(page.getByTestId('source-pages')).toHaveText('PDF, 3 pages');
+  // Shown as its pages; here, as its text.
+  await expect(page.getByTestId('pdf-pages').locator('.pdf-page')).toHaveCount(3);
+  await page.getByTestId('view-text').click();
   const text = page.getByTestId('source-text');
   await expect(text.locator('.md > h3')).toHaveText(['Page 1', 'Page 2', 'Page 3']);
   await expect(text.locator('li')).toHaveCount(5);
@@ -92,4 +104,60 @@ test('a PDF from this computer: read page by page, asked about, and opened at th
   expect(res.status()).toBe(200);
   expect(res.headers()['content-type']).toBe('application/pdf');
   expect((await res.body()).equals(readFileSync(SLIDES))).toBe(true);
+});
+
+test('a PDF opens as its pages: drawn as printed, selected from, asked about with a picture of the page', async ({
+  page,
+  request,
+}) => {
+  await freshThread(request);
+  await page.goto('/');
+  await showList(page, 'sources');
+  await addPdf(page, FIGURE, 'figure-slides.pdf');
+
+  // Its pages, drawn: the chart is on the first one.
+  const pages = page.getByTestId('pdf-pages').locator('.pdf-page');
+  await expect(pages).toHaveCount(2);
+  await expect(page.getByTestId('view-pages')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => pages.first().locator('canvas').evaluate((c: HTMLCanvasElement) => c.width)).toBeGreaterThan(0);
+  const inked = await pages.first().locator('canvas').evaluate((c: HTMLCanvasElement) => {
+    const data = c.getContext('2d')?.getImageData(0, 0, c.width, c.height).data ?? new Uint8ClampedArray();
+    let blue = 0;
+    for (let i = 0; i < data.length; i += 4) if ((data[i + 2] ?? 0) > 120 && (data[i] ?? 0) < 90) blue++;
+    return blue;
+  });
+  expect(inked).toBeGreaterThan(100); // the blue curve of the chart
+
+  // Selected on the page, asked about: the question goes with the picture of the page.
+  await selectInSource(page, 'bounces because');
+  await page.getByTestId('ask-source').click();
+  await answered(page, 'Why does it bounce?');
+  await expect(lastAnswer(page)).toContainText('I can see Page 1 of “Loss during training”.');
+  await expect.poll(() => highlighted(page, 'noema-source-here')).toBe('bounces because');
+  await lastAnswer(page).getByTestId('show-context').click();
+  const picture = page.getByTestId('context-image');
+  await expect(picture).toContainText('Page 1 of “Loss during training”, sent as a picture');
+  await expect.poll(() => picture.locator('img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(1000);
+  await page.keyboard.press('Escape');
+
+  // The same passage in the text, marked there too.
+  await page.getByTestId('view-text').click();
+  await expect(page.getByTestId('source-text')).toContainText('The red curve bounces because the step is too large.');
+  await expect.poll(() => highlighted(page, 'noema-source-here')).toBe('bounces because');
+  await page.getByTestId('view-pages').click();
+  await expect.poll(() => highlighted(page, 'noema-source-here')).toBe('bounces because');
+  // Asked about: marked on the page.
+  await expect.poll(() => highlighted(page, 'noema-source-asked')).toBe('bounces because');
+
+  // Search finds a passage of the PDF and opens it at its page, the words marked there.
+  await page.keyboard.press('ControlOrMeta+k');
+  await page.getByTestId('search-input').fill('smooth the steps');
+  await page.locator('[data-testid=search-hit][data-kind=passage]').first().click();
+  await expect.poll(() => highlighted(page, 'noema-found')).toContain('smooth');
+  const found = await page.evaluate(() => {
+    const h = (CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights.get('noema-found');
+    const range = h ? [...h][0] : undefined;
+    return range?.startContainer.parentElement?.closest<HTMLElement>('.pdf-page')?.dataset.page ?? null;
+  });
+  expect(found).toBe('2');
 });

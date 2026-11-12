@@ -10,9 +10,12 @@ import {
   type ErrorKind,
   type MessageError,
   type MessageStatus,
+  pageImageRef,
+  parsePageImageRef,
+  type SentImage,
 } from '@noema/core';
 import type { Config } from '../config.ts';
-import { ProviderError, type Usage } from '../llm/provider.ts';
+import { ProviderError, type StreamEvent, type Usage } from '../llm/provider.ts';
 import type { ModelSource } from '../llm/settings.ts';
 import type { Logger } from '../log.ts';
 import type { Repo } from '../store/repo.ts';
@@ -52,6 +55,8 @@ export interface StartArgs {
 
 export class Generations {
   private readonly live = new Map<string, Live>();
+  /** Models (provider and name) that refused a picture: asked with text only from then on. */
+  private readonly textOnly = new Set<string>();
   private readonly repo: Repo;
   private readonly models: ModelSource;
   private readonly titler: Titler | null;
@@ -175,7 +180,16 @@ export class Generations {
       // What the learner is reading, when this thread (or the one it came from) was asked about a source.
       const reading = this.repo.sourceContextFor(args.threadId);
       const fromSource = this.repo.sourceOriginOf(args.threadId);
-      const { messages, manifest } = assembleContext({
+      // A question about a passage of a PDF goes with a picture of its page(s), when the browser made one.
+      const modelKey = `${provider.name}:${provider.model}`;
+      const images: SentImage[] =
+        reading && !this.textOnly.has(modelKey)
+          ? this.repo.pagesWithImages(reading.versionId, reading.pages).map((page) => ({
+              ref: pageImageRef(reading.versionId, page),
+              label: `Page ${page} of “${reading.title || 'Untitled'}”`,
+            }))
+          : [];
+      const assemble = (withImages: SentImage[]) => assembleContext({
         system: SYSTEM_PROMPT,
         aboutMe: notebook?.aboutMe ?? '',
         ...(reading ? { source: { title: reading.title, url: reading.url, section: reading.section } } : {}),
@@ -194,21 +208,39 @@ export class Generations {
         history: this.repo.history(args.threadId, args.question.seq),
         mergedNow: this.repo.pendingMerges(args.threadId, args.question.seq),
         question: { id: args.question.id, content: args.question.content },
+        ...(withImages.length > 0 ? { images: withImages } : {}),
         budgetTokens: this.config.contextBudgetTokens,
       });
-      callId = this.repo.startModelCall({
-        revisionId: entry.revisionId,
-        provider: provider.name,
-        model: provider.model,
-        manifest,
-        request: messages,
-      });
-      const stream = provider.stream({
-        messages,
-        maxTokens: this.config.maxOutputTokens ?? undefined,
-        revision: args.revision,
-        signal: entry.controller.signal,
-      });
+      const send = (withImages: SentImage[]) => {
+        const { messages, manifest } = assemble(withImages);
+        callId = this.repo.startModelCall({
+          revisionId: entry.revisionId,
+          provider: provider.name,
+          model: provider.model,
+          manifest,
+          request: messages,
+        });
+        return provider.stream({
+          messages,
+          images: (ref) => this.pageImageFor(ref),
+          maxTokens: this.config.maxOutputTokens ?? undefined,
+          revision: args.revision,
+          signal: entry.controller.signal,
+        });
+      };
+      let stream = send(images);
+      if (images.length > 0) {
+        // A model that cannot take pictures refuses the request before answering: ask again with text only.
+        try {
+          stream = await primed(stream);
+        } catch (err) {
+          if (!(err instanceof ProviderError) || err.kind !== 'bad_request') throw err;
+          this.textOnly.add(modelKey);
+          this.log.warn('model refused a picture: asking with text only', { model: modelKey, detail: err.message });
+          if (callId) this.repo.endModelCall(callId, { attempts: 1, firstTokenAt: null, finishReason: null, errorKind: 'bad_request' });
+          stream = send([]);
+        }
+      }
       for await (const ev of stream) {
         if (ev.type === 'attempt') attempts = ev.n;
         else if (ev.type === 'usage') usage = ev.usage;
@@ -234,7 +266,7 @@ export class Generations {
 
     const errorKind: ErrorKind | null = final.error?.kind ?? null;
     if (callId) {
-      this.repo.endModelCall(callId, { attempts, firstTokenAt, ...usage, finishReason, errorKind });
+      this.repo.endModelCall(callId as string, { attempts, firstTokenAt, ...usage, finishReason, errorKind });
     }
     this.repo.finishRevision(entry.revisionId, entry.content, final.status, final.error);
     this.setStatus(entry, final.status, final.error);
@@ -258,6 +290,12 @@ export class Generations {
     });
   }
 
+  /** The picture a reference names, for the provider. */
+  private pageImageFor(ref: string): { mediaType: string; data: string } | null {
+    const page = parsePageImageRef(ref);
+    return page ? this.repo.pageImage(page.versionId, page.page) : null;
+  }
+
   private toFinal(
     entry: Live,
     err: unknown,
@@ -275,3 +313,23 @@ export class Generations {
     return { status: 'failed', error: { kind: 'internal', message: describeError('internal') } };
   }
 }
+
+/**
+ * Start a stream and wait for its first event that is not just an attempt, so
+ * a request the model refuses fails here; the stream goes on from there.
+ */
+async function primed(stream: AsyncIterable<StreamEvent>): Promise<AsyncIterable<StreamEvent>> {
+  const it = stream[Symbol.asyncIterator]();
+  const seen: StreamEvent[] = [];
+  for (;;) {
+    const next = await it.next();
+    if (next.done) break;
+    seen.push(next.value);
+    if (next.value.type !== 'attempt') break;
+  }
+  return (async function* () {
+    yield* seen;
+    for (let next = await it.next(); !next.done; next = await it.next()) yield next.value;
+  })();
+}
+

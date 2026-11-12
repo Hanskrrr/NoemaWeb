@@ -297,7 +297,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           },
           body: JSON.stringify({
             model: this.model,
-            messages: req.messages,
+            messages: wireMessages(req),
             stream: true,
             stream_options: { include_usage: true },
             ...(req.maxTokens ? { max_tokens: req.maxTokens } : {}),
@@ -374,3 +374,24 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
   }
 }
+
+/**
+ * The messages as the API takes them: a question with pictures becomes a list
+ * of parts, the pictures first (as data: URLs), then its text.
+ */
+export function wireMessages(req: Pick<StreamRequest, 'messages' | 'images'>): unknown[] {
+  return req.messages.map((m) => {
+    const pictures = (m.images ?? [])
+      .map((image) => req.images?.(image.ref))
+      .filter((p): p is { mediaType: string; data: string } => p !== null && p !== undefined);
+    if (pictures.length === 0) return { role: m.role, content: m.content };
+    return {
+      role: m.role,
+      content: [
+        ...pictures.map((p) => ({ type: 'image_url', image_url: { url: `data:${p.mediaType};base64,${p.data}` } })),
+        { type: 'text', text: m.content },
+      ],
+    };
+  });
+}
+

@@ -10,7 +10,7 @@
 import { createRequire, registerHooks } from 'node:module';
 import { dirname, join } from 'node:path';
 import { parentPort, workerData } from 'node:worker_threads';
-import type { PdfPageText, PdfTextItem } from '@noema/core';
+import { type PdfjsTextItem, type PdfPageText, pdfPageText } from '@noema/core';
 
 /**
  * What this worker posts, marked as ours: Node itself may post other messages
@@ -36,12 +36,6 @@ export interface PdfWorkerFailure {
 export function describeError(err: unknown): string {
   if (err instanceof Error) return `${err.name}${'code' in err ? ` ${String(err.code)}` : ''}: ${err.message}`.slice(0, 300);
   return String(err).slice(0, 300);
-}
-
-interface RawItem {
-  str?: string;
-  transform?: number[];
-  width?: number;
 }
 
 /**
@@ -134,19 +128,7 @@ export async function readPdfPages(data: Uint8Array): Promise<PdfWorkerResult | 
       const page = await doc.getPage(n);
       const view = page.getViewport({ scale: 1 });
       const content = await page.getTextContent();
-      const items: PdfTextItem[] = [];
-      for (const raw of content.items as RawItem[]) {
-        const t = raw.transform;
-        if (typeof raw.str !== 'string' || !t) continue;
-        // A glyph with no character (a bullet in some TeX fonts) is passed on as U+FFFC.
-        const str = raw.str === '' ? ((raw.width ?? 0) > 0.5 ? '\ufffc' : '') : raw.str;
-        if (str === '') continue;
-        const [a = 0, b = 0, c = 0, d = 0, x = 0, y = 0] = t;
-        // Upright text only: a margin stamp turned on its side is not part of the page's text.
-        if (Math.abs(b) > 0.1 * Math.abs(a) || Math.abs(c) > 0.1 * Math.abs(d) || a <= 0 || d <= 0) continue;
-        items.push({ str, x, y, width: raw.width ?? 0, size: Math.hypot(c, d) });
-      }
-      pages.push({ width: view.width, height: view.height, items });
+      pages.push(pdfPageText(content.items as PdfjsTextItem[], view));
       page.cleanup();
     }
     return { ok: true, title: typeof info?.Title === 'string' ? info.Title : null, pages };

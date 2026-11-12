@@ -37,7 +37,7 @@ Imported by both the server and the web app. No I/O.
 | `src/search.ts` | Search text for FTS5 (Chinese and Japanese as characters and pairs), queries and snippets |
 | `src/html.ts` | A web page as Markdown: the article only, with math, footnotes, tables and code |
 | `src/sources.ts` | A source's blocks and headings, and the section around a passage |
-| `src/pdf.ts` | A PDF's text items, page by page, as Markdown: lines, paragraphs, headings, lists, page headings; running heads dropped |
+| `src/pdf.ts` | A PDF's text items, page by page, as Markdown: lines, paragraphs, headings, lists, page headings; running heads dropped; where each item landed (the map from pages to text) |
 | `src/state.ts` | The states of an answer (`pending`, `streaming`, `done`, `failed`, `stopped`, `interrupted`) |
 | `src/errors.ts` | Error kinds and the plain sentence the UI shows for each |
 | `test/` | `node:test` tests for all of the above, with HTML fixtures |
@@ -82,6 +82,7 @@ React 19 and Vite, no router or state library. One stylesheet with light and dar
 | `src/ThreadView.tsx` | A thread: messages, the composer, select to ask a side question, Back, split-off, delete, drafts of new threads |
 | `src/MessageView.tsx`, `Composer.tsx` | One question or answer (Ask again, and the ‹ 1 / 2 › switch between answers); the box to ask in |
 | `src/Pinned.tsx` | The pinned passages at the top of a thread |
+| `src/PdfPages.tsx`, `pdf/pdfjs.ts`, `pdf/pageImage.ts` | A PDF as its pages (pdf.js from the server, with its text layer), selection on a page to a passage of the text; drawing a page as a picture for the model |
 | `src/AskedBefore.tsx`, `asked.ts` | The reminder above the box that a question was asked before; putting together what words and the model found |
 | `src/ExportImport.tsx` | Export (JSON and Markdown) and import |
 | `src/SourceView.tsx`, `AddSource.tsx`, `reading.ts` | The reading pane beside the thread, adding a source, and which threads belong to which source |

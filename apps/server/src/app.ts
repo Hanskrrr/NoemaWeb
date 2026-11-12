@@ -1,7 +1,10 @@
 // Wires the store, the model and the routes into an http.Server.
 // main.ts starts it; tests start it on a random port with an in-memory store.
 
+import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
+import { createRequire } from 'node:module';
+import { dirname, extname, join } from 'node:path';
 import {
   askedBefore,
   AskedEventRequest,
@@ -24,6 +27,7 @@ import {
   MoveOutRequest,
   cleanFileName,
   NoemaExport,
+  PageImageQuery,
   PdfUploadQuery,
   notebookMarkdown,
   RedraftMergeRequest,
@@ -407,6 +411,53 @@ export function createApp(deps: AppDeps): App {
 
   // The file kept with a version (a PDF), shown by the browser's own viewer:
   // a plain link opens it, at a page with #page=N.
+  // A picture of a page of a PDF, made by the browser when a passage there is
+  // asked about: sent to the model with every question about that passage.
+  router.on('PUT', '/api/sources/:id/versions/:versionId/pages/:page/image', async (ctx) => {
+    const { width, height } = ctx.query(PageImageQuery);
+    const page = Number(ctx.params.page);
+    if (!Number.isInteger(page)) throw notFound('page');
+    const type = (ctx.req.headers['content-type'] ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
+    if (!IMAGE_TYPES.has(type)) throw new HttpError(415, 'unsupported_media_type', 'send image/jpeg, image/png or image/webp');
+    const bytes = await ctx.bytes({ type, maxBytes: MAX_PAGE_IMAGE_BYTES, tooLarge: 'That picture of the page is too large.' });
+    if (!imageMatches(type, bytes)) throw new HttpError(400, 'invalid', 'That is not the picture it says it is.');
+    const data = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64');
+    const result = repo.savePageImage(ctx.params.id as string, ctx.params.versionId as string, page, {
+      mediaType: type,
+      data,
+      width,
+      height,
+    });
+    sendJson(ctx.res, result.created ? 201 : 200, { ok: true, created: result.created });
+  });
+
+  // By the reference What was sent names it with (source-page:<version>:<page>).
+  router.on('GET', '/api/page-images/:versionId/:page', ({ res, params }) => {
+    const image = repo.pageImage(params.versionId as string, Number(params.page));
+    if (!image) throw notFound('picture');
+    const bytes = Buffer.from(image.data, 'base64');
+    res.writeHead(200, {
+      'content-type': image.mediaType,
+      'content-length': String(bytes.byteLength),
+      'cache-control': 'private, max-age=31536000, immutable',
+    });
+    res.end(bytes);
+  });
+
+  // pdf.js's own files for the browser, from the server's copy of the same
+  // version: character maps (Chinese, Japanese, Korean), the standard fonts,
+  // decoders for rarer image formats, a colour profile.
+  router.on('GET', '/api/pdfjs/:folder/:file', ({ res, params }) => {
+    const file = pdfjsFile(params.folder as string, params.file as string);
+    if (!file) throw notFound('file');
+    res.writeHead(200, {
+      'content-type': file.type,
+      'content-length': String(file.bytes.byteLength),
+      'cache-control': 'public, max-age=31536000, immutable',
+    });
+    res.end(file.bytes);
+  });
+
   router.on('GET', '/api/sources/:id/versions/:versionId/file', ({ res, params }) => {
     const file = repo.versionFile(params.id as string, params.versionId as string);
     if (!file) throw notFound('file');
@@ -845,6 +896,44 @@ export function createApp(deps: AppDeps): App {
       });
     },
   };
+}
+
+const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+/** A page drawn about 1,600 pixels wide as a JPEG is a few hundred kilobytes; this leaves room. */
+const MAX_PAGE_IMAGE_BYTES = 4_000_000;
+
+/** Does the picture start as its type says? */
+function imageMatches(type: string, b: Uint8Array): boolean {
+  if (type === 'image/jpeg') return b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+  if (type === 'image/png') return b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47;
+  return new TextDecoder('latin1').decode(b.subarray(0, 12)).replace(/^RIFF.{4}/s, '') === 'WEBP';
+}
+
+const PDFJS_TYPES: Record<string, string> = {
+  '.bcmap': 'application/octet-stream',
+  '.pfb': 'application/octet-stream',
+  '.ttf': 'font/ttf',
+  '.wasm': 'application/wasm',
+  '.icc': 'application/vnd.iccprofile',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+};
+const PDFJS_FOLDERS = new Set(['build', 'cmaps', 'standard_fonts', 'wasm', 'iccs']);
+/** The browser loads pdf.js itself from here too, so it is the server's version: the same reader on both sides. */
+const PDFJS_SCRIPTS = new Set(['build/pdf.min.mjs', 'build/pdf.worker.min.mjs', 'wasm/openjpeg_nowasm_fallback.js', 'wasm/jbig2_nowasm_fallback.js']);
+
+/** One of pdf.js's own files the browser may ask for, or null. Never anything outside those folders. */
+function pdfjsFile(folder: string, name: string): { bytes: Buffer; type: string } | null {
+  if (!PDFJS_FOLDERS.has(folder) || !/^[A-Za-z0-9_+-][A-Za-z0-9._+-]*$/.test(name) || name.includes('..')) return null;
+  const type = PDFJS_TYPES[extname(name)];
+  const script = /\.m?js$/.test(name);
+  if (!type || (script && !PDFJS_SCRIPTS.has(`${folder}/${name}`)) || (folder === 'build' && !script)) return null;
+  try {
+    const root = dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'));
+    return { bytes: readFileSync(join(root, folder, name)), type };
+  } catch {
+    return null;
+  }
 }
 
 /** Whether a page or PDF was read by an older reader than this Noema's. */

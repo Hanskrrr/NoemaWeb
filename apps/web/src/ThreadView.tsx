@@ -53,6 +53,13 @@ export interface SourceDraft {
   start: number;
   end: number;
   exact: string;
+  /** For a PDF: the pictures of its page(s) being kept on the server, to go to the model with the question. */
+  pictures?: Promise<unknown>;
+}
+
+/** Wait for `p`, but no longer than `ms`. */
+function atMost(p: Promise<unknown> | undefined, ms: number): Promise<unknown> {
+  return p ? Promise.race([p, new Promise((resolve) => setTimeout(resolve, ms))]) : Promise.resolve();
 }
 
 /** A branch that has a passage but no question yet. It is created on the first send. */
@@ -1430,6 +1437,8 @@ export function DraftView({
     }
     try {
       if (source) {
+        // The page goes with the question when its picture is ready; a slow one is not waited for long.
+        await atMost(source.pictures, 8000);
         await api.askAboutSource(source.sourceId, {
           id,
           passage: { versionId: source.versionId, start: source.start, end: source.end },

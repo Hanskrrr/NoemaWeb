@@ -33,6 +33,7 @@ import {
   NoteHistory,
   NoteList,
   OpenBranchesResponse,
+  PageImageResponse,
   Pin,
   RefetchResponse,
   type SearchOpenedRequest,
@@ -206,6 +207,19 @@ export const api = {
       `/api/notebooks/${notebookId}/sources/pdf?${new URLSearchParams(query)}`,
       new RawFile(file, 'application/pdf'),
     ),
+  /** Keep a picture of a PDF page on the server: it goes to the model with questions about that page. */
+  putPageImage: (sourceId: string, versionId: string, page: number, image: Blob, width: number, height: number) =>
+    call(
+      PageImageResponse,
+      'PUT',
+      `/api/sources/${sourceId}/versions/${versionId}/pages/${page}/image?width=${width}&height=${height}`,
+      new RawFile(image, image.type || 'image/jpeg'),
+    ),
+  /** A picture sent with a question, by the reference What was sent names it with. */
+  pageImageUrl: (ref: string) => {
+    const m = /^source-page:([0-9A-Z]{26}):(\d+)$/.exec(ref);
+    return m ? `/api/page-images/${m[1]}/${m[2]}` : null;
+  },
   /** The file kept with a version (a PDF), for a link: the browser's viewer opens it, at a page if given. */
   sourceFileUrl: (sourceId: string, versionId: string, page?: number) =>
     `/api/sources/${sourceId}/versions/${versionId}/file${page ? `#page=${page}` : ''}`,

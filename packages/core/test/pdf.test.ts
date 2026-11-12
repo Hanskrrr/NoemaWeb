@@ -9,6 +9,9 @@ import {
   type PdfTextItem,
   pageHeading,
   pageOfHeading,
+  pdfItemAtOffset,
+  pdfItemOffsets,
+  pdfPageText,
   pdfToMarkdown,
   sourceSection,
 } from '../src/index.ts';
@@ -226,4 +229,69 @@ test('the section sent with a question about a PDF passage is not cut at page he
   const section = sourceSection(md, at, at + 4);
   assert.ok(section.startsWith('### Results'), section);
   assert.ok(section.includes('The first finding') && section.includes('A second paragraph.'), section);
+});
+
+test('every item\'s text is found where the map says, so a selection on the page becomes a passage of the text', () => {
+  const full = 'x'.repeat(90);
+  const items = [
+    item('Gradient descent', 72, 760, 16),
+    item(`${full} represen-`, 72, 700),
+    item(`tations of \ufb01nd $5 and a*b`, 72, 688),
+    item('\u2022', 72, 660),
+    item(' ', 77, 660),
+    item('A bullet point', 82, 660),
+    item('\u2022', 72, 648),
+    item(' ', 77, 648),
+    item('Another', 82, 648),
+  ].map((it, index) => ({ ...it, index }));
+  const r = pdfToMarkdown([portrait(items)]);
+  const ranges = r.map[0] ?? [];
+  const md = (n: number) => {
+    const range = ranges.find((x) => x[0] === n);
+    return range ? r.markdown.slice(range[1], range[2]) : null;
+  };
+  assert.equal(md(0), 'Gradient descent');
+  assert.equal(md(1), `${full} represen`);
+  assert.equal(md(2), 'tations of find \\$5 and a\\*b');
+  assert.equal(md(5), 'A bullet point');
+  // The bullets themselves are not in the text.
+  assert.equal(md(3), null);
+  // A character of the raw item to its place in the Markdown.
+  const raw = 'tations of \ufb01nd $5 and a*b';
+  const at = pdfItemOffsets(raw, md(2) as string);
+  const range = ranges.find((x) => x[0] === 2) as [number, number, number];
+  const offsetOf = (c: number) => range[1] + (at[c] as number);
+  assert.equal(r.markdown.slice(offsetOf(raw.indexOf('$')), offsetOf(raw.indexOf('$') + 2)), '\\$5');
+  assert.equal(r.markdown.slice(offsetOf(raw.indexOf('\ufb01')), offsetOf(raw.indexOf('\ufb01') + 1)), 'fi');
+  assert.equal(at[raw.length], (md(2) as string).length);
+  // An offset back to its item; between items, the next or the one before.
+  const space = r.markdown.indexOf('represen') + 'represen'.length; // the joined word: no space here
+  assert.equal(pdfItemAtOffset(r.map, space, 'start')?.range[0], 2);
+  const heading = r.markdown.indexOf('### ');
+  assert.equal(pdfItemAtOffset(r.map, heading, 'start')?.range[0], 0);
+  assert.equal(pdfItemAtOffset(r.map, heading, 'end'), null);
+  assert.equal(pdfItemAtOffset(r.map, r.markdown.length, 'end')?.range[0], 8);
+});
+
+test('pdf.js text items become page text: upright only, a glyph with no character kept as a mark, each with its index', () => {
+  const page = pdfPageText(
+    [
+      { str: 'Upright', transform: [10, 0, 0, 10, 72, 700], width: 35 },
+      { str: 'Turned on its side', transform: [0, 10, -10, 0, 20, 300], width: 90 },
+      { str: '', transform: [10, 0, 0, 10, 72, 680], width: 5 },
+      { str: '', transform: [10, 0, 0, 10, 80, 680], width: 0 },
+      { str: 'After', transform: [10, 0, 0, 10, 92, 680], width: 25 },
+      { type: 'beginMarkedContent' } as never,
+    ],
+    { width: 600, height: 800 },
+  );
+  assert.deepEqual(
+    page.items.map((i) => [i.index, i.str]),
+    [
+      [0, 'Upright'],
+      [2, '\ufffc'],
+      [4, 'After'],
+    ],
+  );
+  assert.equal(page.items[0]?.size, 10);
 });

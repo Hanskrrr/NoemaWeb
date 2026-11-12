@@ -232,6 +232,16 @@ export const PdfUploadQuery = z.object({
 });
 export type PdfUploadQuery = z.infer<typeof PdfUploadQuery>;
 
+/** A picture of a PDF page, made by the browser: the body is the image; its size comes in the address. */
+export const PageImageQuery = z.object({
+  width: z.coerce.number().int().min(16).max(8192),
+  height: z.coerce.number().int().min(16).max(8192),
+});
+export type PageImageQuery = z.infer<typeof PageImageQuery>;
+
+export const PageImageResponse = z.object({ ok: z.literal(true), created: z.boolean() });
+export type PageImageResponse = z.infer<typeof PageImageResponse>;
+
 export const RenameSourceRequest = z.object({ title: z.string().trim().min(1).max(300) });
 
 /** Fetch a source again: a new version if its text changed. */
@@ -564,8 +574,20 @@ export const MessageContext = z.object({
   manifest: z.object({
     parts: z.array(
       z.object({
-        kind: z.enum(['system', 'about_me', 'source', 'pinned', 'inherited', 'history', 'origin', 'merged', 'question']),
+        kind: z.enum([
+          'system',
+          'about_me',
+          'source',
+          'pinned',
+          'inherited',
+          'history',
+          'origin',
+          'image',
+          'merged',
+          'question',
+        ]),
         id: z.string().optional(),
+        ref: z.string().optional(),
         role: z.enum(['user', 'assistant']).optional(),
         tokens: z.number(),
       }),
@@ -575,7 +597,16 @@ export const MessageContext = z.object({
     budgetTokens: z.number(),
   }),
   /** Null for answers from before the exact messages were recorded. */
-  request: z.array(z.object({ role: z.enum(['system', 'user', 'assistant']), content: z.string() })).nullable(),
+  request: z
+    .array(
+      z.object({
+        role: z.enum(['system', 'user', 'assistant']),
+        content: z.string(),
+        /** Pictures sent with a question, by reference (see SentImage). */
+        images: z.array(z.object({ ref: z.string(), label: z.string() })).optional(),
+      }),
+    )
+    .nullable(),
 });
 export type MessageContext = z.infer<typeof MessageContext>;
 

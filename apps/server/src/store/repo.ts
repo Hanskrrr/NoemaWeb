@@ -598,6 +598,47 @@ export class Repo {
       : null;
   }
 
+  /** Keep a picture of a page of a PDF version. The first one made stays (the page never changes). */
+  savePageImage(
+    sourceId: string,
+    versionId: string,
+    page: number,
+    image: { mediaType: string; data: string; width: number; height: number },
+  ): { created: boolean } {
+    return this.db.tx(() => {
+      const version = this.getVersion(versionId);
+      if (!version || version.sourceId !== sourceId) throw new NotFoundError('version');
+      if (!version.file) throw new InvalidError('only a PDF has pages');
+      const pages = (version.content.match(/^## Page \d+$/gm) ?? []).length;
+      if (page < 1 || page > pages) throw new InvalidError(`it has ${pages} pages`);
+      const r = this.db.sql
+        .prepare(
+          `INSERT INTO source_page_image (version_id, page, media_type, data, width, height, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+        )
+        .run(versionId, page, image.mediaType, image.data, image.width, image.height, now());
+      return { created: Number(r.changes) > 0 };
+    });
+  }
+
+  /** A picture of a page, as kept. */
+  pageImage(versionId: string, page: number): { mediaType: string; data: string } | null {
+    const r = this.db.sql
+      .prepare('SELECT media_type, data FROM source_page_image WHERE version_id = ? AND page = ?')
+      .get(versionId, page) as Row | undefined;
+    return r ? { mediaType: r.media_type as string, data: r.data as string } : null;
+  }
+
+  /** Which of these pages have a picture. */
+  pagesWithImages(versionId: string, pages: number[]): number[] {
+    if (pages.length === 0) return [];
+    const rows = this.db.sql
+      .prepare(`SELECT page FROM source_page_image WHERE version_id = ? AND page IN (${pages.map(() => '?').join(', ')})`)
+      .all(versionId, ...pages) as Row[];
+    const have = new Set(rows.map((r) => Number(r.page)));
+    return pages.filter((p) => have.has(p));
+  }
+
   /** The file kept with a version of a source (a PDF), to open it. */
   versionFile(sourceId: string, versionId: string): { bytes: Buffer; type: string; name: string | null } | null {
     const r = this.db.sql
@@ -872,7 +913,15 @@ export class Repo {
    * from) was asked about: its title and address, and the section around the
    * passage. Side questions and threads split off keep the reading in view.
    */
-  sourceContextFor(threadId: string): { title: string; url: string | null; section: string; passage: string } | null {
+  sourceContextFor(threadId: string): {
+    title: string;
+    url: string | null;
+    section: string;
+    passage: string;
+    versionId: string;
+    /** For a PDF: the pages the passage is on (one, or two when it runs over). */
+    pages: number[];
+  } | null {
     const seen = new Set<string>();
     for (let id: string | null = threadId; id && !seen.has(id); ) {
       seen.add(id);
@@ -885,6 +934,8 @@ export class Repo {
           url: origin.url,
           section: sourceSection(version.content, origin.passage.start, origin.passage.end),
           passage: origin.passage.exact,
+          versionId: version.id,
+          pages: version.file ? pagesOf(version.content, origin.passage.start, origin.passage.end) : [],
         };
       }
       const row = this.db.sql.prepare('SELECT parent_thread_id, continued_from FROM thread WHERE id = ?').get(id) as
@@ -3177,6 +3228,18 @@ export interface NewSourceVersion {
   fileName?: string | null;
   /** Pages read, for a PDF (logged with the count of characters). */
   pages?: number;
+}
+
+/** The PDF pages a passage is on: the page heading before its start, and the one before its end. */
+function pagesOf(content: string, start: number, end: number): number[] {
+  const pageAt = (offset: number) => {
+    let page = 1;
+    for (const m of content.slice(0, offset).matchAll(/^## Page (\d+)$/gm)) page = Number(m[1]);
+    return page;
+  };
+  const first = pageAt(start);
+  const last = pageAt(Math.max(start, end - 1));
+  return last > first ? [first, last] : [first];
 }
 
 /** A PDF's size from its base64 in `raw`, in SQL. */

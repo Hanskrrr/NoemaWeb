@@ -190,9 +190,16 @@ export class FakeProvider implements ModelProvider {
     }
     const fail = /\[\[fail:([a-z_]+)\]\]/.exec(question);
     if (fail) throw new ProviderError(fail[1] as ErrorKind, `fake failure: ${fail[1]}`);
+    // Pictures with the question: [[no-pictures]] plays a model that cannot take them; otherwise it says what it got.
+    const asked = [...req.messages].reverse().find((m) => m.role === 'user');
+    const pictures = (asked?.images ?? []).filter((image) => req.images?.(image.ref));
+    if (pictures.length > 0 && question.includes('[[no-pictures]]')) {
+      throw new ProviderError('bad_request', 'fake model: image input is not supported');
+    }
+    const seen = pictures.length > 0 ? `I can see ${pictures.map((p) => p.label).join(' and ')}.\n\n` : '';
     const slow = question.includes('[[slow]]');
     const again = req.revision && req.revision > 1 ? `\n\nAsked again: this is answer ${req.revision}.` : '';
-    const answer = (question.includes('[[tex]]') ? texAnswer() : fakeAnswer(question)) + again;
+    const answer = seen + (question.includes('[[tex]]') ? texAnswer() : fakeAnswer(question)) + again;
     const parts = chunks(answer, slow ? 2 : 6);
     const delay = slow ? Math.max(this.delayMs, 25) : this.delayMs;
     const breakAt = question.includes('[[error-midway]]') ? Math.floor(parts.length / 2) : -1;

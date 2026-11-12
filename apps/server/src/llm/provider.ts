@@ -6,6 +6,8 @@ import type { ChatMessage, ErrorKind } from '@noema/core';
 
 export interface StreamRequest {
   messages: ChatMessage[];
+  /** The pictures messages refer to (ChatMessage.images), base64; null if one is gone. */
+  images?: ((ref: string) => { mediaType: string; data: string } | null) | undefined;
   /** Omitted: the provider's default. */
   maxTokens?: number | undefined;
   /** A short utility call (a title): skip the model's reasoning step where the provider allows it. */

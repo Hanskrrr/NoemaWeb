@@ -18,7 +18,7 @@ Also built along the way: **asked before**, a reminder when a question being wri
 
 ## How it is checked
 
-- 246 unit and integration tests (`pnpm test`) and 61 end-to-end tests (`pnpm e2e`), all with the fake model.
+- 253 unit and integration tests (`pnpm test`) and 62 end-to-end tests (`pnpm e2e`), all with the fake model.
 - The brief's acceptance tests are in the suite (see [codebase.md](codebase.md#e2e-the-app-end-to-end)).
 - Tried by the founder with DeepSeek on his Mac: connecting a key, streaming answers, prompt caching, titles and headlines, and reading a real arXiv paper (over 1,600 formulas, all rendered).
 
@@ -26,7 +26,7 @@ Also built along the way: **asked before**, a reminder when a question being wri
 
 - `pnpm lint` (Biome) and `pnpm e2e` have not been run on macOS lately; CI runs them on Linux for pull requests.
 - CI installs without `--frozen-lockfile`; now that `pnpm-lock.yaml` is committed, it should.
-- Images in web pages are not shown (their alt text is). A PDF is read as text: formulas come out as the characters drawn, figures are not read (Open the PDF shows them), and a scanned PDF has no text (ADR 0021).
+- Images in web pages are not shown (their alt text is). A PDF opens as its pages, and a question about it goes with a picture of the page (ADR 0022); its stored text has formulas as the characters drawn, and a scanned PDF has no text (ADR 0021).
 - A note's citations point at an exchange, not one answer of it: after asking again, a citation shows the answer in use (ADR 0017).
 - The reading pane does not mark the passages pinned from it (ADR 0019).
 - An export imports only into a Noema of the same schema version, and only into an empty one (ADR 0018).

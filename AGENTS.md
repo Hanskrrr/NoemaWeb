@@ -18,7 +18,7 @@ Read first: [docs/architecture.md](docs/architecture.md) (how it works), [docs/c
 Don't build these, even where older docs describe them:
 
 - Accounts, sync, multiple devices, a mobile layout.
-- PDF parsing beyond the text pdf.js finds (OCR of scans, figures, formulas as LaTeX). Reading a PDF's text is built: the founder asked for it for M6 (ADR 0021).
+- OCR of scanned PDFs, or formulas read as LaTeX. Reading a PDF's text, showing its pages and sending a picture of the page with a question are built: the founder asked for them for M6 (ADRs 0021, 0022).
 - Embeddings, semantic search, concept extraction, knowledge graphs, mastery states. (One exception the founder made: the chat model judges whether a question was asked before, ADR 0020.)
 - Understanding-record forms, quizzes, return lines, checkout, task limits or timers.
 - Plugins, animation, the step language.

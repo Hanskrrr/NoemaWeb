@@ -15,6 +15,11 @@
 //  - a list item: a line starting with a bullet.
 // Formulas come out as the characters drawn, not as LaTeX. Text drawn as
 // images (scans, some slides) is not there at all.
+//
+// Every character of the Markdown remembers the pdf.js text item it came
+// from, so the reading pane can show the pages themselves (pdf.js draws them,
+// with each item as a span of selectable text) and turn a selection there
+// into a passage of the text, and a passage back into a selection.
 
 /** One piece of text on a page, in PDF units, y from the bottom. */
 export interface PdfTextItem {
@@ -24,7 +29,43 @@ export interface PdfTextItem {
   width: number;
   /** Font size (the vertical scale of the text). */
   size: number;
+  /** Its place among pdf.js's text items for the page (its span in a text layer). */
+  index?: number;
 }
+
+/** A text item as pdf.js's getTextContent() gives it. */
+export interface PdfjsTextItem {
+  str?: string;
+  transform?: number[];
+  width?: number;
+}
+
+/**
+ * A page's text items from pdf.js, ready for pdfToMarkdown: upright text
+ * only (a margin stamp turned on its side is not part of the page's text),
+ * and a glyph with no character (a bullet in some TeX fonts) passed on as
+ * U+FFFC. Each keeps its index among pdf.js's items. The server and the
+ * browser both use this, so both read the same text from the same file.
+ */
+export function pdfPageText(items: PdfjsTextItem[], view: { width: number; height: number }): PdfPageText {
+  const out: PdfTextItem[] = [];
+  for (const [index, raw] of items.entries()) {
+    const t = raw.transform;
+    if (typeof raw.str !== 'string' || !t) continue;
+    const str = raw.str === '' ? ((raw.width ?? 0) > 0.5 ? '\ufffc' : '') : raw.str;
+    if (str === '') continue;
+    const [a = 0, b = 0, c = 0, d = 0, x = 0, y = 0] = t;
+    if (Math.abs(b) > 0.1 * Math.abs(a) || Math.abs(c) > 0.1 * Math.abs(d) || a <= 0 || d <= 0) continue;
+    out.push({ str, x, y, width: raw.width ?? 0, size: Math.hypot(c, d), index });
+  }
+  return { width: view.width, height: view.height, items: out };
+}
+
+/**
+ * Where each text item of each page landed in the Markdown: per page, a list
+ * of [item index, start, end] (UTF-16 offsets), in the order of the text.
+ */
+export type PdfTextMap = Array<Array<[number, number, number]>>;
 
 export interface PdfPageText {
   width: number;
@@ -42,6 +83,8 @@ export interface PdfReading {
   emptyPages: number;
   /** The text was cut at a page because it was too long. */
   truncated: boolean;
+  /** Where each item's text is in `markdown`. */
+  map: PdfTextMap;
 }
 
 /** Longest Markdown kept from one PDF (as for a web page). */
@@ -70,7 +113,7 @@ const CJK = /[\u2e80-\u2fff\u3000-\u303f\u3040-\u30ff\u3100-\u312f\u3190-\u31ff\
 // Marks with no meaning as text: a glyph the file gives no character for
 // (U+FFFC, as the server and cleanPdfText pass it on) and symbol-font characters
 // (private use). At the start of a line they are taken as a bullet.
-const NO_TEXT = /[\ufffc\ue000-\uf8ff]/g;
+const NO_TEXT_CHAR = /[\ufffc\ue000-\uf8ff]/;
 
 // Simplified-Chinese radicals some fonts draw in place of the ordinary
 // character (U+2ED3 for U+957F, ...). NFKC does not map these.
@@ -117,18 +160,87 @@ export function cleanPdfText(s: string): string {
  * so it shows as it was printed.
  */
 export function escapePdfText(s: string): string {
-  let out = '';
+  return escapeOwned(owned(s, -1)).s;
+}
+
+// ---------------------------------------------------------------------------
+// Text that remembers where each character came from
+
+/** A string with, for each UTF-16 unit, the index of the item it came from (-1: added here). */
+interface Owned {
+  s: string;
+  o: number[];
+}
+
+function owned(s: string, item: number): Owned {
+  return { s, o: new Array<number>(s.length).fill(item) };
+}
+
+function cat(...parts: Owned[]): Owned {
+  return { s: parts.map((p) => p.s).join(''), o: parts.flatMap((p) => p.o) };
+}
+
+function slice(t: Owned, start: number, end?: number): Owned {
+  return { s: t.s.slice(start, end), o: t.o.slice(start, end) };
+}
+
+/** Keep the characters `keep` says yes to. */
+function filter(t: Owned, keep: (c: string) => boolean): Owned {
+  const out: Owned = { s: '', o: [] };
+  for (let i = 0; i < t.s.length; i++) {
+    const c = t.s[i] as string;
+    if (!keep(c)) continue;
+    out.s += c;
+    out.o.push(t.o[i] as number);
+  }
+  return out;
+}
+
+/** Runs of white space become one space, none at either end (as .replace(/\s+/g, ' ').trim()). */
+function squash(t: Owned): Owned {
+  const out: Owned = { s: '', o: [] };
+  let pending = -2;
+  for (let i = 0; i < t.s.length; i++) {
+    const c = t.s[i] as string;
+    if (/\s/.test(c)) {
+      if (out.s !== '' && pending === -2) pending = t.o[i] as number;
+      continue;
+    }
+    if (pending !== -2) {
+      out.s += ' ';
+      out.o.push(pending);
+      pending = -2;
+    }
+    out.s += c;
+    out.o.push(t.o[i] as number);
+  }
+  return out;
+}
+
+/** escapePdfText, keeping where each character came from (a backslash belongs to what it escapes). */
+function escapeOwned(t: Owned): Owned {
+  const out: Owned = { s: '', o: [] };
+  const word = /[\p{L}\p{N}]/u;
+  const s = t.s;
+  const push = (text: string, owner: number) => {
+    out.s += text;
+    for (let k = 0; k < text.length; k++) out.o.push(owner);
+  };
   for (let i = 0; i < s.length; i++) {
     const c = s[i] as string;
-    if ('\\`*$~[]'.includes(c)) out += `\\${c}`;
+    const owner = t.o[i] as number;
+    if ('\\`*$~[]'.includes(c)) push(`\\${c}`, owner);
     else if (c === '_') {
       // Inside a word (max_seq_len) it is never emphasis.
-      const word = /[\p{L}\p{N}]/u;
-      out += word.test(s[i - 1] ?? '') && word.test(s[i + 1] ?? '') ? c : '\\_';
-    } else if (c === '&' && /^&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/i.test(s.slice(i))) out += '\\&';
-    else out += c;
+      push(word.test(s[i - 1] ?? '') && word.test(s[i + 1] ?? '') ? c : '\\_', owner);
+    } else if (c === '&' && /^&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/i.test(s.slice(i))) push('\\&', owner);
+    else push(c, owner);
   }
-  return out.replace(/^(#{1,6}(?=\s|$)|>|\+(?=\s)|=+$|-+$)/, '\\$1');
+  // What would start a heading, a quote, a list or a rule at the start of a line.
+  if (/^(#{1,6}(?=\s|$)|>|\+(?=\s)|=+$|-+$)/.test(out.s)) {
+    return { s: `\\${out.s}`, o: [out.o[0] ?? -1, ...out.o] };
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +248,8 @@ export function escapePdfText(s: string): string {
 
 interface Line {
   text: string;
+  /** The text, with where each character came from. */
+  t: Owned;
   x0: number;
   x1: number;
   /** Baseline. */
@@ -148,11 +262,12 @@ function linesOf(page: PdfPageText): Line[] {
   let cur: (Line & { sizeChars: number }) | null = null;
   const finish = () => {
     if (!cur) return;
-    const text = cur.text.replace(/\s+/g, ' ').trim();
-    if (text) lines.push({ text, x0: cur.x0, x1: cur.x1, y: cur.y, size: cur.size });
+    const t = squash(cur.t);
+    if (t.s) lines.push({ text: t.s, t, x0: cur.x0, x1: cur.x1, y: cur.y, size: cur.size });
     cur = null;
   };
-  for (const item of page.items) {
+  for (const [position, item] of page.items.entries()) {
+    const index = item.index ?? position;
     const str = cleanPdfText(item.str);
     if (str === '') continue;
     const blank = str.trim() === '';
@@ -167,15 +282,17 @@ function linesOf(page: PdfPageText): Line[] {
     }
     if (!cur) {
       if (blank) continue;
-      cur = { text: '', x0: item.x, x1: item.x, y: item.y, size, sizeChars: 0 };
+      cur = { text: '', t: owned('', -1), x0: item.x, x1: item.x, y: item.y, size, sizeChars: 0 };
     }
     const c: Line & { sizeChars: number } = cur;
     if (blank) {
-      if (!c.text.endsWith(' ')) c.text += ' ';
+      if (!c.t.s.endsWith(' ')) c.t = cat(c.t, owned(' ', index));
     } else {
       const gap = item.x - c.x1;
-      if (c.text && !c.text.endsWith(' ') && !str.startsWith(' ') && gap > 0.2 * Math.min(size, c.size)) c.text += ' ';
-      c.text += str;
+      if (c.t.s && !c.t.s.endsWith(' ') && !str.startsWith(' ') && gap > 0.2 * Math.min(size, c.size)) {
+        c.t = cat(c.t, owned(' ', -1));
+      }
+      c.t = cat(c.t, owned(str, index));
       // The line's size and baseline are those of its longest piece (a
       // subscript or a footnote mark does not make a line small).
       const chars = str.trim().length;
@@ -237,7 +354,7 @@ const ENDS_SENTENCE = /[.!?\u3002\uff01\uff1f:\uff1a;\uff1b]["'\u201d\u2019)\uff
 
 interface Block {
   kind: 'heading' | 'para' | 'item';
-  text: string;
+  t: Owned;
   size: number;
   /** The x where the block's first line starts. */
   x0: number;
@@ -251,10 +368,12 @@ interface Block {
  * (the hyphen kept before a capital, as in Jean-Paul); Chinese, Japanese and
  * Korean need no space; anything else gets one.
  */
-function joinLines(a: string, b: string): string {
-  if (/\p{L}[-\u2010\u2011]$/u.test(a) && /^\p{L}/u.test(b)) return /^\p{Ll}/u.test(b) ? a.slice(0, -1) + b : a + b;
-  if (CJK.test(a.slice(-1)) || CJK.test(b[0] ?? '')) return a + b;
-  return `${a} ${b}`;
+function joinLines(a: Owned, b: Owned): Owned {
+  if (/\p{L}[-\u2010\u2011]$/u.test(a.s) && /^\p{L}/u.test(b.s)) {
+    return /^\p{Ll}/u.test(b.s) ? cat(slice(a, 0, -1), b) : cat(a, b);
+  }
+  if (CJK.test(a.s.slice(-1)) || CJK.test(b.s[0] ?? '')) return cat(a, b);
+  return cat(a, owned(' ', -1), b);
 }
 
 function median(xs: number[]): number | null {
@@ -309,6 +428,7 @@ export function pdfToMarkdown(pages: PdfPageText[], meta: { title?: string | nul
   };
 
   const out: string[] = [];
+  const map: PdfTextMap = [];
   let emptyPages = 0;
   let firstHeading: { text: string; size: number } | null = null;
   let truncated = false;
@@ -316,10 +436,10 @@ export function pdfToMarkdown(pages: PdfPageText[], meta: { title?: string | nul
   for (const [i, lines] of kept.entries()) {
     const page = pages[i] as PdfPageText;
     const landscape = page.width > page.height;
-    const parts: string[] = [pageHeading(i + 1)];
+    const parts: Owned[] = [owned(pageHeading(i + 1), -1)];
     if (lines.length === 0) {
       emptyPages++;
-      parts.push(EMPTY_PAGE);
+      parts.push(owned(EMPTY_PAGE, -1));
     }
     // A glyph with no text starts a list item only where two or more lines on
     // the page start with one at the same place (a big bracket in a formula
@@ -334,55 +454,59 @@ export function pdfToMarkdown(pages: PdfPageText[], meta: { title?: string | nul
       if (isHeading(line)) {
         const dy = block ? block.last.y - line.y : 0;
         if (block?.kind === 'heading' && Math.abs(block.size - line.size) < 0.1 * line.size && dy > 0 && dy < 2.2 * line.size) {
-          block.text = joinLines(block.text, line.text);
+          block.t = joinLines(block.t, line.t);
           block.last = line;
           continue;
         }
-        block = { kind: 'heading', text: line.text, size: line.size, x0: line.x0, right: line.x1, last: line };
+        block = { kind: 'heading', t: line.t, size: line.size, x0: line.x0, right: line.x1, last: line };
         blocks.push(block);
         continue;
       }
       const bullet = BULLET.exec(line.text);
       const listed = bullet && (!GLYPH_START.test(line.text) || (glyphStarts.get(Math.round(line.x0)) ?? 0) >= 2);
       if (bullet && listed && line.text.length > bullet[0].length) {
-        block = { kind: 'item', text: line.text.slice(bullet[0].length), size: line.size, x0: line.x0, right: line.x1, last: line };
+        const t = slice(line.t, bullet[0].length);
+        block = { kind: 'item', t, size: line.size, x0: line.x0, right: line.x1, last: line };
         blocks.push(block);
         continue;
       }
       if (block && block.kind !== 'heading' && continues(block, line, landscape)) {
-        block.text = joinLines(block.text, line.text);
+        block.t = joinLines(block.t, line.t);
         block.right = Math.max(block.right, line.x1);
         block.last = line;
         continue;
       }
-      block = { kind: 'para', text: line.text, size: line.size, x0: line.x0, right: line.x1, last: line };
+      block = { kind: 'para', t: line.t, size: line.size, x0: line.x0, right: line.x1, last: line };
       blocks.push(block);
     }
     for (const [j, b] of blocks.entries()) {
-      b.text = b.text.replace(NO_TEXT, '').replace(/\s+/g, ' ').trim();
-      if (!b.text) continue;
+      b.t = squash(filter(b.t, (c) => !NO_TEXT_CHAR.test(c)));
+      if (!b.t.s) continue;
       if (b.kind === 'heading') {
         // The title: the largest heading on the first page, unless it is a numbered section ("1 Introduction").
-        if (i === 0 && !/^\d+(?:\.\d+)*\.?\s/.test(b.text) && (!firstHeading || b.size > firstHeading.size)) {
-          firstHeading = { text: b.text, size: b.size };
+        if (i === 0 && !/^\d+(?:\.\d+)*\.?\s/.test(b.t.s) && (!firstHeading || b.size > firstHeading.size)) {
+          firstHeading = { text: b.t.s, size: b.size };
         }
-        parts.push(`${'#'.repeat(level(b.size))} ${escapePdfText(b.text)}`);
+        parts.push(cat(owned(`${'#'.repeat(level(b.size))} `, -1), escapeOwned(b.t)));
       } else if (b.kind === 'item') {
         // Items next to each other make one list.
-        const text = `- ${escapePdfText(b.text)}`;
-        if (blocks[j - 1]?.kind === 'item' && blocks[j - 1]?.text) parts[parts.length - 1] += `\n${text}`;
+        const text = cat(owned('- ', -1), escapeOwned(b.t));
+        const previous = blocks[j - 1];
+        if (previous?.kind === 'item' && previous.t.s) parts[parts.length - 1] = cat(parts.at(-1) as Owned, owned('\n', -1), text);
         else parts.push(text);
       } else {
-        parts.push(escapePdfText(b.text));
+        parts.push(escapeOwned(b.t));
       }
     }
-    const pageText = parts.join('\n\n');
-    if (length + pageText.length + 2 > MAX_PDF_CHARS) {
+    const pageText = parts.reduce((acc, part, k) => (k === 0 ? part : cat(acc, owned('\n\n', -1), part)), owned('', -1));
+    if (length + pageText.s.length + 2 > MAX_PDF_CHARS) {
       truncated = true;
       break;
     }
-    out.push(pageText);
-    length += pageText.length + 2;
+    const start = out.length === 0 ? 0 : length;
+    out.push(pageText.s);
+    map.push(itemRanges(pageText, start));
+    length += pageText.s.length + 2;
   }
   return {
     title: titleOf(meta.title) || firstHeading?.text || '',
@@ -390,7 +514,21 @@ export function pdfToMarkdown(pages: PdfPageText[], meta: { title?: string | nul
     pages: pages.length,
     emptyPages,
     truncated,
+    map,
   };
+}
+
+/** Each item's first and last character in `t`, shifted by `offset`, in text order. */
+function itemRanges(t: Owned, offset: number): Array<[number, number, number]> {
+  const ranges = new Map<number, [number, number, number]>();
+  for (let k = 0; k < t.o.length; k++) {
+    const item = t.o[k] as number;
+    if (item < 0) continue;
+    const r = ranges.get(item);
+    if (r) r[2] = offset + k + 1;
+    else ranges.set(item, [item, offset + k, offset + k + 1]);
+  }
+  return [...ranges.values()].sort((a, b) => a[1] - b[1]);
 }
 
 /** A file's own title, if it is one ("Microsoft Word - notes.docx" is not). */
@@ -401,4 +539,54 @@ function titleOf(title: string | null | undefined): string {
     .replace(/\s+/g, ' ')
     .trim();
   return /^(?:untitled|untitled document|presentation\d*|slide \d+|\(anonymous\))$/i.test(t) ? '' : t;
+}
+
+/**
+ * Where each character of an item's pdf.js text lands in that item's
+ * Markdown (`md`, its range in the map): `at[i]` is the Markdown offset of
+ * raw character i, and `at[raw.length]` the end. The Markdown escapes some
+ * characters, squashes spaces, drops a hyphen where a word was joined, and
+ * spells ligatures as two letters; a raw character with nothing in the
+ * Markdown points at the next one that has.
+ */
+export function pdfItemOffsets(raw: string, md: string): number[] {
+  const at: number[] = [];
+  let j = 0;
+  for (let i = 0; i < raw.length; i++) {
+    at.push(j);
+    for (const ch of cleanPdfText(raw[i] as string)) {
+      if (md[j] === '\\' && md[j + 1] === ch && ch !== '\\') j += 2;
+      else if (ch === '\\' && md[j] === '\\' && md[j + 1] === '\\') j += 2;
+      else if (md[j] === ch) j += 1;
+      // Otherwise not in the Markdown (a squashed space, a joined hyphen, a glyph with no text).
+    }
+  }
+  at.push(j);
+  return at.map((k) => Math.min(k, md.length));
+}
+
+/** A page's entry for an item: [item, start, end], or undefined. */
+export function pdfItemRange(map: PdfTextMap, page: number, item: number): [number, number, number] | undefined {
+  return map[page - 1]?.find((r) => r[0] === item);
+}
+
+/**
+ * The page and item a Markdown offset is in. Between items (a space, a
+ * heading's #), `side` picks the item after ('start') or before ('end').
+ */
+export function pdfItemAtOffset(
+  map: PdfTextMap,
+  offset: number,
+  side: 'start' | 'end',
+): { page: number; range: [number, number, number] } | null {
+  let before: { page: number; range: [number, number, number] } | null = null;
+  for (const [p, ranges] of map.entries()) {
+    for (const range of ranges) {
+      if (offset >= range[1] && offset < range[2]) return { page: p + 1, range };
+      if (offset === range[2] && side === 'end') return { page: p + 1, range };
+      if (range[1] > offset) return side === 'start' ? { page: p + 1, range } : before;
+      before = { page: p + 1, range };
+    }
+  }
+  return side === 'end' ? before : null;
 }

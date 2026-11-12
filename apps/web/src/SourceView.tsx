@@ -25,6 +25,8 @@ import { Markdown, type Slot } from './markdown/Markdown.tsx';
 import { highlight, selectionToSource, sourceToRange } from './markdown/selection.ts';
 import { pinsChanged } from './Pinned.tsx';
 import { askedPassages, headingText, hostOf, markStrength, sourceFamily } from './reading.ts';
+import { sendPageImage } from './pdf/pageImage.ts';
+import { PdfPages, type PdfSurface } from './PdfPages.tsx';
 import { DraftView, type SourceDraft } from './ThreadView.tsx';
 
 const errorText = (err: unknown) => (err instanceof ApiFailure ? err.message : 'Something went wrong.');
@@ -33,6 +35,18 @@ const short = (text: string, max = 140) => {
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 };
 const questionsLabel = (n: number) => (n === 1 ? '1 question' : `${n} questions`);
+/** The pages of a PDF's text a passage is on (one, or two when it runs over). */
+function pagesOfPassage(content: string, start: number, end: number): number[] {
+  const pageAt = (offset: number) => {
+    let page = 1;
+    for (const m of content.slice(0, offset).matchAll(/^## Page (\d+)$/gm)) page = Number(m[1]);
+    return page;
+  };
+  const first = pageAt(start);
+  const last = pageAt(Math.max(start, end - 1));
+  return last > first ? [first, last] : [first];
+}
+
 /** How many pages a PDF's text has (its page headings). */
 const pagesLabel = (content: string) => {
   const n = (content.match(/^## Page \d+$/gm) ?? []).length;
@@ -108,6 +122,12 @@ export function SourceView({
   );
   const pane = useRef<HTMLElement>(null);
   const text = useRef<HTMLDivElement>(null);
+  // A PDF is shown as its pages (drawn by pdf.js, selectable), or as its text.
+  const [view, setView] = useState<'pages' | 'text'>('pages');
+  const [surface, setSurface] = useState<PdfSurface | null>(null);
+  const [pagesProblem, setPagesProblem] = useState<string | null>(null);
+  const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => setScroller(pane.current), []);
 
   // Reloaded when a thread of this source changes: a new question, an answer, a new title.
   const familyKey = useMemo(
@@ -137,6 +157,14 @@ export function SourceView({
   }, [load, familyKey]);
 
   const content = detail?.version.content ?? '';
+  const isPdf = Boolean(detail?.version.file);
+  const onPages = isPdf && view === 'pages' && pagesProblem === null;
+  // Another version, another drawing.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset when the version shown changes
+  useEffect(() => {
+    setSurface(null);
+    setPagesProblem(null);
+  }, [detail?.version.id]);
   const headings = useMemo(() => sourceHeadings(content).filter((h) => h.level <= 3), [content]);
   const passages = useMemo(() => askedPassages(detail?.threads ?? [], content), [detail?.threads, content]);
   const titles = useMemo(() => new Map(threads.map((t) => [t.id, t.title])), [threads]);
@@ -153,8 +181,11 @@ export function SourceView({
   }, [notes, threads, sourceId]);
 
   const rangeOf = useCallback(
-    (start: number, end: number) => (text.current ? sourceToRange(text.current, content, start, end) : null),
-    [content],
+    (start: number, end: number) => {
+      if (onPages) return surface ? surface.rangeOf(start, end) : null;
+      return text.current ? sourceToRange(text.current, content, start, end) : null;
+    },
+    [content, onPages, surface],
   );
 
   // Every passage asked about, marked in the text, with a mark in the margin.
@@ -218,6 +249,15 @@ export function SourceView({
     if (!detail || !text.current) return;
     const key = `${detail.version.id}:${arrival}:${jump}`;
     if (arrived.current === key) return;
+    if (at !== undefined && onPages) {
+      if (!surface) return; // the pages are still being drawn
+      arrived.current = key;
+      // On the page the block is on: the words searched for are marked there.
+      const n = surface.pageOf(at);
+      const page = n ? text.current.querySelector(`.pdf-page[data-page="${n}"]`) : null;
+      if (page) arrive(page, `${detail.version.id}:${at}`, pane.current);
+      return;
+    }
     if (at !== undefined) {
       arrived.current = key;
       const span = Array.from(text.current.querySelectorAll<HTMLElement>('[data-s][data-e]')).find(
@@ -234,7 +274,7 @@ export function SourceView({
       const range = rangeOf(passage.start, passage.end);
       if (range) centre(range.getBoundingClientRect(), pane.current);
     }
-  }, [detail, at, focusThread, jump, arrival, rangeOf]);
+  }, [detail, at, focusThread, jump, arrival, rangeOf, onPages, surface]);
 
   // Select a passage to ask about it.
   const readSelection = useCallback(() => {
@@ -243,9 +283,9 @@ export function SourceView({
     if (!el || !sel || sel.isCollapsed || sel.rangeCount === 0) return null;
     const node = sel.anchorNode instanceof Element ? sel.anchorNode : sel.anchorNode?.parentElement;
     if (!node || !el.contains(node) || node.closest('[data-foreign]')) return null;
-    const range = selectionToSource(el, content);
+    const range = onPages ? (surface?.selection() ?? null) : selectionToSource(el, content);
     return range ? { ...range, rect: sel.getRangeAt(0).getBoundingClientRect() } : null;
-  }, [content]);
+  }, [content, onPages, surface]);
   useEffect(() => {
     const onChange = () => setSelection(readSelection());
     document.addEventListener('selectionchange', onChange);
@@ -257,13 +297,19 @@ export function SourceView({
     const anchor = createAnchor(detail.version.id, content, selection.start, selection.end);
     window.getSelection()?.removeAllRanges();
     setSelection(null);
+    const versionId = detail.version.id;
+    // A PDF: the page(s) of the passage, drawn and kept, to go to the model with the question.
+    const pictures = detail.version.file
+      ? Promise.all(pagesOfPassage(content, anchor.position.start, anchor.position.end).map((p) => sendPageImage(sourceId, versionId, p)))
+      : undefined;
     setDraft({
       sourceId,
       sourceTitle: detail.source.title,
-      versionId: detail.version.id,
+      versionId,
       start: anchor.position.start,
       end: anchor.position.end,
       exact: anchor.quote.exact,
+      ...(pictures ? { pictures } : {}),
     });
   };
 
@@ -289,6 +335,11 @@ export function SourceView({
 
   const showHeading = (start: number) => {
     setContentsOpen(false);
+    if (onPages && surface) {
+      const page = surface.pageOf(start);
+      if (page) surface.scrollToPage(page);
+      return;
+    }
     const span = Array.from(text.current?.querySelectorAll<HTMLElement>('[data-s][data-e]') ?? []).find(
       (s) => Number(s.dataset.e) > start,
     );
@@ -304,6 +355,7 @@ export function SourceView({
    * reading pane; scrolled to the end, the last one in sight.
    */
   const pageInView = (): number => {
+    if (onPages && surface) return surface.pageInView();
     const el = pane.current;
     const box = el?.getBoundingClientRect();
     const atEnd = el ? el.scrollTop + el.clientHeight >= el.scrollHeight - 4 : false;
@@ -557,6 +609,28 @@ export function SourceView({
             )}
           </div>
           <div className="thread-actions">
+            {shown.file && (
+              <div className="view-switch" role="group" aria-label="Show the PDF as">
+                <button
+                  type="button"
+                  className={view === 'pages' ? 'active' : 'quiet'}
+                  aria-pressed={view === 'pages'}
+                  onClick={() => setView('pages')}
+                  data-testid="view-pages"
+                >
+                  Pages
+                </button>
+                <button
+                  type="button"
+                  className={view === 'text' ? 'active' : 'quiet'}
+                  aria-pressed={view === 'text'}
+                  onClick={() => setView('text')}
+                  data-testid="view-text"
+                >
+                  Text
+                </button>
+              </div>
+            )}
             {headings.length > 1 && (
               <button
                 type="button"
@@ -669,6 +743,11 @@ export function SourceView({
             </button>
           </div>
         )}
+        {isPdf && view === 'pages' && pagesProblem && (
+          <div className="source-notice" role="status" data-testid="pages-problem">
+            <span>{pagesProblem}</span>
+          </div>
+        )}
         {notice && (
           <div className="source-notice" role="status" data-testid="source-notice">
             <span>{notice}</span>
@@ -678,9 +757,9 @@ export function SourceView({
           </div>
         )}
         <div
-          className={`source-text${titleInText ? ' title-in-text' : ''}${shown.file ? ' source-pdf' : ''}`}
+          className={`source-text${titleInText ? ' title-in-text' : ''}${shown.file ? ' source-pdf' : ''}${onPages ? ' source-pages' : ''}`}
           ref={text}
-          onClick={shown.file ? openPageClicked : undefined}
+          onClick={shown.file && !onPages ? openPageClicked : undefined}
           data-version-id={shown.id}
           data-testid="source-text"
         >
@@ -694,7 +773,22 @@ export function SourceView({
               />
             ))}
           </div>
-          <SourceText source={content} slots={slots} />
+          {onPages && shown.file ? (
+            <PdfPages
+              fileUrl={api.sourceFileUrl(sourceId, shown.id)}
+              content={content}
+              scroller={scroller}
+              onReady={setSurface}
+              onMismatch={() => {
+                setPagesProblem(
+                  'This PDF was read by an earlier Noema, so its pages cannot be selected from here: read it again, or use the text.',
+                );
+              }}
+              onFailed={(message) => setPagesProblem(`The pages could not be shown (${message}). Here is the text.`)}
+            />
+          ) : (
+            <SourceText source={content} slots={slots} />
+          )}
         </div>
       </section>
       <div className="conversation">{right}</div>

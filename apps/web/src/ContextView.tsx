@@ -23,7 +23,12 @@ export function partLabel(p: SentPart): string {
     return `${KIND_LABELS[p.kind]} · ${turn}${p.merged > 0 ? ', with a merged thread' : ''}`;
   }
   if (p.kind === 'question') {
-    const extras = [p.withPassage ? 'the passage it is about' : '', p.merged > 0 ? 'a merged thread' : ''].filter(Boolean);
+    const pictures = p.images?.length ?? 0;
+    const extras = [
+      p.withPassage ? 'the passage it is about' : '',
+      pictures === 1 ? 'a picture of its page' : pictures > 1 ? `pictures of its ${pictures} pages` : '',
+      p.merged > 0 ? 'a merged thread' : '',
+    ].filter(Boolean);
     return extras.length > 0 ? `${KIND_LABELS.question}, with ${extras.join(' and ')}` : KIND_LABELS.question;
   }
   return KIND_LABELS[p.kind];
@@ -134,6 +139,19 @@ export function ContextDialog({
                         <span className="context-kind">{partLabel(p)}</span>
                         <span className="context-tokens">{tokens(p.tokens)}</span>
                       </summary>
+                      {p.images && p.images.length > 0 && (
+                        <div className="context-images">
+                          {p.images.map((image) => {
+                            const src = api.pageImageUrl(image.ref);
+                            return (
+                              <figure key={image.ref} data-testid="context-image">
+                                {src && <img src={src} alt={image.label} loading="lazy" />}
+                                <figcaption>{image.label}, sent as a picture</figcaption>
+                              </figure>
+                            );
+                          })}
+                        </div>
+                      )}
                       <pre className="context-text">{p.text.replace(/^\n+/, '')}</pre>
                       {p.kind === 'about_me' && (
                         <button

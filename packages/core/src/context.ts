@@ -13,6 +13,34 @@ export type Role = 'system' | 'user' | 'assistant';
 export interface ChatMessage {
   role: Role;
   content: string;
+  /**
+   * Pictures that go with this (user) message, by reference: the request
+   * kept for What was sent names them, and the provider puts the pictures
+   * themselves in (see SentImage).
+   */
+  images?: SentImage[];
+}
+
+/** A picture sent with a question: a page of a PDF the question is about. */
+export interface SentImage {
+  /** "source-page:<versionId>:<page>". */
+  ref: string;
+  /** How the learner is shown it ("Page 12 of “Week 4”"). */
+  label: string;
+}
+
+/** What one picture is counted as: providers cap a picture at about 1,000 tokens (DeepSeek: 1,024). */
+export const IMAGE_TOKENS = 1024;
+
+/** The reference for page `page` of a source version. */
+export function pageImageRef(versionId: string, page: number): string {
+  return `source-page:${versionId}:${page}`;
+}
+
+/** A page reference taken apart, or null. */
+export function parsePageImageRef(ref: string): { versionId: string; page: number } | null {
+  const m = /^source-page:([0-9A-HJKMNP-TV-Z]{26}):(\d{1,5})$/.exec(ref);
+  return m ? { versionId: m[1] as string, page: Number(m[2]) } : null;
 }
 
 /** Another thread merged into this one: its summary (or exchanges), as the learner accepted it. */
@@ -48,6 +76,8 @@ export interface ContextInput {
   /** Threads merged in since the last question: they go in front of this one. */
   mergedNow?: MergedText[];
   question: { id: string; content: string };
+  /** Pictures sent with the question: the pages of a PDF the passage is on. */
+  images?: SentImage[];
   /** Prompt budget in tokens, excluding the room kept for the answer. */
   budgetTokens: number;
 }
@@ -77,6 +107,7 @@ export type ManifestPart =
   | { kind: 'inherited'; id: string; role: 'user' | 'assistant'; tokens: number }
   | { kind: 'history'; id: string; role: 'user' | 'assistant'; tokens: number }
   | { kind: 'origin'; tokens: number }
+  | { kind: 'image'; ref: string; tokens: number }
   | { kind: 'merged'; id: string; tokens: number }
   | { kind: 'question'; id: string; tokens: number };
 
@@ -207,7 +238,10 @@ export function assembleContext(input: ContextInput): AssembledContext {
   const mergedNow = (input.mergedNow ?? []).map((m) => ({ id: m.id, tokens: estimateTokens(formatMerged(m)) }));
   const mergedTokens = mergedNow.reduce((n, m) => n + m.tokens, 0);
   const questionTokens = estimateTokens(input.question.content);
-  const fixed = systemTokens + aboutTokens + sourceTokens + pinnedTokens + originTokens + mergedTokens + questionTokens;
+  const images = input.images ?? [];
+  const imageTokens = images.length * IMAGE_TOKENS;
+  const fixed =
+    systemTokens + aboutTokens + sourceTokens + pinnedTokens + originTokens + mergedTokens + questionTokens + imageTokens;
   if (fixed > input.budgetTokens) throw new ContextBudgetError(fixed, input.budgetTokens);
 
   // Inherited turns come first, then the thread's own; walk newest to oldest, keeping what fits.
@@ -245,7 +279,7 @@ export function assembleContext(input: ContextInput): AssembledContext {
   const messages: ChatMessage[] = [
     { role: 'system', content: systemContent },
     ...kept.map((h) => ({ role: h.role, content: h.content })),
-    { role: 'user', content: question },
+    { role: 'user', content: question, ...(images.length > 0 ? { images } : {}) },
   ];
   const parts: ManifestPart[] = [{ kind: 'system', tokens: systemTokens }];
   if (aboutMe) parts.push({ kind: 'about_me', tokens: aboutTokens });
@@ -262,6 +296,7 @@ export function assembleContext(input: ContextInput): AssembledContext {
   }
   for (const m of mergedNow) parts.push({ kind: 'merged', id: m.id, tokens: m.tokens });
   if (originText) parts.push({ kind: 'origin', tokens: originTokens });
+  for (const image of images) parts.push({ kind: 'image', ref: image.ref, tokens: IMAGE_TOKENS });
   parts.push({ kind: 'question', id: input.question.id, tokens: questionTokens });
 
   return { messages, manifest: { parts, omitted, estimatedTokens: used, budgetTokens: input.budgetTokens } };
@@ -280,12 +315,15 @@ export interface SentPart {
   merged: number;
   /** The question carries the passage it is about. */
   withPassage: boolean;
+  /** Pictures sent with the question. */
+  images?: SentImage[];
 }
 
 /** A manifest's part as it is read back (from the database or over HTTP). */
 export interface SentManifestPart {
   kind: ManifestPart['kind'];
   id?: string | undefined;
+  ref?: string | undefined;
   role?: 'user' | 'assistant' | undefined;
   tokens: number;
 }
@@ -367,10 +405,11 @@ export function describeSent(manifest: { parts: SentManifestPart[] }, request: C
       kind: 'question',
       role: question.role,
       text: question.content,
-      tokens: tokensOf('question') + tokensOf('origin') + pending.tokens,
+      tokens: tokensOf('question') + tokensOf('origin') + tokensOf('image') + pending.tokens,
       id: manifest.parts.find((p) => p.kind === 'question')?.id ?? '',
       merged: pending.merged,
       withPassage: has('origin'),
+      ...(question.images && question.images.length > 0 ? { images: question.images } : {}),
     });
   }
   return out;

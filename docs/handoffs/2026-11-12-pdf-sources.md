@@ -98,3 +98,11 @@ The likely cause: `node --watch` restarted the server partway through a `git pul
 
 - **What to do.** Restart `pnpm dev` after pulling.
 - **Not proven.** That the mix is what ran; a restart will show.
+
+## Then: the real cause, most likely
+
+A restart changed nothing: the same fast failure with no reason, under `pnpm dev` only.
+
+- **What fits.** Something else arrived on the worker's port, and the reader took the first message that was not "ready" for its answer. `pnpm dev` runs the server under `node --watch`, and in Node 26 watch mode reports the modules a worker thread loads. The worker ran fine where nothing watched it: in `pdf:check` on the Mac, and in every run on Node 22. Node 26's source was not checked; this is inferred from what fails where.
+- **Fix.** The worker's messages are marked as its own (`noemaPdf: 'ready' | 'done'`), and anything else on the port is ignored.
+- **Test.** A worker that receives other messages first still reads the PDF; on the previous code that test fails.

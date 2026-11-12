@@ -12,6 +12,13 @@ import { dirname, join } from 'node:path';
 import { parentPort, workerData } from 'node:worker_threads';
 import type { PdfPageText, PdfTextItem } from '@noema/core';
 
+/**
+ * What this worker posts, marked as ours: Node itself may post other messages
+ * on a worker's port (under `node --watch`, Node 26 reports the modules a
+ * worker loads), and they are not answers.
+ */
+export type PdfWorkerMessage = { noemaPdf: 'ready' } | { noemaPdf: 'done'; result: PdfWorkerResult | PdfWorkerFailure };
+
 export interface PdfWorkerResult {
   ok: true;
   title: string | null;
@@ -153,9 +160,13 @@ export async function readPdfPages(data: Uint8Array): Promise<PdfWorkerResult | 
 const port = parentPort;
 if (port) {
   // Loaded and running: from here on a failure is the file's, not the worker's.
-  port.postMessage({ ready: true });
+  port.postMessage({ noemaPdf: 'ready' } satisfies PdfWorkerMessage);
   readPdfPages(workerData as Uint8Array).then(
-    (result) => port.postMessage(result),
-    (err) => port.postMessage({ ok: false, reason: 'broken', detail: describeError(err) } satisfies PdfWorkerFailure),
+    (result) => port.postMessage({ noemaPdf: 'done', result } satisfies PdfWorkerMessage),
+    (err) =>
+      port.postMessage({
+        noemaPdf: 'done',
+        result: { ok: false, reason: 'broken', detail: describeError(err) },
+      } satisfies PdfWorkerMessage),
   );
 }

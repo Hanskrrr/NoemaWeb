@@ -5,7 +5,13 @@
 
 import { Worker } from 'node:worker_threads';
 import { type PdfReading, pdfToMarkdown } from '@noema/core';
-import { describeError, type PdfWorkerFailure, type PdfWorkerResult, readPdfPages } from './pdf-worker.ts';
+import {
+  describeError,
+  type PdfWorkerFailure,
+  type PdfWorkerMessage,
+  type PdfWorkerResult,
+  readPdfPages,
+} from './pdf-worker.ts';
 
 // 1: lines, paragraphs, headings, lists and page headings from pdf.js 6 text items.
 export const PDF_EXTRACTOR = 'noema-pdf-1';
@@ -62,9 +68,11 @@ function inWorker(bytes: Uint8Array, url: URL, timeoutMs: number): Promise<Outco
       void worker.terminate();
     };
     const timer = setTimeout(() => finish('timeout'), timeoutMs);
-    worker.on('message', (m: PdfWorkerResult | PdfWorkerFailure | { ready: true }) => {
-      if ('ready' in m) ready = true;
-      else finish(m);
+    worker.on('message', (m: unknown) => {
+      const ours = m as Partial<PdfWorkerMessage> | null;
+      if (ours?.noemaPdf === 'ready') ready = true;
+      else if (ours?.noemaPdf === 'done' && ours.result) finish(ours.result);
+      // Anything else is Node's own (see PdfWorkerMessage), not an answer.
     });
     // Everything in the worker is caught: an error before it said it was ready
     // means it could not load here; after, the file broke it (or it ran out of memory).

@@ -141,6 +141,13 @@ test('when no worker thread can be started here, the PDF is read on the main thr
   assert.match(told[0] as string, /no-such-worker|Cannot find|MODULE_NOT_FOUND/);
 });
 
+test('messages on the worker\'s port that are not its own (Node posts some under --watch) are not taken for answers', async () => {
+  const told: string[] = [];
+  const r = await readPdf(SLIDES, { worker: new URL('./fixtures/noisy-worker.ts', import.meta.url), onFallback: (d) => told.push(d) });
+  assert.equal(r.title, 'Week 5: Optimisation');
+  assert.deepEqual(told, []);
+});
+
 test('pdf.js is loaded for text only: its native drawing package is never loaded', async () => {
   const r = await readPdfPages(SLIDES);
   assert.equal(r.ok, true);

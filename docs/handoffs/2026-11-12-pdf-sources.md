@@ -78,3 +78,23 @@ The founder added a course PDF on his Mac and got "it could not be read as a PDF
   - no native code is loaded into the server.
 - **Test.** pdf.js sees the stand-in, not the package.
 - **Not proven:** that this is what failed in the app on his Mac. The script there loaded the native package fine, so the app's failure may have another cause. The terminal's `pdf not read` line will say, if it still fails.
+
+## Then: a server only half updated
+
+The app still failed, fast, with no reason in the log. With the founder's leave, his six course PDFs were read through the bridge. Every one read, as a script and through the upload route, on his checkout, one at a time and two at once:
+
+| Week | Pages | Characters | Headings | List items |
+| --- | --- | --- | --- | --- |
+| 1 | 73 | 46,971 | 204 | 226 |
+| 2 | 54 | 22,376 | 76 | 185 |
+| 3 | 76 | 58,707 | 278 | 174 |
+| 4 | 62 | 41,007 | 151 | 219 |
+| 5 | 56 | 62,524 | 188 | 217 |
+| 6 | 37 | 35,652 | 52 | 330 |
+
+His log line was `pdf not read` with no `detail`. Every reader since `a59d540` gives one. That fits a server running `app.ts` from `a59d540` with `pdf.ts` from `32880df`, a mix that never existed in git. The first reader took the new worker's "ready" message for its answer, and that is a failure with no reason.
+
+The likely cause: `node --watch` restarted the server partway through a `git pull`, and did not restart again for the files written after. Git replaces files rather than editing them.
+
+- **What to do.** Restart `pnpm dev` after pulling.
+- **Not proven.** That the mix is what ran; a restart will show.

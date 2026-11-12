@@ -2,14 +2,16 @@
 
 How each push to GitHub (`Hanskrrr/NoemaWeb`) was made, so the next one can be made the same way. Newest first. Add an entry for every push: what, the checks before it, how, and the result.
 
-## Next push: `notebook-features`, asked before
+## Next push: `notebook-features`, asked before and PDF sources
 
-- **What.** The commits on top of `5bb1ccb`: "asked before" by words and by the chat model reading for meaning (ADR 0020), `pnpm asked:check`, and their docs. No migration; no force needed.
-- **Checks before pushing.** See the 2026-11-11 handoff: `node --test`, Playwright in the Claude sandbox, tsc on the Mac. No notebook content in code, tests or docs.
+- **What.** The commits on top of `5bb1ccb`: "asked before" by words and by the chat model reading for meaning (ADR 0020), `pnpm asked:check`; the study-structure draft (docs only); PDF sources (ADR 0021, migration 014, a new dependency `pdfjs-dist` 6.2.108, made-up PDF fixtures); and their docs. No force needed.
+- **Checks before pushing.** See the 2026-11-11 and 2026-11-12 handoffs: `node --test` and Playwright in the Claude sandbox, tsc on the Mac. Before pushing the PDF work: `pnpm install` on the Mac (it adds pdf.js and updates `pnpm-lock.yaml`, which should be committed with it), then `pnpm check`. No notebook content in code, tests or docs; the fixture PDFs' metadata names no person or path.
 - **How.** A plain push from the Mac:
 
   ```sh
   cd ~/Code/CodeFactory/AgenticSys/NoemaLearningNote/NoemaWeb
+  pnpm install
+  git add pnpm-lock.yaml && git commit -m "chore: lockfile for pdfjs-dist"
   git push origin notebook-features
   ```
 

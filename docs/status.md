@@ -35,5 +35,6 @@ Also built along the way: **asked before**, a reminder when a question being wri
 
 ## Next
 
-1. Watch "asked before" in real use (the log counts reminders followed and dismissed), then memory and the "new to you" idea, once discussed with the founder.
-2. M6: real use, with a short list of what gets in the way.
+1. Run `pnpm install` on the Mac (pdf.js for PDF sources), then add the course PDFs and read them (ADR 0021; handoff 2026-11-12).
+2. Watch "asked before" in real use (the log counts reminders followed and dismissed), then memory and the "new to you" idea, once discussed with the founder.
+3. M6: real use, with a short list of what gets in the way.

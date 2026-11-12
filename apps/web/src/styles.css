@@ -2738,6 +2738,36 @@ button.quiet.inline.faint:hover {
   margin-top: 0;
 }
 
+/* A PDF's page headings ("## Page 3") mark where a page starts, like a rule
+   with the page number on it; a click opens the PDF at that page. */
+.source-text.source-pdf .md > h3 {
+  font: 600 0.72rem / 1.2 var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border-top: 1px solid var(--rule);
+  padding-top: 0.5rem;
+  margin: 2.2rem 0 0.9rem;
+  cursor: pointer;
+}
+
+.source-text.source-pdf .md > h3:first-child {
+  margin-top: 0;
+  border-top: 0;
+  padding-top: 0;
+}
+
+.source-text.source-pdf .md > h3:hover {
+  color: var(--accent);
+}
+
+.source-text.source-pdf .md > h3:hover::after {
+  content: " · open this page ↗";
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+
 .source-text.title-in-text .md > h2:first-child {
   display: none;
 }
@@ -2893,6 +2923,23 @@ button.quiet.inline.faint:hover {
   font-size: 0.9rem;
   padding: 0.3rem 0.8rem;
   border-radius: 999px;
+}
+
+.source-dialog.dropping {
+  outline: 2px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: -6px;
+}
+
+.pdf-pick input[type="file"] {
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.model-form label > span.pdf-chosen {
+  font-size: 0.85rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-soft);
 }
 
 .source-modes button.active {
@@ -3231,6 +3278,18 @@ a.button.quiet-button,
 label.button.quiet-button {
   background: transparent;
   color: var(--accent);
+}
+
+/* A link that sits among quiet buttons (Open the PDF). */
+a.button.quiet {
+  background: transparent;
+  color: var(--ink-soft);
+  border-color: transparent;
+  padding: 0.2rem 0.4rem;
+}
+
+a.button.quiet:hover {
+  color: var(--ink);
 }
 
 label.button.disabled {

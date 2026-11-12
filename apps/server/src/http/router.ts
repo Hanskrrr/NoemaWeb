@@ -22,6 +22,10 @@ export interface Ctx {
   params: Record<string, string>;
   /** Read and validate the JSON body (at most 1 MB unless `maxBytes` says more). */
   body<S extends z.ZodTypeAny>(schema: S, opts?: { maxBytes?: number }): Promise<z.output<S>>;
+  /** Read the body as bytes (a file), of the given media type; `tooLarge` is the sentence when it is over `maxBytes`. */
+  bytes(opts: { type: string; maxBytes: number; tooLarge: string }): Promise<Uint8Array>;
+  /** Read and validate the query string. */
+  query<S extends z.ZodTypeAny>(schema: S): z.output<S>;
 }
 
 export type Handler = (ctx: Ctx) => Promise<void> | void;
@@ -49,15 +53,27 @@ export function sendError(res: ServerResponse, status: number, code: string, mes
   sendJson(res, status, { error: { code, message } });
 }
 
-async function readBody(req: IncomingMessage, max = MAX_BODY_BYTES): Promise<string> {
+async function readRaw(req: IncomingMessage, max: number, tooLarge?: string): Promise<Buffer> {
+  const declared = Number(req.headers['content-length'] ?? 0);
+  const over = () => new HttpError(413, 'body_too_large', tooLarge ?? `request body over ${max} bytes`);
+  if (declared > max) throw over();
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > max) throw new HttpError(413, 'body_too_large', `request body over ${max} bytes`);
+    if (size > max) throw over();
     chunks.push(chunk as Buffer);
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks);
+}
+
+async function readBody(req: IncomingMessage, max = MAX_BODY_BYTES): Promise<string> {
+  return (await readRaw(req, max)).toString('utf8');
+}
+
+function invalid(error: z.ZodError, where: string): HttpError {
+  const issues = error.issues.map((i) => `${i.path.join('.') || where}: ${i.message}`).join('; ');
+  return new HttpError(400, 'invalid_request', issues);
 }
 
 export class Router {
@@ -100,10 +116,18 @@ export class Router {
             throw new HttpError(400, 'bad_json', 'the request body is not valid JSON');
           }
           const parsed = schema.safeParse(json);
-          if (!parsed.success) {
-            const issues = parsed.error.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; ');
-            throw new HttpError(400, 'invalid_request', issues);
-          }
+          if (!parsed.success) throw invalid(parsed.error, 'body');
+          return parsed.data;
+        },
+        bytes: async ({ type, maxBytes, tooLarge }) => {
+          const sent = (req.headers['content-type'] ?? '').split(';')[0]?.trim().toLowerCase();
+          if (sent !== type) throw new HttpError(415, 'unsupported_media_type', `send ${type}`);
+          const raw = await readRaw(req, maxBytes, tooLarge);
+          return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+        },
+        query: (schema) => {
+          const parsed = schema.safeParse(Object.fromEntries(url.searchParams));
+          if (!parsed.success) throw invalid(parsed.error, 'query');
           return parsed.data;
         },
       };

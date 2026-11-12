@@ -449,7 +449,7 @@ export function Sidebar({
         {head('Sources', { label: '+ Add source', onClick: onAddSource, testId: 'add-source' })}
         {sources.length === 0 ? (
           <p className="sidebar-empty">
-            Nothing to read yet. Add a web page or an arXiv paper, or paste text, and ask about any passage.
+            Nothing to read yet. Add a web page, an arXiv paper or a PDF, or paste text, and ask about any passage.
           </p>
         ) : (
           <ul className="sidebar-list">{sources.map(sourceItem)}</ul>

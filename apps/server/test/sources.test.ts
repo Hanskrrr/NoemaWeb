@@ -263,7 +263,7 @@ test('addresses that cannot be read say why; pasted text cannot be read again', 
   pages.set('/paper.pdf', { type: 'application/pdf', body: '%PDF-1.4' });
   pages.set('/image', { type: 'image/png', body: 'PNG' });
   const reasons: Array<[string, RegExp]> = [
-    [`${base}/paper.pdf`, /is a PDF, which Noema cannot read yet/],
+    [`${base}/paper.pdf`, /could not be read as a PDF/],
     [`${base}/missing`, /answered 404/],
     [`${base}/image`, /not a page or text \(image\/png\)/],
     ['ftp://example.com/x', /only http and https/],
@@ -285,10 +285,12 @@ test('an arXiv paper is read from its HTML version, falling back to ar5iv', asyn
   assert.deepEqual(readingAddresses('https://arxiv.org/abs/1706.03762'), [
     'https://arxiv.org/html/1706.03762',
     'https://ar5iv.labs.arxiv.org/html/1706.03762',
+    'https://arxiv.org/pdf/1706.03762',
   ]);
   assert.deepEqual(readingAddresses('https://arxiv.org/pdf/2310.06825v2.pdf'), [
     'https://arxiv.org/html/2310.06825v2',
     'https://ar5iv.labs.arxiv.org/html/2310.06825',
+    'https://arxiv.org/pdf/2310.06825v2',
   ]);
   assert.deepEqual(readingAddresses('https://example.com/a'), ['https://example.com/a']);
   const asked: string[] = [];

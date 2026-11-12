@@ -36,6 +36,7 @@ Imported by both the server and the web app. No I/O.
 | `src/search.ts` | Search text for FTS5 (Chinese and Japanese as characters and pairs), queries and snippets |
 | `src/html.ts` | A web page as Markdown: the article only, with math, footnotes, tables and code |
 | `src/sources.ts` | A source's blocks and headings, and the section around a passage |
+| `src/pdf.ts` | A PDF's text items, page by page, as Markdown: lines, paragraphs, headings, lists, page headings; running heads dropped |
 | `src/state.ts` | The states of an answer (`pending`, `streaming`, `done`, `failed`, `stopped`, `interrupted`) |
 | `src/errors.ts` | Error kinds and the plain sentence the UI shows for each |
 | `test/` | `node:test` tests for all of the above, with HTML fixtures |
@@ -61,7 +62,8 @@ Imported by both the server and the web app. No I/O.
 | `src/llm/openai-compatible.ts` | The streaming client for DeepSeek and other OpenAI-compatible providers (retries only before the first token) |
 | `src/llm/settings.ts` | Which model and key; the key saved in `data/settings.json`, checked with the provider before saving |
 | `src/llm/fake.ts` | The fake model used by every test |
-| `src/ingest/fetch.ts` | Reading a web page by its address (arXiv from its HTML version; PDFs refused with a reason) |
+| `src/ingest/fetch.ts` | Reading a web page by its address (arXiv from its HTML version, its PDF only when there is none; a PDF at any address) |
+| `src/ingest/pdf.ts`, `pdf-worker.ts` | Reading a PDF: pdf.js in a worker thread with a time limit; the file kept as base64 |
 | `src/log.ts` | One JSON line per event on stdout; never message text or keys |
 | `test/` | Tests over real HTTP and SQLite, one file per area (`chat`, `branches`, `notebook`, `sources`, `search`, `trash`, …) |
 
@@ -115,3 +117,4 @@ Playwright specs against the real server and the built app, with the fake model.
 - **What the model is sent:** `packages/core/src/context.ts` (with tests in `packages/core/test/`), called from `apps/server/src/chat/generation.ts`.
 - **A new view or route:** `apps/web/src/route.ts` (with its test) → a component → `App.tsx` → an e2e spec.
 - **How a web page becomes Markdown:** `packages/core/src/html.ts` with a fixture in `packages/core/test/fixtures/`; bump `EXTRACTOR` in `apps/server/src/ingest/fetch.ts` so reading a page again makes a new version.
+- **How a PDF becomes Markdown:** `packages/core/src/pdf.ts` (tests build pages from made-up text items); real PDFs to try are in `apps/server/test/fixtures/` (made-up decks and notes). Bump `PDF_EXTRACTOR` in `apps/server/src/ingest/pdf.ts`, and when upgrading `pdfjs-dist`, so reading a PDF again makes a new version.

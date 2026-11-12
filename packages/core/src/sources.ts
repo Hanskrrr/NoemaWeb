@@ -4,6 +4,7 @@
 // with offsets (for search and jumps).
 
 import { MAX_SOURCE_CHARS } from './context.ts';
+import { pageOfHeading } from './pdf.ts';
 
 export interface SourceBlock {
   start: number;
@@ -86,7 +87,9 @@ export function sourceHeadings(markdown: string): SourceHeading[] {
  * whole blocks around the passage when the section is long.
  */
 export function sourceSection(markdown: string, start: number, end: number, maxChars = MAX_SOURCE_CHARS): string {
-  const headings = sourceHeadings(markdown);
+  // A PDF's page headings mark where a page starts, not a section: a passage
+  // near the top of a page keeps the paragraph it continues.
+  const headings = sourceHeadings(markdown).filter((h) => !(h.level === 2 && pageOfHeading(h.text) !== null));
   let from = 0;
   let level = 0;
   let headingLine = '';

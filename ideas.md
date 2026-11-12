@@ -5,7 +5,7 @@ Things worth doing that are outside the v0.1 scope fence or not yet scheduled. A
 ## After v0.1
 
 - **Import a ChatGPT export**: second candidate.
-- PDF sources via the pdf.js text layer.
+- **PDFs, next steps** (text reading is built, ADR 0021): formulas as LaTeX (from the PDF's own text where a TeX source made it, or a model reading the page image); figures as pictures beside the text; a paragraph across a page break joined; OCR for scanned pages; the PDF's own outline as headings.
 - **Sources, next steps** (ADR 0013): figures, kept as local copies from the original HTML; for a passage asked about an older version, propose where it is in the latest one (shown as a proposal, never a silent jump); a question about a whole section from its heading; the passages asked most across all sources, in one list.
 - Semantic search with sqlite-vec, only if keyword search misses in real use.
 - An MCP server over the notebook, so other tools can read it.

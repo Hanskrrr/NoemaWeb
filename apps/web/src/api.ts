@@ -74,6 +74,27 @@ class RawJson {
   }
 }
 
+/** A file sent as its bytes, with its media type. */
+class RawFile {
+  readonly blob: Blob;
+  readonly type: string;
+  constructor(blob: Blob, type: string) {
+    this.blob = blob;
+    this.type = type;
+  }
+}
+
+function contentType(body: unknown): Record<string, string> {
+  if (body === undefined) return {};
+  return { 'content-type': body instanceof RawFile ? body.type : 'application/json' };
+}
+
+function bodyOf(body: unknown): BodyInit | undefined {
+  if (body instanceof RawFile) return body.blob;
+  if (body instanceof RawJson) return body.text;
+  return body !== undefined ? JSON.stringify(body) : undefined;
+}
+
 async function call<S extends z.ZodTypeAny>(
   schema: S,
   method: string,
@@ -84,11 +105,8 @@ async function call<S extends z.ZodTypeAny>(
   try {
     res = await fetch(path, {
       method,
-      headers: {
-        [CLIENT_HEADER]: CLIENT_HEADER_VALUE,
-        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-      },
-      body: body instanceof RawJson ? body.text : body !== undefined ? JSON.stringify(body) : undefined,
+      headers: { [CLIENT_HEADER]: CLIENT_HEADER_VALUE, ...contentType(body) },
+      body: bodyOf(body),
     });
   } catch {
     throw new ApiFailure(0, 'offline', 'Cannot reach the Noema server. Is it running?');
@@ -180,6 +198,17 @@ export const api = {
   sources: (notebookId: string) => call(SourceList, 'GET', `/api/notebooks/${notebookId}/sources`),
   addSource: (notebookId: string, body: { id: string; title?: string; text?: string; url?: string }) =>
     call(Source, 'POST', `/api/notebooks/${notebookId}/sources`, body),
+  /** A PDF from this computer: read page by page on the server, the file kept with it. */
+  addPdf: (notebookId: string, file: Blob, query: { id: string; name?: string; title?: string }) =>
+    call(
+      Source,
+      'POST',
+      `/api/notebooks/${notebookId}/sources/pdf?${new URLSearchParams(query)}`,
+      new RawFile(file, 'application/pdf'),
+    ),
+  /** The file kept with a version (a PDF), for a link: the browser's viewer opens it, at a page if given. */
+  sourceFileUrl: (sourceId: string, versionId: string, page?: number) =>
+    `/api/sources/${sourceId}/versions/${versionId}/file${page ? `#page=${page}` : ''}`,
   source: (id: string, version?: string) =>
     call(SourceDetail, 'GET', `/api/sources/${id}${version ? `?version=${encodeURIComponent(version)}` : ''}`),
   renameSource: (id: string, title: string) => call(Source, 'PATCH', `/api/sources/${id}`, { title }),

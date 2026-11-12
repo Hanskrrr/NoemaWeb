@@ -217,10 +217,10 @@ test('a web page read from its address, read again when it changes; what was ask
     await page.goto('/');
     await showList(page, 'sources');
     await page.getByTestId('add-source').click();
-    // A PDF is refused with a reason.
+    // What cannot be read is refused with a reason (here a broken PDF).
     await page.getByTestId('source-url-input').fill(`${local.base}/paper.pdf`);
     await page.getByTestId('source-add').click();
-    await expect(page.getByTestId('source-error')).toContainText('it is a PDF');
+    await expect(page.getByTestId('source-error')).toContainText('could not be read as a PDF');
     // A page is read: its article, without the site around it.
     await page.getByTestId('source-url-input').fill(`${local.base}/okapi`);
     await page.getByTestId('source-add').click();

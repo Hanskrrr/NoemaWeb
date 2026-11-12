@@ -164,9 +164,19 @@ export const SourceVersion = z.object({
   seq: z.number().int().positive(),
   /** The Markdown shown and anchored into. Never changes. */
   content: z.string(),
-  origin: z.enum(['paste', 'url']),
+  /** Pasted text, a page read from an address, or a file the learner gave. */
+  origin: z.enum(['paste', 'url', 'file']),
   /** The address actually read (after redirects, or an arXiv paper's HTML), if fetched. */
   fetchedUrl: z.string().nullable(),
+  /** The original file kept with this version (a PDF), which can be opened at a page. */
+  file: z
+    .object({
+      type: z.literal('application/pdf'),
+      /** Its name when given as a file, or the last part of its address. */
+      name: z.string().nullable(),
+      bytes: z.number().int().nonnegative(),
+    })
+    .nullable(),
   createdAt: z.string(),
 });
 export type SourceVersion = z.infer<typeof SourceVersion>;
@@ -209,6 +219,18 @@ export const CreateSourceRequest = z
     message: 'give either text or an address',
   });
 export type CreateSourceRequest = z.infer<typeof CreateSourceRequest>;
+
+/**
+ * Add a PDF from a file: the body is the file's bytes (application/pdf), and
+ * these come in the address. The id is the client's, so sending twice adds once.
+ */
+export const PdfUploadQuery = z.object({
+  id: Id,
+  /** The file's name, as the learner's computer had it. */
+  name: z.string().trim().max(300).optional(),
+  title: z.string().trim().max(300).optional(),
+});
+export type PdfUploadQuery = z.infer<typeof PdfUploadQuery>;
 
 export const RenameSourceRequest = z.object({ title: z.string().trim().min(1).max(300) });
 

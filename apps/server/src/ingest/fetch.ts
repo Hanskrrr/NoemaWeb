@@ -1,9 +1,11 @@
 // Reading a page by its address: fetched on this machine (a browser could not,
 // because of CORS), turned into Markdown with core's htmlToMarkdown, kept with
 // the original HTML. An arXiv paper is read from its HTML version, not its
-// abstract page or PDF. PDFs are refused with a reason, for now.
+// abstract page; from its PDF only when it has no HTML version. A PDF at any
+// address is read with ./pdf.ts and kept as a file (ADR 0021).
 
-import { htmlToMarkdown } from '@noema/core';
+import { cleanFileName, htmlToMarkdown } from '@noema/core';
+import { looksLikePdf, MAX_PDF_BYTES, PDF_EXTRACTOR, PdfProblem, pdfToRaw, readPdf } from './pdf.ts';
 
 // 2: aligned equations (LaTeXML align) as one aligned block, not a table.
 // 3: pipes in a table cell's math written \vert and \Vert, so a norm keeps its cell;
@@ -22,9 +24,16 @@ export interface ImportedPage {
   markdown: string;
   /** The address actually read. */
   fetchedUrl: string;
+  /** The page as fetched; a PDF as base64. */
   raw: string;
-  /** 'html' when it was turned into Markdown; 'text' when it was text already. */
-  kind: 'html' | 'text';
+  /** 'html' when it was turned into Markdown; 'text' when it was text already; 'pdf' when read from a PDF. */
+  kind: 'html' | 'text' | 'pdf';
+  /** Which reader made the Markdown. */
+  extractor: string;
+  /** For a PDF: 'application/pdf', its name, and how many pages were read. */
+  mediaType: string | null;
+  fileName: string | null;
+  pages?: number;
 }
 
 export interface FetchOptions {
@@ -44,7 +53,7 @@ export function readingAddresses(url: string): string[] {
   if (!m) return [url.trim()];
   const id = m[1] as string;
   const version = m[2] ?? '';
-  return [`https://arxiv.org/html/${id}${version}`, `https://ar5iv.labs.arxiv.org/html/${id}`];
+  return [`https://arxiv.org/html/${id}${version}`, `https://ar5iv.labs.arxiv.org/html/${id}`, `https://arxiv.org/pdf/${id}${version}`];
 }
 
 function charsetOf(contentType: string, head: Uint8Array): string {
@@ -97,7 +106,7 @@ async function fetchOne(address: string, opts: Required<FetchOptions>): Promise<
       signal: AbortSignal.timeout(opts.timeoutMs),
       headers: {
         'user-agent': 'Noema/0.1 (a local study notebook)',
-        accept: 'text/html,application/xhtml+xml,text/markdown,text/plain;q=0.9,*/*;q=0.5',
+        accept: 'text/html,application/xhtml+xml,text/markdown,text/plain;q=0.9,application/pdf;q=0.8,*/*;q=0.5',
       },
     });
   } catch (err) {
@@ -107,21 +116,69 @@ async function fetchOne(address: string, opts: Required<FetchOptions>): Promise<
   if (!res.ok) throw new FetchProblem(`it answered ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`);
   const type = (res.headers.get('content-type') ?? '').toLowerCase();
   const finalUrl = res.url || address;
-  if (type.includes('application/pdf') || /\.pdf(?:[?#]|$)/i.test(finalUrl)) {
-    throw new FetchProblem('it is a PDF, which Noema cannot read yet. For a paper, give its arXiv link; or paste the text');
+  const download = type.includes('octet-stream') || type.includes('binary');
+  if (type.includes('application/pdf') || /\.pdf(?:[?#]|$)/i.test(finalUrl) || download) {
+    const bytes = await readCapped(res, MAX_PDF_BYTES);
+    if (looksLikePdf(bytes)) return readPdfPage(bytes, finalUrl, fileNameOf(res, finalUrl));
+    if (type.includes('application/pdf')) throw new FetchProblem('it says it is a PDF, but it is not one');
+    if (download) throw new FetchProblem(`it is not a page or text (${type.split(';')[0]})`);
+    // An address ending in .pdf that answered with a page: read the page.
+    return fromText(new TextDecoder('utf-8').decode(bytes), type, finalUrl);
   }
   const isHtml = type.includes('html') || type.includes('xml') || type === '';
   const isText = type.startsWith('text/') || type.includes('markdown') || type.includes('json');
   if (!isHtml && !isText) throw new FetchProblem(`it is not a page or text (${type.split(';')[0]})`);
-  const raw = decode(await readCapped(res, opts.maxBytes), type);
+  return fromText(decode(await readCapped(res, opts.maxBytes), type), type, finalUrl);
+}
+
+/** A page or text, fetched. */
+function fromText(raw: string, type: string, finalUrl: string): ImportedPage {
+  const isHtml = type.includes('html') || type.includes('xml') || type === '';
+  const plain = { fetchedUrl: finalUrl, raw, extractor: EXTRACTOR, mediaType: null, fileName: null };
   if (isHtml && /<html|<body|<p[\s>]|<div|<article/i.test(raw.slice(0, 50_000))) {
     const page = htmlToMarkdown(raw, { url: finalUrl });
     if (!page.markdown.trim()) throw new FetchProblem('no readable text was found in it');
-    return { title: page.title, markdown: page.markdown, fetchedUrl: finalUrl, raw, kind: 'html' };
+    return { ...plain, title: page.title, markdown: page.markdown, kind: 'html' };
   }
   if (!raw.trim()) throw new FetchProblem('it is empty');
   const firstHeading = /^#\s+(.+)$/m.exec(raw)?.[1]?.trim();
-  return { title: firstHeading ?? '', markdown: raw.replace(/\r\n?/g, '\n').trim(), fetchedUrl: finalUrl, raw, kind: 'text' };
+  return { ...plain, title: firstHeading ?? '', markdown: raw.replace(/\r\n?/g, '\n').trim(), kind: 'text' };
+}
+
+/** A PDF, fetched or given: its text, and the file kept as base64. */
+export async function readPdfPage(bytes: Uint8Array, fetchedUrl: string, fileName: string | null): Promise<ImportedPage> {
+  try {
+    const pdf = await readPdf(bytes);
+    return {
+      title: pdf.title,
+      markdown: pdf.markdown,
+      fetchedUrl,
+      raw: pdfToRaw(bytes),
+      kind: 'pdf',
+      extractor: PDF_EXTRACTOR,
+      mediaType: 'application/pdf',
+      fileName,
+      pages: pdf.pages,
+    };
+  } catch (err) {
+    throw new FetchProblem(err instanceof PdfProblem ? err.message : 'it could not be read as a PDF');
+  }
+}
+
+/** A file's name: from Content-Disposition if given, else the last part of its address, ending in .pdf. */
+function fileNameOf(res: Response, url: string): string | null {
+  const disposition = res.headers.get('content-disposition') ?? '';
+  const star = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(disposition)?.[1];
+  const plain = /filename\s*=\s*"?([^";]+)"?/i.exec(disposition)?.[1];
+  let name: string | null = null;
+  try {
+    name = star ? decodeURIComponent(star) : (plain ?? decodeURIComponent(new URL(url).pathname.split('/').pop() ?? ''));
+  } catch {
+    name = null;
+  }
+  name = cleanFileName(name ?? '');
+  if (!name) return null;
+  return /\.pdf$/i.test(name) ? name : `${name}.pdf`;
 }
 
 /** Read the page at `url` (an arXiv paper from its HTML version). Throws FetchProblem with a reason a learner can read. */

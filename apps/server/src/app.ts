@@ -22,7 +22,9 @@ import {
   type Message,
   MoveBlockRequest,
   MoveOutRequest,
+  cleanFileName,
   NoemaExport,
+  PdfUploadQuery,
   notebookMarkdown,
   RedraftMergeRequest,
   RegenerateRequest,
@@ -51,7 +53,8 @@ import { checkRequest, SECURITY_HEADERS } from './http/guard.ts';
 import { HttpError, Router, sendError, sendJson } from './http/router.ts';
 import { SseStream } from './http/sse.ts';
 import { serveStatic } from './http/static.ts';
-import { EXTRACTOR, FetchProblem, importPage } from './ingest/fetch.ts';
+import { EXTRACTOR, FetchProblem, type ImportedPage, importPage } from './ingest/fetch.ts';
+import { MAX_PDF_BYTES, PDF_EXTRACTOR, PdfProblem, rawToPdf, readPdf } from './ingest/pdf.ts';
 import { ProviderError } from './llm/provider.ts';
 import type { ModelSettings } from './llm/settings.ts';
 import type { Logger } from './log.ts';
@@ -307,7 +310,7 @@ export function createApp(deps: AppDeps): App {
     sendJson(ctx.res, created ? 201 : 200, note);
   });
 
-  // Sources: what the learner reads. Pasted text, or a page read from its address.
+  // Sources: what the learner reads. Pasted text, a page read from its address, or a PDF.
   router.on('GET', '/api/notebooks/:id/sources', ({ res, params }) => {
     if (!repo.getNotebook(params.id as string)) throw notFound('notebook');
     sendJson(res, 200, { sources: repo.listSources(params.id as string) });
@@ -326,9 +329,9 @@ export function createApp(deps: AppDeps): App {
     if (body.url !== undefined) {
       const page = await readPage(body.url);
       const { source } = repo.createSource(body.id, notebookId, {
-        title: body.title || page.title || new URL(page.fetchedUrl).hostname,
+        title: body.title || page.title || (page.fileName ? withoutPdf(page.fileName) : new URL(page.fetchedUrl).hostname),
         url: body.url,
-        version: { content: page.markdown, origin: 'url', fetchedUrl: page.fetchedUrl, raw: page.raw, extractor: EXTRACTOR },
+        version: fetchedVersion(page),
       });
       sendJson(ctx.res, 201, source);
       return;
@@ -342,8 +345,66 @@ export function createApp(deps: AppDeps): App {
     sendJson(ctx.res, 201, source);
   });
 
+  // A PDF from the learner's computer: the body is the file. Read page by page
+  // in a worker; the file is kept with the version, to open at a page.
+  router.on('POST', '/api/notebooks/:id/sources/pdf', async (ctx) => {
+    const notebookId = ctx.params.id as string;
+    if (!repo.getNotebook(notebookId)) throw notFound('notebook');
+    const query = ctx.query(PdfUploadQuery);
+    const existing = repo.getSource(query.id);
+    const bytes = await ctx.bytes({
+      type: 'application/pdf',
+      maxBytes: MAX_PDF_BYTES,
+      tooLarge: `That file could not be read: it is larger than ${MAX_PDF_BYTES / 1e6} MB.`,
+    });
+    if (existing) {
+      if (existing.notebookId !== notebookId) throw new HttpError(409, 'conflict', 'source id already used');
+      sendJson(ctx.res, 200, existing);
+      return;
+    }
+    if (bytes.byteLength === 0) throw new HttpError(400, 'invalid', 'That file could not be read: it is empty.');
+    let pdf: Awaited<ReturnType<typeof readPdf>>;
+    try {
+      pdf = await readPdf(bytes);
+    } catch (err) {
+      if (err instanceof PdfProblem) throw new HttpError(400, 'invalid', `That file could not be read: ${err.message}.`);
+      throw err;
+    }
+    const name = query.name ? cleanFileName(query.name) || null : null;
+    const { source, created } = repo.createSource(query.id, notebookId, {
+      title: query.title || pdf.title || (name ? withoutPdf(name) : '') || 'Untitled PDF',
+      url: null,
+      version: {
+        content: pdf.markdown,
+        origin: 'file',
+        fetchedUrl: null,
+        raw: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64'),
+        extractor: PDF_EXTRACTOR,
+        mediaType: 'application/pdf',
+        fileName: name,
+        pages: pdf.pages,
+      },
+    });
+    sendJson(ctx.res, created ? 201 : 200, source);
+  });
+
+  // The file kept with a version (a PDF), shown by the browser's own viewer:
+  // a plain link opens it, at a page with #page=N.
+  router.on('GET', '/api/sources/:id/versions/:versionId/file', ({ res, params }) => {
+    const file = repo.versionFile(params.id as string, params.versionId as string);
+    if (!file) throw notFound('file');
+    const name = file.name ?? 'source.pdf';
+    res.writeHead(200, {
+      'content-type': file.type,
+      'content-length': String(file.bytes.byteLength),
+      'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(name)}`,
+      'cache-control': 'private, max-age=31536000, immutable',
+    });
+    res.end(file.bytes);
+  });
+
   router.on('GET', '/api/sources/:id', ({ res, params, url }) => {
-    const detail = repo.sourceDetail(params.id as string, url.searchParams.get('version') ?? undefined, EXTRACTOR);
+    const detail = repo.sourceDetail(params.id as string, url.searchParams.get('version') ?? undefined, outdatedReader);
     if (!detail) throw notFound('source');
     sendJson(res, 200, detail);
   });
@@ -357,40 +418,44 @@ export function createApp(deps: AppDeps): App {
   router.on('POST', '/api/sources/:id/refetch', async (ctx) => {
     const source = repo.getSource(ctx.params.id as string);
     if (!source) throw notFound('source');
-    if (!source.url) throw new HttpError(400, 'invalid', 'pasted text has no address to read again');
+    if (!source.url) throw new HttpError(400, 'invalid', 'it was not read from an address, so there is nothing to fetch again');
     const page = await readPage(source.url);
-    sendJson(
-      ctx.res,
-      200,
-      repo.addSourceVersion(source.id, {
-        content: page.markdown,
-        origin: 'url',
-        fetchedUrl: page.fetchedUrl,
-        raw: page.raw,
-        extractor: EXTRACTOR,
-      }),
-    );
+    sendJson(ctx.res, 200, repo.addSourceVersion(source.id, fetchedVersion(page)));
   });
 
-  // Read the page again from the copy kept with it, with this Noema's reader: no network.
-  // For a page read by an earlier version of the reader (formulas and tables come out better).
-  router.on('POST', '/api/sources/:id/reread', ({ res, params }) => {
+  // Read the page or PDF again from the copy kept with it, with this Noema's reader: no network.
+  // For one read by an earlier version of the reader (formulas and tables come out better).
+  router.on('POST', '/api/sources/:id/reread', async ({ res, params }) => {
     const source = repo.getSource(params.id as string);
     if (!source) throw notFound('source');
     const page = repo.latestPage(source.id);
-    if (!page || !page.extractor.startsWith('noema-html')) {
+    const isPdf = page?.mediaType === 'application/pdf';
+    if (!page || !(isPdf || page.extractor.startsWith('noema-html'))) {
       throw new HttpError(400, 'invalid', 'there is no page kept with it to read again');
     }
-    const read = htmlToMarkdown(page.raw, page.fetchedUrl ? { url: page.fetchedUrl } : {});
+    let content: string;
+    if (isPdf) {
+      try {
+        content = (await readPdf(rawToPdf(page.raw))).markdown;
+      } catch (err) {
+        if (err instanceof PdfProblem) throw new HttpError(400, 'invalid', `It could not be read again: ${err.message}.`);
+        throw err;
+      }
+    } else {
+      content = htmlToMarkdown(page.raw, page.fetchedUrl ? { url: page.fetchedUrl } : {}).markdown;
+    }
+    const extractor = isPdf ? PDF_EXTRACTOR : EXTRACTOR;
     const result = repo.addSourceVersion(source.id, {
-      content: read.markdown,
+      content,
       origin: page.origin,
       fetchedUrl: page.fetchedUrl,
       raw: page.raw,
-      extractor: EXTRACTOR,
+      extractor,
+      mediaType: page.mediaType,
+      fileName: page.fileName,
     });
     // The same text from the same page: it was read as well as this Noema can.
-    if (!result.changed) repo.markLatestRead(source.id, EXTRACTOR);
+    if (!result.changed) repo.markLatestRead(source.id, extractor);
     sendJson(res, 200, result);
   });
 
@@ -760,6 +825,32 @@ export function createApp(deps: AppDeps): App {
       });
     },
   };
+}
+
+/** Whether a page or PDF was read by an older reader than this Noema's. */
+function outdatedReader(extractor: string): boolean {
+  if (extractor.startsWith('noema-html')) return extractor !== EXTRACTOR;
+  if (extractor.startsWith('noema-pdf')) return extractor !== PDF_EXTRACTOR;
+  return false;
+}
+
+/** The version a page or PDF fetched from an address becomes. */
+function fetchedVersion(page: ImportedPage) {
+  return {
+    content: page.markdown,
+    origin: 'url' as const,
+    fetchedUrl: page.fetchedUrl,
+    raw: page.raw,
+    extractor: page.extractor,
+    mediaType: page.mediaType,
+    fileName: page.fileName,
+    ...(page.pages !== undefined ? { pages: page.pages } : {}),
+  };
+}
+
+/** A file's name without its .pdf, as a title. */
+function withoutPdf(name: string): string {
+  return name.replace(/\.pdf$/i, '').trim();
 }
 
 /** Read a page for a source, or a reason the learner can act on. */

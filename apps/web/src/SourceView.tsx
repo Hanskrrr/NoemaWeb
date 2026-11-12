@@ -8,6 +8,7 @@
 import {
   createAnchor,
   type NoteSummary,
+  pageOfHeading,
   readableQuote,
   type Source,
   type SourceDetail,
@@ -15,7 +16,7 @@ import {
   type Thread,
   ulid,
 } from '@noema/core';
-import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { EditableTitle } from './EditableTitle.tsx';
 import { arrive, centre, clearFound } from './found.ts';
@@ -32,6 +33,11 @@ const short = (text: string, max = 140) => {
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 };
 const questionsLabel = (n: number) => (n === 1 ? '1 question' : `${n} questions`);
+/** How many pages a PDF's text has (its page headings). */
+const pagesLabel = (content: string) => {
+  const n = (content.match(/^## Page \d+$/gm) ?? []).length;
+  return n === 1 ? 'PDF, 1 page' : `PDF, ${n} pages`;
+};
 const BLOCK = 'p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, table, .math-display';
 
 /** A paper is long: drawn again only when its text or what was asked in it changes, not on every selection. */
@@ -293,6 +299,37 @@ export function SourceView({
     }
   };
 
+  /**
+   * The PDF page being read: the last page heading above the top of the
+   * reading pane; scrolled to the end, the last one in sight.
+   */
+  const pageInView = (): number => {
+    const el = pane.current;
+    const box = el?.getBoundingClientRect();
+    const atEnd = el ? el.scrollTop + el.clientHeight >= el.scrollHeight - 4 : false;
+    const line = (box?.top ?? 0) + 80;
+    const bottom = box?.bottom ?? window.innerHeight;
+    let page = 1;
+    for (const h of text.current?.querySelectorAll<HTMLElement>('.md > h3') ?? []) {
+      const n = pageOfHeading(h.textContent ?? '');
+      if (n === null) continue;
+      const top = h.getBoundingClientRect().top;
+      if (top > (atEnd ? bottom - 24 : line)) break;
+      page = n;
+    }
+    return page;
+  };
+
+  /** A click on a page heading of a PDF opens the PDF at that page. */
+  const openPageClicked = (e: ReactMouseEvent<HTMLDivElement>) => {
+    const file = detail?.version.file;
+    const heading = (e.target as HTMLElement).closest('.md > h3');
+    if (!file || !heading || !window.getSelection()?.isCollapsed) return;
+    const n = pageOfHeading(heading.textContent ?? '');
+    if (n === null || !detail) return;
+    window.open(api.sourceFileUrl(sourceId, detail.version.id, n), '_blank', 'noopener');
+  };
+
   const rename = async (title: string) => {
     try {
       const source = await api.renameSource(sourceId, title);
@@ -492,9 +529,14 @@ export function SourceView({
               <a href={source.url} target="_blank" rel="noreferrer noopener" title={source.url} data-testid="source-url">
                 {hostOf(source.url)} ↗
               </a>
+            ) : shown.file ? (
+              <span title={shown.file.name ?? undefined} data-testid="source-file-name">
+                {shown.file.name ?? 'A PDF'}
+              </span>
             ) : (
               <span>Pasted</span>
             )}
+            {shown.file && <span data-testid="source-pages">{pagesLabel(content)}</span>}
             <span>{dayOf(shown.createdAt)}</span>
             {count > 1 && (
               <label className="source-version">
@@ -525,6 +567,22 @@ export function SourceView({
               >
                 Contents
               </button>
+            )}
+            {shown.file && (
+              <a
+                className="button quiet"
+                href={api.sourceFileUrl(sourceId, shown.id)}
+                target="_blank"
+                rel="noopener"
+                onClick={(e) => {
+                  // At the page being read.
+                  e.currentTarget.href = api.sourceFileUrl(sourceId, shown.id, pageInView());
+                }}
+                title="Open the PDF itself (figures and formulas as printed) at the page you are reading"
+                data-testid="source-open-pdf"
+              >
+                Open the PDF ↗
+              </a>
             )}
             {source.url && !source.deletedAt && (
               <button
@@ -602,8 +660,9 @@ export function SourceView({
         {detail.rereadable && !version && !source.deletedAt && !notice && (
           <div className="source-notice" role="note" data-testid="source-reread">
             <span>
-              This page was read by an earlier Noema. Formulas and tables now come out better: read it again from the
-              copy kept, without going online. What you asked stays with this version.
+              {shown.file
+                ? 'This PDF was read by an earlier Noema, which now reads PDFs better: read it again from the file kept, without going online. What you asked stays with this version.'
+                : 'This page was read by an earlier Noema. Formulas and tables now come out better: read it again from the copy kept, without going online. What you asked stays with this version.'}
             </span>
             <button type="button" onClick={() => void readAgain(true)} disabled={busy !== null}>
               {busy ?? 'Read it again'}
@@ -619,8 +678,9 @@ export function SourceView({
           </div>
         )}
         <div
-          className={`source-text${titleInText ? ' title-in-text' : ''}`}
+          className={`source-text${titleInText ? ' title-in-text' : ''}${shown.file ? ' source-pdf' : ''}`}
           ref={text}
+          onClick={shown.file ? openPageClicked : undefined}
           data-version-id={shown.id}
           data-testid="source-text"
         >

@@ -572,19 +572,39 @@ export class Repo {
   }
 
   private getVersion(id: string): (SourceVersion & { hash: string }) | null {
-    const r = this.db.sql.prepare('SELECT * FROM source_version WHERE id = ?').get(id) as Row | undefined;
+    // Not the kept page or file itself (`raw`): a PDF can be megabytes.
+    const r = this.db.sql
+      .prepare(
+        `SELECT id, source_id, seq, content, content_hash, origin, fetched_url, media_type, file_name, created_at,
+           ${RAW_BYTES} AS raw_bytes
+         FROM source_version WHERE id = ?`,
+      )
+      .get(id) as Row | undefined;
     return r
       ? {
           id: r.id as string,
           sourceId: r.source_id as string,
           seq: r.seq as number,
           content: r.content as string,
-          origin: r.origin as SourceVersion['origin'],
+          origin: originOf(r),
           fetchedUrl: (r.fetched_url as string | null) ?? null,
+          file:
+            r.media_type === 'application/pdf'
+              ? { type: 'application/pdf', name: (r.file_name as string | null) ?? null, bytes: Number(r.raw_bytes ?? 0) }
+              : null,
           createdAt: r.created_at as string,
           hash: r.content_hash as string,
         }
       : null;
+  }
+
+  /** The file kept with a version of a source (a PDF), to open it. */
+  versionFile(sourceId: string, versionId: string): { bytes: Buffer; type: string; name: string | null } | null {
+    const r = this.db.sql
+      .prepare('SELECT raw, media_type, file_name FROM source_version WHERE id = ? AND source_id = ?')
+      .get(versionId, sourceId) as Row | undefined;
+    if (!r || r.media_type !== 'application/pdf' || typeof r.raw !== 'string') return null;
+    return { bytes: Buffer.from(r.raw, 'base64'), type: r.media_type, name: (r.file_name as string | null) ?? null };
   }
 
   /** A new source with its first version. Idempotent on the id. */
@@ -606,7 +626,11 @@ export class Repo {
         .run(id, notebookId, init.title.trim() || 'Untitled source', init.url, t, t);
       this.insertVersion(id, 1, init.version, t);
       this.indexSource(id);
-      this.logEvent('source.added', id, { origin: init.version.origin, chars: init.version.content.length });
+      this.logEvent('source.added', id, {
+        origin: init.version.origin,
+        chars: init.version.content.length,
+        ...(init.version.pages !== undefined ? { pages: init.version.pages } : {}),
+      });
       return { source: this.getSource(id) as Source, created: true };
     });
   }
@@ -633,10 +657,25 @@ export class Repo {
   private insertVersion(sourceId: string, seq: number, v: NewSourceVersion, t: string): void {
     this.db.sql
       .prepare(
-        `INSERT INTO source_version (id, source_id, seq, content, content_hash, origin, fetched_url, raw, extractor, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO source_version (id, source_id, seq, content, content_hash, origin, fetched_url, raw, extractor,
+           media_type, file_name, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(ulid(), sourceId, seq, v.content, contentHash(v.content), v.origin, v.fetchedUrl, v.raw, v.extractor, t);
+      .run(
+        ulid(),
+        sourceId,
+        seq,
+        v.content,
+        contentHash(v.content),
+        // A file given is stored as given ('paste'): see migration 014.
+        v.origin === 'file' ? 'paste' : v.origin,
+        v.fetchedUrl,
+        v.raw,
+        v.extractor,
+        v.mediaType ?? null,
+        v.fileName ?? null,
+        t,
+      );
   }
 
   renameSource(id: string, title: string): Source {
@@ -660,20 +699,29 @@ export class Repo {
     return this.getSource(id) as Source;
   }
 
-  /** A version of a source (the latest by default), with the threads asked about its passages. */
-  /** The page the latest version was read from, as kept, and what read it. */
-  latestPage(sourceId: string): { raw: string; extractor: string; origin: 'paste' | 'url'; fetchedUrl: string | null } | null {
+  /** The page or file the latest version was read from, as kept, and what read it. */
+  latestPage(sourceId: string): {
+    raw: string;
+    extractor: string;
+    origin: SourceVersion['origin'];
+    fetchedUrl: string | null;
+    mediaType: string | null;
+    fileName: string | null;
+  } | null {
     const r = this.db.sql
       .prepare(
-        `SELECT raw, extractor, origin, fetched_url FROM source_version WHERE source_id = ? ORDER BY seq DESC LIMIT 1`,
+        `SELECT raw, extractor, origin, fetched_url, media_type, file_name
+         FROM source_version WHERE source_id = ? ORDER BY seq DESC LIMIT 1`,
       )
       .get(sourceId) as Row | undefined;
     if (!r || !r.raw || !r.extractor) return null;
     return {
       raw: r.raw as string,
       extractor: r.extractor as string,
-      origin: r.origin as 'paste' | 'url',
+      origin: originOf(r),
       fetchedUrl: (r.fetched_url as string | null) ?? null,
+      mediaType: (r.media_type as string | null) ?? null,
+      fileName: (r.file_name as string | null) ?? null,
     };
   }
 
@@ -686,8 +734,12 @@ export class Repo {
       .run(extractor, sourceId);
   }
 
-  /** `extractor`: the one this Noema reads pages with, to say whether the latest version can be read better. */
-  sourceDetail(id: string, versionId?: string, extractor?: string): SourceDetail | null {
+  /**
+   * A version of a source (the latest by default), with the threads asked
+   * about its passages. `outdated` says whether a reader (by its name) is
+   * older than the one this Noema has, so the latest can be read better.
+   */
+  sourceDetail(id: string, versionId?: string, outdated?: (extractor: string) => boolean): SourceDetail | null {
     const source = this.getSource(id);
     if (!source) return null;
     const version = this.getVersion(versionId ?? source.latestVersionId);
@@ -729,8 +781,12 @@ export class Repo {
          WHERE v.source_id = ? AND a.version_id <> ? AND t.deleted_at IS NULL`,
       )
       .get(id, version.id) as { n: number };
-    const page = extractor ? this.latestPage(id) : null;
-    const rereadable = Boolean(page && page.extractor.startsWith('noema-html') && page.extractor !== extractor);
+    const latest = outdated
+      ? (this.db.sql
+          .prepare('SELECT extractor, raw IS NOT NULL AS kept FROM source_version WHERE source_id = ? ORDER BY seq DESC LIMIT 1')
+          .get(id) as { extractor: string | null; kept: number } | undefined)
+      : undefined;
+    const rereadable = Boolean(latest?.kept && latest.extractor && outdated?.(latest.extractor));
     return { source, version: shown, versions, threads, elsewhere: elsewhere.n, rereadable };
   }
 
@@ -3110,12 +3166,27 @@ export class Repo {
 /** A version as it is stored: the Markdown shown, and what it came from. */
 export interface NewSourceVersion {
   content: string;
-  origin: 'paste' | 'url';
+  origin: SourceVersion['origin'];
   fetchedUrl: string | null;
   /** The original HTML or text, kept so the text can be extracted again later. */
   raw: string | null;
   /** Which converter made `content` from `raw`. */
   extractor: string;
+  /** 'application/pdf' when `raw` is a PDF (base64). */
+  mediaType?: string | null;
+  fileName?: string | null;
+  /** Pages read, for a PDF (logged with the count of characters). */
+  pages?: number;
+}
+
+/** A PDF's size from its base64 in `raw`, in SQL. */
+const RAW_BYTES = `CASE WHEN media_type IS NULL OR raw IS NULL THEN 0 ELSE length(raw) * 3 / 4
+  - (CASE WHEN substr(raw, -2) = '==' THEN 2 WHEN substr(raw, -1) = '=' THEN 1 ELSE 0 END) END`;
+
+/** A file the learner gave is stored as given ('paste') with its name and type: see migration 014. */
+function originOf(r: Row): SourceVersion['origin'] {
+  if (r.origin === 'url') return 'url';
+  return r.media_type ? 'file' : 'paste';
 }
 
 function contentHash(text: string): string {

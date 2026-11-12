@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@noema/core": "workspace:*",
+    "pdfjs-dist": "6.2.108",
     "zod": "^3.25.0"
   }
 }

@@ -2,8 +2,12 @@
 // text items. Kept off the main thread so a large or broken file cannot hold
 // up answers being streamed, and so it can be stopped after a time limit.
 // readPdfPages is also called directly when a worker cannot be started.
+//
+// Only text is read, so pdf.js is loaded without its native drawing package
+// (@napi-rs/canvas): it would be loaded into the server for nothing, and on
+// the founder's Mac reading failed in the server while it worked in a script.
 
-import { createRequire } from 'node:module';
+import { createRequire, registerHooks } from 'node:module';
 import { dirname, join } from 'node:path';
 import { parentPort, workerData } from 'node:worker_threads';
 import type { PdfPageText, PdfTextItem } from '@noema/core';
@@ -33,10 +37,63 @@ interface RawItem {
   width?: number;
 }
 
+/**
+ * Enough of DOMMatrix for pdf.js to load: it builds one when it is imported,
+ * and uses them only to draw pages.
+ */
+class TextOnlyMatrix {
+  a = 1;
+  b = 0;
+  c = 0;
+  d = 1;
+  e = 0;
+  f = 0;
+  constructor(init?: number[]) {
+    if (!Array.isArray(init) || init.length < 6) return;
+    const [a = 1, b = 0, c = 0, d = 1, e = 0, f = 0] = init;
+    Object.assign(this, { a, b, c, d, e, f });
+  }
+  multiplySelf(m: TextOnlyMatrix): this {
+    const { a, b, c, d, e, f } = this;
+    this.a = a * m.a + c * m.b;
+    this.b = b * m.a + d * m.b;
+    this.c = a * m.c + c * m.d;
+    this.d = b * m.c + d * m.d;
+    this.e = a * m.e + c * m.f + e;
+    this.f = b * m.e + d * m.f + f;
+    return this;
+  }
+  translateSelf(x = 0, y = 0): this {
+    return this.multiplySelf(new TextOnlyMatrix([1, 0, 0, 1, x, y]));
+  }
+  scaleSelf(x = 1, y = x): this {
+    return this.multiplySelf(new TextOnlyMatrix([x, 0, 0, y, 0, 0]));
+  }
+}
+
+let prepared = false;
+
+/** Load pdf.js for reading text: a stand-in for its native drawing package, and a DOMMatrix if there is none. */
+function prepareForText(): void {
+  if (prepared) return;
+  prepared = true;
+  const stub = new URL('./no-canvas.cjs', import.meta.url).href;
+  registerHooks({
+    resolve(specifier, context, next) {
+      if (specifier === '@napi-rs/canvas') return { url: stub, format: 'commonjs', shortCircuit: true };
+      return next(specifier, context);
+    },
+  });
+  const g = globalThis as Record<string, unknown>;
+  g.DOMMatrix ??= TextOnlyMatrix;
+  g.Path2D ??= class {};
+}
+
 export async function readPdfPages(data: Uint8Array): Promise<PdfWorkerResult | PdfWorkerFailure> {
   let pdfjs: typeof import('pdfjs-dist/legacy/build/pdf.mjs');
   let root: string;
   try {
+    prepareForText();
     pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
     root = dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'));
   } catch (err) {

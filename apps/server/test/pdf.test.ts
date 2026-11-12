@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
+import { createRequire } from 'node:module';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +9,7 @@ import { after, before, test } from 'node:test';
 import { type RefetchResponse, type SearchResponse, type Source, type SourceDetail, ulid } from '@noema/core';
 import { importPage, readingAddresses } from '../src/ingest/fetch.ts';
 import { MAX_PDF_BYTES, PDF_EXTRACTOR, readPdf } from '../src/ingest/pdf.ts';
+import { readPdfPages } from '../src/ingest/pdf-worker.ts';
 import { Db } from '../src/store/db.ts';
 import { Repo } from '../src/store/repo.ts';
 import { api, newThread, startServer, type TestServer } from './helpers.ts';
@@ -137,6 +139,13 @@ test('when no worker thread can be started here, the PDF is read on the main thr
   assert.equal(r.title, 'Week 5: Optimisation');
   assert.equal(told.length, 1);
   assert.match(told[0] as string, /no-such-worker|Cannot find|MODULE_NOT_FOUND/);
+});
+
+test('pdf.js is loaded for text only: its native drawing package is never loaded', async () => {
+  const r = await readPdfPages(SLIDES);
+  assert.equal(r.ok, true);
+  const fromPdfjs = createRequire(createRequire(import.meta.url).resolve('pdfjs-dist/legacy/build/pdf.mjs'));
+  assert.deepEqual(fromPdfjs('@napi-rs/canvas'), {});
 });
 
 test('why a PDF could not be read is kept for the log, not shown', async () => {

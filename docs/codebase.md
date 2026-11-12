@@ -64,7 +64,7 @@ Imported by both the server and the web app. No I/O.
 | `src/llm/settings.ts` | Which model and key; the key saved in `data/settings.json`, checked with the provider before saving |
 | `src/llm/fake.ts` | The fake model used by every test |
 | `src/ingest/fetch.ts` | Reading a web page by its address (arXiv from its HTML version, its PDF only when there is none; a PDF at any address) |
-| `src/ingest/pdf.ts`, `pdf-worker.ts` | Reading a PDF: pdf.js in a worker thread with a time limit (on the main thread if no worker can start); the file kept as base64 |
+| `src/ingest/pdf.ts`, `pdf-worker.ts`, `no-canvas.cjs` | Reading a PDF: pdf.js in a worker thread with a time limit (on the main thread if no worker can start), loaded without its native drawing package; the file kept as base64 |
 | `src/log.ts` | One JSON line per event on stdout; never message text or keys |
 | `test/` | Tests over real HTTP and SQLite, one file per area (`chat`, `branches`, `notebook`, `sources`, `search`, `trash`, …) |
 

@@ -67,3 +67,14 @@ The founder added a course PDF on his Mac and got "it could not be read as a PDF
 - **Fix.** The worker says it is ready before reading. If it cannot start, the PDF is read on the main thread and the log says why (`pdf read without a worker thread`). A worker that started and then failed is still the file's fault. Every PDF not read is logged with pdf.js's own reason (`pdf not read`), and pdf.js now gets its own copy of the bytes.
 - **`pnpm pdf:check <file.pdf>`** reads PDFs the way Noema does, on that computer's Node, and prints counts or the reason.
 - **Tests.** 2 more: a worker module that cannot load falls back to the main thread and says so; the reason for a broken PDF is kept for the log.
+
+## Then: works in a script, not in the app
+
+`pnpm pdf:check` on the founder's Mac (Node 26.8.1) read his 62-page course deck: 0 pages without text, 151 headings, 219 list items, 1.4 s. Adding the same PDF in the app still failed. With pdf.js now installed, his checkout was run on Linux through the bridge: the server's log said `ReferenceError: DOMMatrix is not defined`. pdf.js 6, when imported in Node, loads its native drawing package (`@napi-rs/canvas`) and builds a DOMMatrix from it; there the package's Mac binary could not load, so importing pdf.js failed.
+
+- **Fix.** pdf.js is loaded for text only:
+  - `module.registerHooks` gives it an empty stand-in (`no-canvas.cjs`) for that package;
+  - a small DOMMatrix is defined if there is none;
+  - no native code is loaded into the server.
+- **Test.** pdf.js sees the stand-in, not the package.
+- **Not proven:** that this is what failed in the app on his Mac. The script there loaded the native package fine, so the app's failure may have another cause. The terminal's `pdf not read` line will say, if it still fails.

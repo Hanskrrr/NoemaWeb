@@ -3,10 +3,11 @@
 //   [[fail:KIND]]     fail before the first token with that error kind
 //   [[error-midway]]  fail with a network error halfway through the answer
 //   [[slow]]          stream slowly (for reload and stop tests)
+//   [[no-judge]]      the "asked before" check by meaning fails
 //   [[tex]]           answer with math written \( … \) and \[ … \], as many models do
 // Asked again (a revision after the first), it adds a line saying which one.
 
-import type { ErrorKind } from '@noema/core';
+import { type ErrorKind, subjectTokens } from '@noema/core';
 import { type ModelProvider, ProviderError, type StreamEvent, type StreamRequest, sleep } from './provider.ts';
 
 export function fakeAnswer(question: string): string {
@@ -34,6 +35,41 @@ export function fakeAnswer(question: string): string {
     '| Forward | $O(n)$ |',
     '| ~~Backward~~ | 3~5 ms or 4~6 ms |',
   ].join('\n');
+}
+
+// The fake judge of "asked before" knows a few synonyms, so tests can ask the
+// same thing in words the word matcher cannot connect.
+const SYNONYMS: Record<string, string> = {
+  heavens: 'sky',
+  azure: 'blue',
+  automobile: 'car',
+  quick: 'fast',
+  天空: 'sky',
+  蓝色: 'blue',
+};
+
+function meaningOf(text: string): Set<string> {
+  let t = text.toLowerCase();
+  for (const [word, same] of Object.entries(SYNONYMS)) t = t.split(word).join(` ${same} `);
+  return new Set(subjectTokens(t).map((k) => k.key));
+}
+
+/** Reads the list as the real prompt writes it, and answers as the real model is asked to. */
+export function fakeVerdict(prompt: string): string {
+  const asked = /\nNew question: ([\s\S]*)$/.exec(prompt)?.[1] ?? '';
+  if (asked.includes('[[no-judge]]')) throw new ProviderError('unavailable', 'fake failure: unavailable');
+  const mine = meaningOf(asked.replace(/It is asked about this passage:/, ' '));
+  const same: number[] = [];
+  const related: number[] = [];
+  for (const m of prompt.matchAll(/^(\d+)\. Q: (.*?)(?: \| passage: "(.*?)")?(?: \| answer in short: .*?)?(?: \| thread: .*)?$/gm)) {
+    const theirs = meaningOf(`${m[2]} ${m[3] ?? ''}`);
+    const shared = [...mine].filter((k) => theirs.has(k)).length;
+    const either = new Set([...mine, ...theirs]).size;
+    const alike = either > 0 ? shared / either : 0;
+    if (alike >= 0.6) same.push(Number(m[1]));
+    else if (alike >= 0.3) related.push(Number(m[1]));
+  }
+  return JSON.stringify({ same, related });
 }
 
 /** Math with LaTeX's own delimiters, inline, displayed, in a quote and in code. */
@@ -137,6 +173,11 @@ export class FakeProvider implements ModelProvider {
         await sleep(slow ? Math.max(this.delayMs, 25) : this.delayMs, req.signal);
         yield { type: 'text', text: part };
       }
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
+    if (req.purpose === 'asked') {
+      yield { type: 'text', text: fakeVerdict(question) };
       yield { type: 'finish', reason: 'stop' };
       return;
     }

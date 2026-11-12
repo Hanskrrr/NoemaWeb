@@ -16,6 +16,7 @@ Where things are and what each file does. How they fit together is in [architect
 | `.env.example` | Optional settings; the app works without a `.env` |
 | `.github/workflows/ci.yml` | CI on pull requests and `main`: typecheck, lint, test, e2e on Node 22 and 24 |
 | `scripts/dev.ts` | `pnpm dev`: the server (restarting on change) and Vite, together |
+| `scripts/asked-check.ts` | `pnpm asked:check`: replay a notebook's questions through "asked before" and print what would have been flagged |
 | `data/` | **Not in git.** The notebook (`noema.db`), daily backups and the model key (`settings.json`) |
 
 ## `packages/core`: shared, pure, tested
@@ -54,6 +55,7 @@ Imported by both the server and the web app. No I/O.
 | `src/chat/prompt.ts` | The system prompt |
 | `src/chat/titles.ts`, `headlines.ts` | Titles for new threads, and a one-line headline for each exchange, written by the model afterwards |
 | `src/chat/notes.ts` | Rewriting a thread as a note, and AI suggestions for a block |
+| `src/chat/asked.ts` | "Asked before" by meaning: the chat model reads the earlier questions and says whether the new one was asked |
 | `src/chat/merges.ts` | Drafting what a thread merged into another carries |
 | `src/llm/provider.ts` | What the server needs from a model: a stream of text, usage, a finish reason, named errors |
 | `src/llm/openai-compatible.ts` | The streaming client for DeepSeek and other OpenAI-compatible providers (retries only before the first token) |
@@ -77,7 +79,7 @@ React 19 and Vite, no router or state library. One stylesheet with light and dar
 | `src/ThreadView.tsx` | A thread: messages, the composer, select to ask a side question, Back, split-off, delete, drafts of new threads |
 | `src/MessageView.tsx`, `Composer.tsx` | One question or answer (Ask again, and the ‹ 1 / 2 › switch between answers); the box to ask in |
 | `src/Pinned.tsx` | The pinned passages at the top of a thread |
-| `src/AskedBefore.tsx` | The reminder above the box that a question was asked before |
+| `src/AskedBefore.tsx`, `asked.ts` | The reminder above the box that a question was asked before; putting together what words and the model found |
 | `src/ExportImport.tsx` | Export (JSON and Markdown) and import |
 | `src/SourceView.tsx`, `AddSource.tsx`, `reading.ts` | The reading pane beside the thread, adding a source, and which threads belong to which source |
 | `src/NoteView.tsx`, `RefPane.tsx`, `citations.ts` | A note of blocks; a citation's exchange beside the note |

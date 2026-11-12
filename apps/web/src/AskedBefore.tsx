@@ -1,12 +1,15 @@
 // "You asked this before": while a question is being written in a new
 // thread, a side question or a question about a source, the notebook is
 // checked for an earlier exchange that already asked it, so the learner can
-// go there (or ask there) instead of adding another thread. It never blocks:
-// asking here anyway is just sending the question.
+// go there (or ask there) instead of adding another thread. Two checks: words
+// are compared at once, and when typing pauses the model reads the earlier
+// questions for meaning. It never blocks: asking here anyway is just sending
+// the question.
 
 import { type AskedHit, readableQuote } from '@noema/core';
 import { useEffect, useRef, useState } from 'react';
 import { api } from './api.ts';
+import { mergeAsked } from './asked.ts';
 
 export type AskedPlace = 'thread' | 'branch' | 'source';
 
@@ -45,6 +48,8 @@ export function AskedBefore({
   onShowing?: (hit: AskedHit | null) => void;
 }) {
   const [hits, setHits] = useState<AskedHit[]>([]);
+  // What the model found, for the text it read. Kept while the next reading is on its way, so the reminder does not blink.
+  const [meaning, setMeaning] = useState<AskedHit[]>([]);
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
   const reported = useRef(new Set<string>());
 
@@ -67,7 +72,29 @@ export function AskedBefore({
     };
   }, [notebookId, text, passage, threadId]);
 
-  const shown = hits.filter((h) => !dismissed.has(h.messageId));
+  // By meaning: once typing has paused for a moment, only with something typed,
+  // and not when the words already say it is the same question (no call needed).
+  const literal = hits.some((h) => h.strength === 'same');
+  useEffect(() => {
+    if (text.trim().length < 2) {
+      setMeaning([]);
+      return;
+    }
+    if (literal) return;
+    let stale = false;
+    const t = setTimeout(() => {
+      api.askedMeaning(notebookId, { text, ...(passage ? { passage } : {}), ...(threadId ? { threadId } : {}) }).then(
+        (r) => !stale && r.checked && setMeaning(r.hits),
+        () => {},
+      );
+    }, 1000);
+    return () => {
+      stale = true;
+      clearTimeout(t);
+    };
+  }, [notebookId, text, passage, threadId, literal]);
+
+  const shown = mergeAsked(hits, meaning).filter((h) => !dismissed.has(h.messageId));
   const top = shown[0] ?? null;
   const topId = top?.messageId ?? null;
   const topStrength = top?.strength ?? null;
@@ -77,7 +104,7 @@ export function AskedBefore({
     onShowing?.(top);
     if (topId && topStrength && !reported.current.has(topId)) {
       reported.current.add(topId);
-      api.askedEvent({ action: 'shown', strength: topStrength, place }).catch(() => {});
+      api.askedEvent({ action: 'shown', strength: topStrength, place, by: top?.by ?? 'words' }).catch(() => {});
     }
   }, [topId, topStrength]);
 
@@ -88,7 +115,7 @@ export function AskedBefore({
       <p className="asked-head">{top.strength === 'same' ? 'You asked this before' : 'You asked about this before'}</p>
       <ul>
         {shown.map((h) => (
-          <li key={h.messageId} data-testid="asked-hit" data-strength={h.strength}>
+          <li key={h.messageId} data-testid="asked-hit" data-strength={h.strength} data-by={h.by}>
             <div className="asked-what">
               <span className="asked-question">
                 “{h.passage ? short(h.passage, 90) : short(h.question, 120)}”
@@ -104,7 +131,7 @@ export function AskedBefore({
               <button
                 type="button"
                 onClick={() => {
-                  api.askedEvent({ action: 'opened', strength: h.strength, place }).catch(() => {});
+                  api.askedEvent({ action: 'opened', strength: h.strength, place, by: h.by }).catch(() => {});
                   onOpen(h);
                 }}
                 data-testid="asked-open"
@@ -116,7 +143,7 @@ export function AskedBefore({
                 className="quiet"
                 disabled={!canAsk}
                 onClick={() => {
-                  api.askedEvent({ action: 'asked_there', strength: h.strength, place }).catch(() => {});
+                  api.askedEvent({ action: 'asked_there', strength: h.strength, place, by: h.by }).catch(() => {});
                   onAskThere(h);
                 }}
                 title="Send your question in that thread, after what was already said there"
@@ -128,7 +155,7 @@ export function AskedBefore({
                 type="button"
                 className="quiet asked-dismiss"
                 onClick={() => {
-                  api.askedEvent({ action: 'dismissed', strength: h.strength, place }).catch(() => {});
+                  api.askedEvent({ action: 'dismissed', strength: h.strength, place, by: h.by }).catch(() => {});
                   setDismissed((s) => new Set(s).add(h.messageId));
                 }}
                 aria-label="Not this: hide the reminder"

@@ -4,7 +4,7 @@ How each push to GitHub (`Hanskrrr/NoemaWeb`) was made, so the next one can be m
 
 ## Next push: `notebook-features`, asked before
 
-- **What.** The commits on top of `5bb1ccb`: "asked before" (ADR 0020) and its docs. No migration; no force needed.
+- **What.** The commits on top of `5bb1ccb`: "asked before" by words and by the chat model reading for meaning (ADR 0020), `pnpm asked:check`, and their docs. No migration; no force needed.
 - **Checks before pushing.** See the 2026-11-11 handoff: `node --test`, Playwright in the Claude sandbox, tsc on the Mac. No notebook content in code, tests or docs.
 - **How.** A plain push from the Mac:
 

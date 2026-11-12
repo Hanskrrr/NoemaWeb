@@ -85,7 +85,52 @@ test('the Trash does not remind; what was done with a reminder is logged without
   const r = await api(s, 'POST', '/api/asked/events', { action: 'opened', strength: 'same', place: 'thread' });
   assert.equal(r.status, 200);
   const event = s.db.sql.prepare("SELECT data FROM event WHERE type = 'asked_before.opened'").get() as { data: string };
-  assert.deepEqual(JSON.parse(event.data), { strength: 'same', place: 'thread' });
+  assert.deepEqual(JSON.parse(event.data), { strength: 'same', place: 'thread', by: 'words' });
   assert.equal((await api(s, 'POST', '/api/asked/events', { action: 'nope', strength: 'same', place: 'thread' })).status, 400);
   assert.equal((await api(s, 'POST', `/api/notebooks/${ulid()}/asked`, { text: 'x' })).status, 404);
+});
+
+// By meaning: the model reads the earlier questions. (The fake model knows
+// that "heavens" is the sky and "azure" is blue; the word matcher does not.)
+
+const meaning = async (body: { text: string; passage?: string; threadId?: string }) =>
+  (await api<{ hits: AskedHit[]; checked: boolean }>(s, 'POST', `/api/notebooks/${notebookId}/asked/meaning`, body)).json;
+
+test('the same question in quite different words is found by meaning, not by words', async () => {
+  const sky = await newThread(s);
+  const q = await ask(sky.threadId, 'Why is the sky blue?');
+  assert.deepEqual(await asked({ text: 'What makes the heavens azure?' }), [], 'no word in common');
+  const r = await meaning({ text: 'What makes the heavens azure?' });
+  assert.equal(r.checked, true);
+  assert.equal(r.hits.length, 1);
+  assert.equal(r.hits[0]?.messageId, q.user.id);
+  assert.equal(r.hits[0]?.strength, 'same');
+  assert.equal(r.hits[0]?.by, 'meaning');
+  assert.equal(r.hits[0]?.question, 'Why is the sky blue?');
+  // In another language too.
+  assert.equal((await meaning({ text: '天空为什么是蓝色' })).hits[0]?.messageId, q.user.id);
+  // Its subject, another question: related.
+  assert.equal((await meaning({ text: 'Are the heavens red?' })).hits[0]?.strength, 'related');
+  // A new question: nothing, and it was checked.
+  assert.deepEqual(await meaning({ text: 'How do vaccines train the immune system?' }), { hits: [], checked: true });
+  // Not from the thread itself, nor in the Trash.
+  assert.deepEqual((await meaning({ text: 'What makes the heavens azure?', threadId: sky.threadId })).hits, []);
+  await api(s, 'DELETE', `/api/threads/${sky.threadId}`);
+  assert.deepEqual((await meaning({ text: 'What makes the heavens azure?' })).hits, []);
+  await api(s, 'POST', `/api/threads/${sky.threadId}/restore`);
+});
+
+test('when the model cannot be asked, it says so and nothing breaks; what it judged is logged without words', async () => {
+  assert.deepEqual(await meaning({ text: 'What makes the heavens azure? [[no-judge]]' }), { hits: [], checked: false });
+  assert.deepEqual(await meaning({ text: '   ' }), { hits: [], checked: false });
+  assert.equal((await api(s, 'POST', `/api/notebooks/${ulid()}/asked/meaning`, { text: 'x' })).status, 404);
+  const rows = s.db.sql.prepare("SELECT data FROM event WHERE type = 'asked_before.judged'").all() as Array<{
+    data: string;
+  }>;
+  assert.ok(rows.length > 0);
+  for (const row of rows) {
+    assert.deepEqual(Object.keys(JSON.parse(row.data)).sort(), ['entries', 'model', 'related', 'same']);
+  }
+  const r = await api(s, 'POST', '/api/asked/events', { action: 'opened', strength: 'same', place: 'thread', by: 'meaning' });
+  assert.equal(r.status, 200);
 });

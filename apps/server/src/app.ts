@@ -40,6 +40,7 @@ import {
   UpdateNoteRequest,
   UseRevisionRequest,
 } from '@noema/core';
+import { AskedJudge, askedHit } from './chat/asked.ts';
 import { Generations } from './chat/generation.ts';
 import { fullTranscript, MergeWriter } from './chat/merges.ts';
 import { NoteWriter, Suggester } from './chat/notes.ts';
@@ -80,6 +81,7 @@ export interface App {
 export function createApp(deps: AppDeps): App {
   const { repo, models, log } = deps;
   const titler = new Titler({ repo, models, log });
+  const askedJudge = new AskedJudge({ repo, models, log });
   const headliner = new Headliner({ repo, models, log });
   const generations = new Generations({ repo, models, titler, headliner, config: deps.config, log });
   const notes = new NoteWriter({ repo, models, maxOutputTokens: deps.config.maxOutputTokens, log });
@@ -635,29 +637,23 @@ export function createApp(deps: AppDeps): App {
     });
     const hits = found.flatMap((m) => {
       const c = byId.get(m.id);
-      return c
-        ? [
-            {
-              messageId: c.id,
-              threadId: c.threadId,
-              threadTitle: c.title,
-              question: c.question,
-              passage: c.passage ?? null,
-              headline: c.headline ?? null,
-              askedAt: c.askedAt,
-              strength: m.strength,
-              terms: m.terms,
-            },
-          ]
-        : [];
+      return c ? [askedHit(c, m.strength, 'words', m.terms)] : [];
     });
     sendJson(ctx.res, 200, { hits });
+  });
+
+  // The same, by meaning: the model reads the earlier questions. Slower, so asked once typing pauses.
+  router.on('POST', '/api/notebooks/:id/asked/meaning', async (ctx) => {
+    const notebookId = ctx.params.id as string;
+    if (!repo.getNotebook(notebookId)) throw notFound('notebook');
+    const body = await ctx.body(AskedRequest);
+    sendJson(ctx.res, 200, await askedJudge.judge(notebookId, body));
   });
 
   // For the measure "reminders that were followed": what was done with one, never the words.
   router.on('POST', '/api/asked/events', async (ctx) => {
     const body = await ctx.body(AskedEventRequest);
-    repo.logEvent(`asked_before.${body.action}`, null, { strength: body.strength, place: body.place });
+    repo.logEvent(`asked_before.${body.action}`, null, { strength: body.strength, place: body.place, by: body.by });
     sendJson(ctx.res, 200, { ok: true });
   });
 

@@ -1426,7 +1426,7 @@ export function DraftView({
     const id = current.thread;
     // Asked here although a reminder was showing: counted, to learn whether reminders help.
     if (reminder.current) {
-      api.askedEvent({ action: 'asked_anyway', strength: reminder.current.strength, place }).catch(() => {});
+      api.askedEvent({ action: 'asked_anyway', strength: reminder.current.strength, place, by: reminder.current.by }).catch(() => {});
     }
     try {
       if (source) {

@@ -4,6 +4,7 @@
 import {
   ApiError,
   type AskedEventRequest,
+  AskedMeaningResponse,
   type AskedRequest,
   AskedResponse,
   AskResponse,
@@ -124,7 +125,10 @@ export const api = {
   /** Earlier exchanges that already asked what is being typed. */
   asked: (notebookId: string, body: AskedRequest) =>
     call(AskedResponse, 'POST', `/api/notebooks/${notebookId}/asked`, body),
-  askedEvent: (body: AskedEventRequest) => call(Ok, 'POST', '/api/asked/events', body),
+  /** The same, read for meaning by the model: slower, asked once typing pauses. */
+  askedMeaning: (notebookId: string, body: AskedRequest) =>
+    call(AskedMeaningResponse, 'POST', `/api/notebooks/${notebookId}/asked/meaning`, body),
+  askedEvent: (body: z.input<typeof AskedEventRequest>) => call(Ok, 'POST', '/api/asked/events', body),
   openBranches: (notebookId: string) =>
     call(OpenBranchesResponse, 'GET', `/api/notebooks/${notebookId}/open-branches`),
   setAside: (threadId: string) => call(Ok, 'POST', `/api/threads/${threadId}/set-aside`, {}),

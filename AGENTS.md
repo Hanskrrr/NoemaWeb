@@ -19,7 +19,7 @@ Don't build these, even where older docs describe them:
 
 - Accounts, sync, multiple devices, a mobile layout.
 - PDF parsing (a stretch goal: the pdf.js text layer).
-- Embeddings, semantic search, concept extraction, knowledge graphs, mastery states.
+- Embeddings, semantic search, concept extraction, knowledge graphs, mastery states. (One exception the founder made: the chat model judges whether a question was asked before, ADR 0020.)
 - Understanding-record forms, quizzes, return lines, checkout, task limits or timers.
 - Plugins, animation, the step language.
 - Imports from Obsidian or ChatGPT.

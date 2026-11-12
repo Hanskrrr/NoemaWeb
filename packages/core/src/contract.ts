@@ -687,18 +687,23 @@ export const AskedHit = z.object({
   /** The one-line summary of the exchange. */
   headline: z.string().nullable(),
   askedAt: z.string(),
-  /** `same`: the same question as far as words can tell; `related`: its subject was asked about there. */
+  /** `same`: the same question; `related`: its subject was asked about there. */
   strength: z.enum(['same', 'related']),
-  /** The subject words they share. */
+  /** How it was found: by comparing words (at once), or by the model reading for meaning (a moment later). */
+  by: z.enum(['words', 'meaning']),
+  /** The subject words they share (found by words). */
   terms: z.array(z.string()),
 });
 export type AskedHit = z.infer<typeof AskedHit>;
 export const AskedResponse = z.object({ hits: z.array(AskedHit) });
+/** The model's reading. `checked` is false when no model could be asked: then only words were compared. */
+export const AskedMeaningResponse = z.object({ hits: z.array(AskedHit), checked: z.boolean() });
 
 /** What the learner did with a reminder. Never the words. */
 export const AskedEventRequest = z.object({
   action: z.enum(['shown', 'opened', 'asked_there', 'asked_anyway', 'dismissed']),
   strength: z.enum(['same', 'related']),
+  by: z.enum(['words', 'meaning']).default('words'),
   /** Where: a new thread, a side question, or a question about a source. */
   place: z.enum(['thread', 'branch', 'source']),
 });

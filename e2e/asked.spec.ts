@@ -97,3 +97,20 @@ test('a thread that already has a note says so before writing another', async ({
   await page.goto(`/#/t/${threadId}`);
   await expect(page.getByTestId('thread-note-open')).toHaveCount(2);
 });
+
+test('the same question in quite different words is found a moment later, by meaning', async ({ page, request }) => {
+  // The test model knows that "heavens" is the sky and "azure" is blue; comparing words finds nothing.
+  const first = await freshThread(request);
+  await page.goto('/');
+  await answered(page, 'Why is the sky blue?');
+  await showList(page, 'threads');
+  await page.getByTestId('new-thread').click();
+  await page.getByTestId('composer').fill('What makes the heavens azure?');
+  const hit = page.getByTestId('asked-hit').first();
+  await expect(hit).toContainText('Why is the sky blue?');
+  await expect(hit).toHaveAttribute('data-by', 'meaning');
+  await expect(hit).toHaveAttribute('data-strength', 'same');
+  await hit.getByTestId('asked-there').click();
+  await expect(page).toHaveURL(new RegExp(`#/t/${first}$`));
+  await expect(page.locator('[data-testid=message][data-role=user]')).toHaveCount(2);
+});

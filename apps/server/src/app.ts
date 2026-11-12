@@ -83,6 +83,20 @@ export interface App {
 
 export function createApp(deps: AppDeps): App {
   const { repo, models, log } = deps;
+  // A worker thread could not be started here: the PDF was read on the main thread instead.
+  const pdfFallback = (detail: string) => log.warn('pdf read without a worker thread', { detail });
+  /** Read a page for a source, or a reason the learner can act on (the cause is logged). */
+  const readPage = async (url: string) => {
+    try {
+      return await importPage(url, { onPdfFallback: pdfFallback });
+    } catch (err) {
+      if (err instanceof FetchProblem) {
+        if (err.detail) log.warn('page not read', { reason: err.message, detail: err.detail });
+        throw new HttpError(400, 'invalid', `That address could not be read: ${err.message}.`);
+      }
+      throw err;
+    }
+  };
   const titler = new Titler({ repo, models, log });
   const askedJudge = new AskedJudge({ repo, models, log });
   const headliner = new Headliner({ repo, models, log });
@@ -365,9 +379,12 @@ export function createApp(deps: AppDeps): App {
     if (bytes.byteLength === 0) throw new HttpError(400, 'invalid', 'That file could not be read: it is empty.');
     let pdf: Awaited<ReturnType<typeof readPdf>>;
     try {
-      pdf = await readPdf(bytes);
+      pdf = await readPdf(bytes, { onFallback: pdfFallback });
     } catch (err) {
-      if (err instanceof PdfProblem) throw new HttpError(400, 'invalid', `That file could not be read: ${err.message}.`);
+      if (err instanceof PdfProblem) {
+        log.warn('pdf not read', { reason: err.message, detail: err.detail, bytes: bytes.byteLength });
+        throw new HttpError(400, 'invalid', `That file could not be read: ${err.message}.`);
+      }
       throw err;
     }
     const name = query.name ? cleanFileName(query.name) || null : null;
@@ -436,9 +453,12 @@ export function createApp(deps: AppDeps): App {
     let content: string;
     if (isPdf) {
       try {
-        content = (await readPdf(rawToPdf(page.raw))).markdown;
+        content = (await readPdf(rawToPdf(page.raw), { onFallback: pdfFallback })).markdown;
       } catch (err) {
-        if (err instanceof PdfProblem) throw new HttpError(400, 'invalid', `It could not be read again: ${err.message}.`);
+        if (err instanceof PdfProblem) {
+          log.warn('pdf not read', { reason: err.message, detail: err.detail });
+          throw new HttpError(400, 'invalid', `It could not be read again: ${err.message}.`);
+        }
         throw err;
       }
     } else {
@@ -851,16 +871,6 @@ function fetchedVersion(page: ImportedPage) {
 /** A file's name without its .pdf, as a title. */
 function withoutPdf(name: string): string {
   return name.replace(/\.pdf$/i, '').trim();
-}
-
-/** Read a page for a source, or a reason the learner can act on. */
-async function readPage(url: string) {
-  try {
-    return await importPage(url);
-  } catch (err) {
-    if (err instanceof FetchProblem) throw new HttpError(400, 'invalid', `That address could not be read: ${err.message}.`);
-    throw err;
-  }
 }
 
 /** A title for pasted text: its first heading, else its first line. */

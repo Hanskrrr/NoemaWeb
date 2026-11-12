@@ -17,6 +17,7 @@ Where things are and what each file does. How they fit together is in [architect
 | `.github/workflows/ci.yml` | CI on pull requests and `main`: typecheck, lint, test, e2e on Node 22 and 24 |
 | `scripts/dev.ts` | `pnpm dev`: the server (restarting on change) and Vite, together |
 | `scripts/asked-check.ts` | `pnpm asked:check`: replay a notebook's questions through "asked before" and print what would have been flagged |
+| `scripts/pdf-check.ts` | `pnpm pdf:check <file.pdf>`: read PDFs as Noema does and print counts, or why one cannot be read |
 | `data/` | **Not in git.** The notebook (`noema.db`), daily backups and the model key (`settings.json`) |
 
 ## `packages/core`: shared, pure, tested
@@ -63,7 +64,7 @@ Imported by both the server and the web app. No I/O.
 | `src/llm/settings.ts` | Which model and key; the key saved in `data/settings.json`, checked with the provider before saving |
 | `src/llm/fake.ts` | The fake model used by every test |
 | `src/ingest/fetch.ts` | Reading a web page by its address (arXiv from its HTML version, its PDF only when there is none; a PDF at any address) |
-| `src/ingest/pdf.ts`, `pdf-worker.ts` | Reading a PDF: pdf.js in a worker thread with a time limit; the file kept as base64 |
+| `src/ingest/pdf.ts`, `pdf-worker.ts` | Reading a PDF: pdf.js in a worker thread with a time limit (on the main thread if no worker can start); the file kept as base64 |
 | `src/log.ts` | One JSON line per event on stdout; never message text or keys |
 | `test/` | Tests over real HTTP and SQLite, one file per area (`chat`, `branches`, `notebook`, `sources`, `search`, `trash`, …) |
 

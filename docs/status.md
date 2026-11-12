@@ -18,7 +18,7 @@ Also built along the way: **asked before**, a reminder when a question being wri
 
 ## How it is checked
 
-- 242 unit and integration tests (`pnpm test`) and 61 end-to-end tests (`pnpm e2e`), all with the fake model.
+- 244 unit and integration tests (`pnpm test`) and 61 end-to-end tests (`pnpm e2e`), all with the fake model.
 - The brief's acceptance tests are in the suite (see [codebase.md](codebase.md#e2e-the-app-end-to-end)).
 - Tried by the founder with DeepSeek on his Mac: connecting a key, streaming answers, prompt caching, titles and headlines, and reading a real arXiv paper (over 1,600 formulas, all rendered).
 

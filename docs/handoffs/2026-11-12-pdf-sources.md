@@ -58,3 +58,12 @@ The founder asked to finish PDFs, for M6: course material is mostly PDFs, and No
 1. On the Mac: `pnpm install` (adds pdf.js and updates `pnpm-lock.yaml`), `pnpm check`, then start Noema: migration 014 runs by itself (it only adds two columns). Then add the course PDFs.
 2. Commit `pnpm-lock.yaml`, and push when you choose (see `docs/push-log.md`).
 3. Whatever reads wrong in real slides becomes a test in `packages/core/test/pdf.test.ts` and a new `PDF_EXTRACTOR`.
+
+## Later the same day: the first real PDF
+
+The founder added a course PDF on his Mac and got "it could not be read as a PDF".
+
+- **Cause, as far as can be seen from here.** pdf.js was not installed yet (`pnpm install` had not been run), which should have said so. Instead the worker thread failed in a way that was reported as a broken file. Run with the same code on Linux, the worker said pdf.js is not installed, so the difference is the Mac's Node. Its version cannot be seen from the bridge.
+- **Fix.** The worker says it is ready before reading. If it cannot start, the PDF is read on the main thread and the log says why (`pdf read without a worker thread`). A worker that started and then failed is still the file's fault. Every PDF not read is logged with pdf.js's own reason (`pdf not read`), and pdf.js now gets its own copy of the bytes.
+- **`pnpm pdf:check <file.pdf>`** reads PDFs the way Noema does, on that computer's Node, and prints counts or the reason.
+- **Tests.** 2 more: a worker module that cannot load falls back to the main thread and says so; the reason for a broken PDF is kept for the log.

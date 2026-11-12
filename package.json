@@ -18,7 +18,8 @@
     "format": "biome check --write .",
     "format:check": "biome check .",
     "check": "pnpm typecheck && pnpm lint && pnpm test",
-    "asked:check": "node --disable-warning=ExperimentalWarning scripts/asked-check.ts"
+    "asked:check": "node --disable-warning=ExperimentalWarning scripts/asked-check.ts",
+    "pdf:check": "node --disable-warning=ExperimentalWarning scripts/pdf-check.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.0",

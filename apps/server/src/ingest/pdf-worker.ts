@@ -1,6 +1,7 @@
 // Runs in a worker thread: pdf.js reads one PDF and sends back each page's
 // text items. Kept off the main thread so a large or broken file cannot hold
 // up answers being streamed, and so it can be stopped after a time limit.
+// readPdfPages is also called directly when a worker cannot be started.
 
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -16,6 +17,14 @@ export interface PdfWorkerFailure {
   ok: false;
   /** 'password': the file is locked; 'broken': pdf.js could not read it; 'missing': pdf.js is not installed. */
   reason: 'password' | 'broken' | 'missing';
+  /** What went wrong, for the log: an error's name and message, never the file's text. */
+  detail?: string;
+}
+
+/** An error as one short line for the log. */
+export function describeError(err: unknown): string {
+  if (err instanceof Error) return `${err.name}${'code' in err ? ` ${String(err.code)}` : ''}: ${err.message}`.slice(0, 300);
+  return String(err).slice(0, 300);
 }
 
 interface RawItem {
@@ -24,17 +33,18 @@ interface RawItem {
   width?: number;
 }
 
-async function read(data: Uint8Array): Promise<PdfWorkerResult | PdfWorkerFailure> {
+export async function readPdfPages(data: Uint8Array): Promise<PdfWorkerResult | PdfWorkerFailure> {
   let pdfjs: typeof import('pdfjs-dist/legacy/build/pdf.mjs');
   let root: string;
   try {
     pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
     root = dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'));
-  } catch {
-    return { ok: false, reason: 'missing' };
+  } catch (err) {
+    return { ok: false, reason: 'missing', detail: describeError(err) };
   }
   const task = pdfjs.getDocument({
-    data,
+    // A copy: pdf.js takes the buffer it is given (it is detached afterwards).
+    data: data.slice(),
     // Text only: no fonts installed, no system fonts, no forms. (pdf.js 6 has no eval to turn off.)
     disableFontFace: true,
     useSystemFonts: false,
@@ -50,7 +60,8 @@ async function read(data: Uint8Array): Promise<PdfWorkerResult | PdfWorkerFailur
     doc = await task.promise;
   } catch (err) {
     await task.destroy();
-    return { ok: false, reason: err instanceof Error && err.name === 'PasswordException' ? 'password' : 'broken' };
+    const password = err instanceof Error && err.name === 'PasswordException';
+    return { ok: false, reason: password ? 'password' : 'broken', detail: describeError(err) };
   }
   try {
     const info = (await doc.getMetadata().catch(() => null))?.info as { Title?: unknown } | undefined;
@@ -75,8 +86,8 @@ async function read(data: Uint8Array): Promise<PdfWorkerResult | PdfWorkerFailur
       page.cleanup();
     }
     return { ok: true, title: typeof info?.Title === 'string' ? info.Title : null, pages };
-  } catch {
-    return { ok: false, reason: 'broken' };
+  } catch (err) {
+    return { ok: false, reason: 'broken', detail: describeError(err) };
   } finally {
     await task.destroy();
   }
@@ -84,8 +95,10 @@ async function read(data: Uint8Array): Promise<PdfWorkerResult | PdfWorkerFailur
 
 const port = parentPort;
 if (port) {
-  read(workerData as Uint8Array).then(
+  // Loaded and running: from here on a failure is the file's, not the worker's.
+  port.postMessage({ ready: true });
+  readPdfPages(workerData as Uint8Array).then(
     (result) => port.postMessage(result),
-    () => port.postMessage({ ok: false, reason: 'broken' } satisfies PdfWorkerFailure),
+    (err) => port.postMessage({ ok: false, reason: 'broken', detail: describeError(err) } satisfies PdfWorkerFailure),
   );
 }

@@ -130,6 +130,21 @@ test('a PDF that cannot be read says why, and adds nothing', async () => {
   await assert.rejects(readPdf(new Uint8Array(MAX_PDF_BYTES + 1)), /larger than 50 MB/);
 });
 
+test('when no worker thread can be started here, the PDF is read on the main thread, and that is said', async () => {
+  const told: string[] = [];
+  const missing = new URL('./fixtures/no-such-worker.ts', import.meta.url);
+  const r = await readPdf(SLIDES, { worker: missing, onFallback: (d) => told.push(d) });
+  assert.equal(r.title, 'Week 5: Optimisation');
+  assert.equal(told.length, 1);
+  assert.match(told[0] as string, /no-such-worker|Cannot find|MODULE_NOT_FOUND/);
+});
+
+test('why a PDF could not be read is kept for the log, not shown', async () => {
+  const err = await readPdf(new TextEncoder().encode('%PDF-1.7\nnot really a pdf at all')).catch((e) => e);
+  assert.equal(err.message, 'it could not be read as a PDF');
+  assert.match(err.detail, /^\w+(?: \w+)?: \S/);
+});
+
 test('reading a PDF that takes too long is stopped', async () => {
   await assert.rejects(readPdf(SLIDES, { timeoutMs: 1 }), /took too long/);
 });

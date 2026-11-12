@@ -6,6 +6,7 @@
 
 import { cleanFileName, htmlToMarkdown } from '@noema/core';
 import { looksLikePdf, MAX_PDF_BYTES, PDF_EXTRACTOR, PdfProblem, pdfToRaw, readPdf } from './pdf.ts';
+import { describeError } from './pdf-worker.ts';
 
 // 2: aligned equations (LaTeXML align) as one aligned block, not a table.
 // 3: pipes in a table cell's math written \vert and \Vert, so a norm keeps its cell;
@@ -13,9 +14,12 @@ import { looksLikePdf, MAX_PDF_BYTES, PDF_EXTRACTOR, PdfProblem, pdfToRaw, readP
 export const EXTRACTOR = 'noema-html-3';
 
 export class FetchProblem extends Error {
-  constructor(message: string) {
+  /** What went wrong underneath, for the log. */
+  readonly detail: string | undefined;
+  constructor(message: string, detail?: string) {
     super(message);
     this.name = 'FetchProblem';
+    this.detail = detail;
   }
 }
 
@@ -40,6 +44,8 @@ export interface FetchOptions {
   fetch?: typeof fetch;
   timeoutMs?: number;
   maxBytes?: number;
+  /** Passed on to readPdf: told when a PDF was read without a worker thread. */
+  onPdfFallback?: (detail: string) => void;
 }
 
 const ARXIV = /^https?:\/\/(?:www\.|export\.)?arxiv\.org\/(?:abs|pdf|html)\/([a-z.-]*\/?\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})(v\d+)?(?:\.pdf)?\/?(?:[?#].*)?$/i;
@@ -98,7 +104,10 @@ async function readCapped(res: Response, maxBytes: number): Promise<Uint8Array> 
   return out;
 }
 
-async function fetchOne(address: string, opts: Required<FetchOptions>): Promise<ImportedPage> {
+async function fetchOne(
+  address: string,
+  opts: Required<Omit<FetchOptions, 'onPdfFallback'>> & Pick<FetchOptions, 'onPdfFallback'>,
+): Promise<ImportedPage> {
   let res: Response;
   try {
     res = await opts.fetch(address, {
@@ -119,7 +128,7 @@ async function fetchOne(address: string, opts: Required<FetchOptions>): Promise<
   const download = type.includes('octet-stream') || type.includes('binary');
   if (type.includes('application/pdf') || /\.pdf(?:[?#]|$)/i.test(finalUrl) || download) {
     const bytes = await readCapped(res, MAX_PDF_BYTES);
-    if (looksLikePdf(bytes)) return readPdfPage(bytes, finalUrl, fileNameOf(res, finalUrl));
+    if (looksLikePdf(bytes)) return readPdfPage(bytes, finalUrl, fileNameOf(res, finalUrl), opts.onPdfFallback);
     if (type.includes('application/pdf')) throw new FetchProblem('it says it is a PDF, but it is not one');
     if (download) throw new FetchProblem(`it is not a page or text (${type.split(';')[0]})`);
     // An address ending in .pdf that answered with a page: read the page.
@@ -146,9 +155,14 @@ function fromText(raw: string, type: string, finalUrl: string): ImportedPage {
 }
 
 /** A PDF, fetched or given: its text, and the file kept as base64. */
-export async function readPdfPage(bytes: Uint8Array, fetchedUrl: string, fileName: string | null): Promise<ImportedPage> {
+export async function readPdfPage(
+  bytes: Uint8Array,
+  fetchedUrl: string,
+  fileName: string | null,
+  onFallback?: (detail: string) => void,
+): Promise<ImportedPage> {
   try {
-    const pdf = await readPdf(bytes);
+    const pdf = await readPdf(bytes, onFallback ? { onFallback } : {});
     return {
       title: pdf.title,
       markdown: pdf.markdown,
@@ -161,7 +175,8 @@ export async function readPdfPage(bytes: Uint8Array, fetchedUrl: string, fileNam
       pages: pdf.pages,
     };
   } catch (err) {
-    throw new FetchProblem(err instanceof PdfProblem ? err.message : 'it could not be read as a PDF');
+    if (err instanceof PdfProblem) throw new FetchProblem(err.message, err.detail);
+    throw new FetchProblem('it could not be read as a PDF', describeError(err));
   }
 }
 
@@ -190,7 +205,8 @@ export async function importPage(url: string, options: FetchOptions = {}): Promi
     throw new FetchProblem('that is not a web address');
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new FetchProblem('only http and https addresses can be read');
-  const opts: Required<FetchOptions> = {
+  const opts: Required<Omit<FetchOptions, 'onPdfFallback'>> & Pick<FetchOptions, 'onPdfFallback'> = {
+    ...options,
     fetch: options.fetch ?? fetch,
     timeoutMs: options.timeoutMs ?? 20_000,
     maxBytes: options.maxBytes ?? 15_000_000,

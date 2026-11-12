@@ -14,6 +14,7 @@ Things worth doing that are outside the v0.1 scope fence or not yet scheduled. A
 - **Bookmarks** (brief M4): mark a passage to find again without asking about it. Search and the map may make them unnecessary; wait for real use.
 - **Search filters**: only notes, only this thread, by date. Add when a real search returns too much.
 - **Ask in several branches at once**: select a passage and send two or three side questions that run in parallel, each its own branch (Super Agent runs workers in parallel and keeps their state in a database, which is how answers already work here).
+- **One study structure** (drafted and checked, [handoff 2026-11-12](docs/handoffs/2026-11-12-study-structure-check.md)): texts, passages, links and collections behind side questions, pins, citations, "asked before" and margin marks, exported in the W3C annotation form. Steps: export it from the tables as they are; remember asked-before answers as links; margin marks ("met before") on a new source. Links between passages are close to the scope fence: the founder decides.
 - **A note from passages**: write a short note on a selected passage, anchored like a branch, shown in the margin and on the map.
 - **Note history view**: every version of a note is kept (`note_revision`, with what changed and the blocks); show them and restore one.
 - **Notes, next steps**: merge two blocks, drag to reorder, keyboard moves between blocks (Jupyter's Esc/Enter modes), and moving out a middle range of a thread (from here to the end is done: "New thread from here").

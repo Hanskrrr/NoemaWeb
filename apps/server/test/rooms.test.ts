@@ -218,3 +218,51 @@ test('a notebook from before rooms upgrades in place, with no rooms', () => {
   db.close();
   rmSync(dir, { recursive: true, force: true });
 });
+
+test('rooms laid out before links had room get their columns set apart, in the same order', () => {
+  const MIGRATIONS = new URL('../src/store/migrations/', import.meta.url).pathname;
+  const dir = mkdtempSync(join(tmpdir(), 'noema-upgrade-'));
+  const v20 = join(dir, 'v20');
+  mkdirSync(v20);
+  for (const f of readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql') && Number(f.slice(0, 3)) <= 20)) {
+    copyFileSync(join(MIGRATIONS, f), join(v20, f));
+  }
+  const file = join(dir, 'n.db');
+  const old = new Db(file);
+  old.migrate(v20);
+  assert.equal(old.version, 20);
+  const t = new Date().toISOString();
+  const nb = ulid();
+  const roomId = ulid();
+  old.sql.prepare('INSERT INTO notebook (id, title, about_me, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(nb, 'N', '', t, t);
+  old.sql.prepare('INSERT INTO room (id, notebook_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(roomId, nb, 'Before', t, t);
+  const put = old.sql.prepare(
+    'INSERT INTO room_item (room_id, kind, item_id, state, x, y, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  // Three columns as Noema placed them, one dragged to the edge, one not placed yet.
+  put.run(roomId, 'thread', 'a', 'in', 24, 24, t, t);
+  put.run(roomId, 'thread', 'b', 'in', 316, 24, t, t);
+  put.run(roomId, 'thread', 'c', 'placed', 608, 280, t, t);
+  put.run(roomId, 'thread', 'd', 'in', 10, 500, t, t);
+  put.run(roomId, 'thread', 'e', 'in', null, null, t, t);
+  old.close();
+  const db = new Db(file);
+  db.migrate();
+  const rows = db.sql.prepare('SELECT item_id, x, y FROM room_item WHERE room_id = ? ORDER BY item_id').all(roomId) as Array<{
+    item_id: string;
+    x: number | null;
+    y: number | null;
+  }>;
+  assert.deepEqual(
+    rows.map((r) => [r.item_id, r.x, r.y]),
+    [
+      ['a', 24, 24],
+      ['b', 416, 24],
+      ['c', 808, 280],
+      ['d', 10, 500],
+      ['e', null, null],
+    ],
+  );
+  db.close();
+  rmSync(dir, { recursive: true, force: true });
+});

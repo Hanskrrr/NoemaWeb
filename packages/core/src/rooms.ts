@@ -354,18 +354,19 @@ export function roomLinkWords(kind: RoomLinkKind): string {
  */
 export function placeClusters(
   sizes: Array<{ key: string; w: number; h: number; x: number | null; y: number | null }>,
-  opts: { columns: number; columnWidth: number; gap: number; left: number; top: number },
+  opts: { columns: number; columnWidth: number; gap: number; rowGap?: number; left: number; top: number },
 ): Map<string, { x: number; y: number }> {
   const out = new Map<string, { x: number; y: number }>();
   const boxes = sizes.filter((s) => s.x !== null && s.y !== null) as Array<{ key: string; w: number; h: number; x: number; y: number }>;
   const columns = Math.max(1, opts.columns);
+  const rowGap = opts.rowGap ?? opts.gap;
   const colX = (i: number) => opts.left + i * (opts.columnWidth + opts.gap);
   const bottomOf = (i: number) => {
     const x0 = colX(i);
     const x1 = x0 + opts.columnWidth;
     return boxes
       .filter((b) => b.x < x1 && b.x + b.w > x0)
-      .reduce((y, b) => Math.max(y, b.y + b.h + opts.gap), opts.top);
+      .reduce((y, b) => Math.max(y, b.y + b.h + rowGap), opts.top);
   };
   for (const s of sizes) {
     if (s.x !== null && s.y !== null) continue;
@@ -381,6 +382,95 @@ export function placeClusters(
     const spot = { x: colX(best), y: bestY };
     out.set(s.key, spot);
     boxes.push({ key: s.key, w: s.w, h: s.h, ...spot });
+  }
+  return out;
+}
+
+type Rect = { x: number; y: number; w: number; h: number };
+
+/**
+ * Clusters that have grown into each other (a summary made a card taller) or
+ * were dropped onto each other: the lower one moves down, below the other,
+ * `gap` apart. Clusters side by side are left alone. Only those that move are
+ * returned.
+ */
+export function settleClusters(boxes: Array<Rect & { key: string }>, gap: number): Map<string, { x: number; y: number }> {
+  const out = new Map<string, { x: number; y: number }>();
+  const settled: Rect[] = [];
+  for (const b of [...boxes].sort((p, q) => p.y - q.y || p.x - q.x)) {
+    let y = b.y;
+    for (let guard = 0; guard <= boxes.length; guard++) {
+      const under = settled.find((s) => b.x < s.x + s.w && s.x < b.x + b.w && y < s.y + s.h + gap && s.y < y + b.h + gap);
+      if (!under) break;
+      y = under.y + under.h + gap;
+    }
+    if (y !== b.y) out.set(b.key, { x: b.x, y });
+    settled.push({ x: b.x, y, w: b.w, h: b.h });
+  }
+  return out;
+}
+
+type Point = { x: number; y: number };
+/** A cubic Bézier curve: start, two control points, end. */
+export type Curve = [Point, Point, Point, Point];
+
+/** The point a fraction `t` along a curve. */
+export function curveAt([a, b, c, d]: Curve, t: number): Point {
+  const u = 1 - t;
+  return {
+    x: u * u * u * a.x + 3 * u * u * t * b.x + 3 * u * t * t * c.x + t * t * t * d.x,
+    y: u * u * u * a.y + 3 * u * u * t * b.y + 3 * u * t * t * c.y + t * t * t * d.y,
+  };
+}
+
+const overlap = (a: Rect, b: Rect) =>
+  Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+
+/**
+ * Where the words of each link go: on its line, as near the middle as can be
+ * without covering a card or the words of another link. Along the line first,
+ * then just beside it; if there is no clear place, where the least is covered.
+ * Returns the centre of each label.
+ */
+export function placeLabels(
+  labels: Array<{ id: string; curve: Curve; w: number; h: number }>,
+  cards: Rect[],
+  opts: { margin?: number } = {},
+): Map<string, Point> {
+  const m = opts.margin ?? 4;
+  const out = new Map<string, Point>();
+  const taken: Rect[] = [];
+  const ts = [0.5];
+  for (let d = 0.05; d < 0.46; d += 0.05) ts.push(0.5 - d, 0.5 + d);
+  const sorted = [...labels].sort((p, q) => {
+    const a = curveAt(p.curve, 0.5);
+    const b = curveAt(q.curve, 0.5);
+    return a.y - b.y || a.x - b.x;
+  });
+  for (const l of sorted) {
+    const shifts: Point[] = [
+      { x: 0, y: 0 },
+      { x: l.w / 2 - 6, y: 0 },
+      { x: -(l.w / 2 - 6), y: 0 },
+      { x: 0, y: -(l.h / 2 + 4) },
+      { x: 0, y: l.h / 2 + 4 },
+    ];
+    let best: { at: Point; cost: number } | null = null;
+    search: for (const shift of shifts) {
+      for (const t of ts) {
+        const p = curveAt(l.curve, t);
+        const at = { x: p.x + shift.x, y: p.y + shift.y };
+        const r = { x: at.x - l.w / 2 - m, y: at.y - l.h / 2 - m, w: l.w + 2 * m, h: l.h + 2 * m };
+        let cost = 0;
+        for (const c of cards) cost += overlap(r, c) * 4;
+        for (const o of taken) cost += overlap(r, o) * 2;
+        if (!best || cost < best.cost - 0.5) best = { at, cost };
+        if (cost < 0.5) break search;
+      }
+    }
+    const at = best?.at ?? curveAt(l.curve, 0.5);
+    out.set(l.id, { x: Math.round(at.x), y: Math.round(at.y) });
+    taken.push({ x: at.x - l.w / 2, y: at.y - l.h / 2, w: l.w, h: l.h });
   }
   return out;
 }

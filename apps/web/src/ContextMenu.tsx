@@ -90,13 +90,17 @@ export function ContextMenuHost() {
       closeMenu();
     };
     const gone = () => closeMenu();
+    // Scrolling closes it: the wheel or a finger, not a scroll event, which can
+    // arrive just after a right-click for a scroll made before it.
     document.addEventListener('pointerdown', away, true);
-    document.addEventListener('scroll', away, true);
+    document.addEventListener('wheel', away, { capture: true, passive: true });
+    document.addEventListener('touchmove', away, { capture: true, passive: true });
     window.addEventListener('blur', gone);
     window.addEventListener('resize', gone);
     return () => {
       document.removeEventListener('pointerdown', away, true);
-      document.removeEventListener('scroll', away, true);
+      document.removeEventListener('wheel', away, true);
+      document.removeEventListener('touchmove', away, true);
       window.removeEventListener('blur', gone);
       window.removeEventListener('resize', gone);
     };

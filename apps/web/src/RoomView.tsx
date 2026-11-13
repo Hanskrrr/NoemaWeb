@@ -6,15 +6,18 @@
 // places new ones, and you move them by dragging (or Alt+arrow keys).
 
 import {
+  type Curve,
   type ItemLink,
   LINK_KINDS,
   LINK_WORDS,
   type LinkKind,
   type NoteSummary,
   placeClusters,
+  placeLabels,
   type RoomKind,
   type RoomView as RoomViewData,
   roomLinkWords,
+  settleClusters,
   type Source,
   type Thread,
   threadOf,
@@ -39,7 +42,11 @@ import { EditableTitle } from './EditableTitle.tsx';
 import { roomMenu, useRooms } from './Rooms.tsx';
 
 const WIDTH = 264;
-const GAP = 28;
+// Columns stand far enough apart for the words of a link between them; a
+// cluster that grows into the one below pushes it down (ADR 0027 addendum).
+const GAP = 128;
+const ROW_GAP = 48;
+const SETTLE_GAP = 24;
 const EDGE = 24;
 const STEP = 24;
 
@@ -104,6 +111,7 @@ export function RoomView({
   const [editing, setEditing] = useState<string | null>(null);
   const [linking, setLinking] = useState<{ key: string; title: string } | null>(null);
   const [focusKey, setFocusKey] = useState<string | null>(null);
+  const [roomWidth, setRoomWidth] = useState(0);
   const canvas = useRef<HTMLDivElement>(null);
   const drag = useRef<{ key: string; sx: number; sy: number; x0: number; y0: number; moved: boolean } | null>(null);
   const swallow = useRef(false);
@@ -222,24 +230,42 @@ export function RoomView({
         return !o || o.x !== b.x || o.y !== b.y || o.w !== b.w || o.h !== b.h;
       });
     if (moved) setCardBoxes(boxes);
-    const unplaced = view.clusters.filter((c) => !spots.has(c.key));
-    if (unplaced.length === 0) return;
     const width = canvas.current.clientWidth;
-    const columns = Math.max(1, Math.floor((width - 2 * EDGE + GAP) / (WIDTH + GAP)));
-    const placed = placeClusters(
-      view.clusters.map((c) => ({
-        key: c.key,
-        w: measured.get(c.key)?.w ?? WIDTH,
-        h: measured.get(c.key)?.h ?? 120,
-        x: spots.get(c.key)?.x ?? null,
-        y: spots.get(c.key)?.y ?? null,
-      })),
-      { columns, columnWidth: WIDTH, gap: GAP, left: EDGE, top: EDGE },
+    if (width !== roomWidth) setRoomWidth(width);
+    const unplaced = view.clusters.filter((c) => !spots.has(c.key));
+    if (unplaced.length > 0) {
+      const columns = Math.max(1, Math.floor((width - 2 * EDGE + GAP) / (WIDTH + GAP)));
+      const placed = placeClusters(
+        view.clusters.map((c) => ({
+          key: c.key,
+          w: measured.get(c.key)?.w ?? WIDTH,
+          h: measured.get(c.key)?.h ?? 120,
+          x: spots.get(c.key)?.x ?? null,
+          y: spots.get(c.key)?.y ?? null,
+        })),
+        { columns, columnWidth: WIDTH, gap: GAP, rowGap: ROW_GAP, left: EDGE, top: EDGE },
+      );
+      const next = new Map(spots);
+      for (const [k, at] of placed) next.set(k, at);
+      setSpots(next);
+      save(unplaced.map((c) => ({ cluster: c, at: placed.get(c.key) as Spot })));
+      return;
+    }
+    // Clusters that grew into each other (a summary came in) or were dropped on each other: set apart.
+    if (drag.current) return;
+    const settled = settleClusters(
+      view.clusters.flatMap((c) => {
+        const at = spots.get(c.key);
+        const size = measured.get(c.key);
+        return at && size ? [{ key: c.key, ...at, ...size }] : [];
+      }),
+      SETTLE_GAP,
     );
+    if (settled.size === 0) return;
     const next = new Map(spots);
-    for (const [k, at] of placed) next.set(k, at);
+    for (const [k, at] of settled) next.set(k, at);
     setSpots(next);
-    save(unplaced.map((c) => ({ cluster: c, at: placed.get(c.key) as Spot })));
+    save(view.clusters.filter((c) => settled.has(c.key)).map((c) => ({ cluster: c, at: settled.get(c.key) as Spot })));
   });
 
   // Moving a cluster: by dragging it (a click is still a click), or Alt+arrows.
@@ -272,6 +298,8 @@ export function RoomView({
     const cluster = view.clusters.find((c) => c.key === d.key);
     const at = spots.get(d.key);
     if (cluster && at) save([{ cluster, at }]);
+    // Drawn again, so a cluster dropped onto another is set apart.
+    setSpots((m) => new Map(m));
   };
   const nudge = (e: KeyboardEvent, cluster: Cluster) => {
     if (!e.altKey) return;
@@ -291,7 +319,7 @@ export function RoomView({
     const columns = Math.max(1, Math.floor((width - 2 * EDGE + GAP) / (WIDTH + GAP)));
     const placed = placeClusters(
       view.clusters.map((c) => ({ key: c.key, w: sizes.get(c.key)?.w ?? WIDTH, h: sizes.get(c.key)?.h ?? 120, x: null, y: null })),
-      { columns, columnWidth: WIDTH, gap: GAP, left: EDGE, top: EDGE },
+      { columns, columnWidth: WIDTH, gap: GAP, rowGap: ROW_GAP, left: EDGE, top: EDGE },
     );
     setSpots(new Map(placed));
     save(view.clusters.map((c) => ({ cluster: c, at: placed.get(c.key) as Spot })));
@@ -635,7 +663,7 @@ export function RoomView({
       <div
         ref={canvas}
         className={`room-canvas${dropOver ? ' drop-over' : ''}`}
-        style={{ minWidth: maxX + 120, minHeight: Math.max(420, maxY + 160) }}
+        style={{ minWidth: maxX + 2 * EDGE, minHeight: Math.max(420, maxY + 160) }}
         onDragOver={(e) => {
           if (!isItemDrag(e) && !isOutsideDrag(e)) return;
           e.preventDefault();
@@ -648,7 +676,7 @@ export function RoomView({
         onDrop={onDrop}
         data-testid="room-canvas"
       >
-        <svg className="room-lines" aria-hidden width={maxX + 120} height={Math.max(420, maxY + 160)}>
+        <svg className="room-lines" aria-hidden width={maxX + 2 * EDGE} height={Math.max(420, maxY + 160)}>
           {view.links.map((l) => {
             const a = box(l.from);
             const b = box(l.to);
@@ -694,8 +722,9 @@ export function RoomView({
           editing={editing}
           onEdit={setEditing}
           onChange={(id, patch) => void changeLink(id, patch)}
-          width={maxX + 120}
+          width={maxX + 2 * EDGE}
           height={Math.max(420, maxY + 160)}
+          room={roomWidth}
         />
         {view.clusters.length === 0 && (
           <div className="room-empty" data-testid="room-empty">
@@ -773,6 +802,7 @@ function ItemLinks({
   onChange,
   width,
   height,
+  room,
 }: {
   links: ItemLink[];
   boxes: Map<string, Box>;
@@ -783,43 +813,68 @@ function ItemLinks({
   onChange: (id: string, patch: Parameters<typeof api.updateLink>[1] | 'delete') => void;
   width: number;
   height: number;
+  /** How wide the room is on screen: a link between cards one above the other goes round the side with room. */
+  room: number;
 }) {
+  const labelEls = useRef(new Map<string, HTMLElement>());
+  const [labelSizes, setLabelSizes] = useState<Map<string, { w: number; h: number }>>(new Map());
   const drawn = links.flatMap((l) => {
     const from = `${l.from.kind}:${l.from.id}`;
     const to = `${l.to.kind}:${l.to.id}`;
     const a = boxes.get(from);
     const b = boxes.get(to);
     if (!a || !b) return [];
-    // Side by side: from the facing sides. One above the other: out of the right side and back in.
+    // Side by side: from the facing sides. One above the other: out of a side and back in.
     const right = b.x >= a.x + a.w - 4;
     const left = b.x + b.w <= a.x + 4;
     const ay = a.y + Math.min(a.h / 2, 28);
     const by = b.y + Math.min(b.h / 2, 28);
-    let d: string;
-    let mid: { x: number; y: number };
+    let curve: Curve;
     if (right || left) {
       const x1 = right ? a.x + a.w : a.x;
       const x2 = right ? b.x : b.x + b.w;
       const bend = Math.max(40, Math.abs(x2 - x1) / 2) * (right ? 1 : -1);
-      d = `M${x1},${ay} C${x1 + bend},${ay} ${x2 - bend},${by} ${x2},${by}`;
-      mid = { x: (x1 + x2) / 2, y: (ay + by) / 2 };
+      curve = [
+        { x: x1, y: ay },
+        { x: x1 + bend, y: ay },
+        { x: x2 - bend, y: by },
+        { x: x2, y: by },
+      ];
     } else {
-      const x1 = a.x + a.w;
-      const x2 = b.x + b.w;
-      const out = Math.max(x1, x2) + 56;
-      d = `M${x1},${ay} C${out},${ay} ${out},${by} ${x2},${by}`;
-      mid = { x: out - 14, y: (ay + by) / 2 };
+      const outer = Math.max(a.x + a.w, b.x + b.w);
+      const inner = Math.min(a.x, b.x);
+      const toRight = outer + 150 <= room || inner < 150;
+      const x1 = toRight ? a.x + a.w : a.x;
+      const x2 = toRight ? b.x + b.w : b.x;
+      const out = toRight ? outer + 76 : inner - 76;
+      curve = [
+        { x: x1, y: ay },
+        { x: out, y: ay },
+        { x: out, y: by },
+        { x: x2, y: by },
+      ];
     }
-    return [{ l, from, to, d, mid }];
+    const [p0, p1, p2, p3] = curve;
+    const d = `M${p0.x},${p0.y} C${p1.x},${p1.y} ${p2.x},${p2.y} ${p3.x},${p3.y}`;
+    return [{ l, from, to, d, curve }];
   });
-  // Words on lines that would cover each other move down, one line's height at a time.
-  const placed: Array<{ x: number; y: number }> = [];
-  for (const x of [...drawn].sort((a, b) => a.mid.y - b.mid.y || a.mid.x - b.mid.x)) {
-    let y = x.mid.y;
-    while (placed.some((p) => Math.abs(p.x - x.mid.x) < 120 && Math.abs(p.y - y) < 22)) y += 22;
-    x.mid = { x: x.mid.x, y };
-    placed.push(x.mid);
-  }
+  const text = (l: ItemLink) => (l.status === 'suggested' ? `${linkWords(l)}?` : linkWords(l));
+  // Words go on their line where they cover no card and no other words; sizes are measured once drawn.
+  const spots = placeLabels(
+    drawn.map((x) => ({
+      id: x.l.id,
+      curve: x.curve,
+      ...(labelSizes.get(x.l.id) ?? { w: Math.min(116, 16 + text(x.l).length * 6.5), h: 20 }),
+    })),
+    [...boxes.values()],
+  );
+  useLayoutEffect(() => {
+    const next = new Map<string, { w: number; h: number }>();
+    for (const [id, el] of labelEls.current) next.set(id, { w: el.offsetWidth, h: el.offsetHeight });
+    const same = next.size === labelSizes.size && [...next].every(([id, z]) => labelSizes.get(id)?.w === z.w && labelSizes.get(id)?.h === z.h);
+    if (!same) setLabelSizes(next);
+  });
+  const mid = (id: string) => spots.get(id) ?? { x: 0, y: 0 };
   const lit = (x: { from: string; to: string; l: ItemLink }) => !focus || x.from === focus || x.to === focus || x.l.id === editing;
   const open = drawn.find((x) => x.l.id === editing);
   return (
@@ -842,9 +897,13 @@ function ItemLinks({
       {drawn.map((x) => (
         <button
           key={x.l.id}
+          ref={(el) => {
+            if (el) labelEls.current.set(x.l.id, el);
+            else labelEls.current.delete(x.l.id);
+          }}
           type="button"
           className={`link-label is-${x.l.status}${lit(x) ? '' : ' is-faded'}${x.l.id === editing ? ' is-open' : ''}`}
-          style={{ left: x.mid.x, top: x.mid.y }}
+          style={{ left: mid(x.l.id).x, top: mid(x.l.id).y }}
           onClick={() => onEdit(x.l.id === editing ? null : x.l.id)}
           aria-expanded={x.l.id === editing}
           title={`“${titles.get(x.from)?.title ?? ''}” ${linkWords(x.l)} “${titles.get(x.to)?.title ?? ''}”${x.l.why ? ` · ${x.l.why}` : ''}`}
@@ -852,7 +911,7 @@ function ItemLinks({
           data-status={x.l.status}
           data-link-id={x.l.id}
         >
-          {x.l.status === 'suggested' ? `${linkWords(x.l)}?` : linkWords(x.l)}
+          {text(x.l)}
         </button>
       ))}
       {open && (
@@ -861,7 +920,7 @@ function ItemLinks({
           link={open.l}
           from={titles.get(open.from)?.title ?? ''}
           to={titles.get(open.to)?.title ?? ''}
-          at={{ x: Math.min(Math.max(open.mid.x, 172), width - 172), y: open.mid.y }}
+          at={{ x: Math.min(Math.max(mid(open.l.id).x, 172), width - 172), y: mid(open.l.id).y }}
           onClose={() => onEdit(null)}
           onChange={(patch) => {
             if (patch === 'delete' || (typeof patch === 'object' && patch.status === 'dismissed')) onEdit(null);

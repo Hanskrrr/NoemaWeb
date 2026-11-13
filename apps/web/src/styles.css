@@ -5175,19 +5175,23 @@ body.resizing {
   margin: 0.3rem 0 0;
   padding: 0;
 }
+/* A key point stays inside its card: long ones wrap. */
+.room-points li {
+  min-width: 0;
+  max-width: 100%;
+}
 .room-point {
   max-width: 100%;
-  padding: 0.05rem 0.4rem;
+  padding: 0.1rem 0.45rem;
   border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--rule));
-  border-radius: 999px;
+  border-radius: 9px;
   background: transparent;
   color: var(--accent);
   font-size: 0.72rem;
-  line-height: 1.5;
+  line-height: 1.35;
   text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .room-point:hover {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
@@ -5243,21 +5247,27 @@ body.resizing {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+/* The words of a link fit between two columns (128px apart): long ones wrap, two lines at most. */
 .link-label {
   position: absolute;
   z-index: 3;
   transform: translate(-50%, -50%);
-  max-width: 11rem;
-  padding: 0.05rem 0.5rem;
+  width: max-content;
+  max-width: 116px;
+  padding: 0.05rem 0.45rem;
   border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--rule));
-  border-radius: 999px;
+  border-radius: 9px;
   background: var(--paper);
   color: var(--accent);
   font-size: 0.72rem;
-  line-height: 1.5;
-  white-space: nowrap;
+  line-height: 1.35;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
   transition: opacity 0.15s;
 }
 .link-label.is-suggested {

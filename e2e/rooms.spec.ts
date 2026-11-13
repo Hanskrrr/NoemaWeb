@@ -151,7 +151,10 @@ test('in a room, you choose what is in it; clusters stay where they are moved, a
 test('files dropped on Sources are read as sources; dropped on a room, they are in it too', async ({ page, request }) => {
   await freshThread(request);
   await page.goto('/');
+  // The last thread opens first (and shows the thread list); only then switch to Sources.
+  await expect(page.getByTestId('composer')).toBeVisible();
   await page.getByTestId('rail-sources').click();
+  await expect(page.getByTestId('rail-sources')).toHaveAttribute('aria-pressed', 'true');
   const files = await page.evaluateHandle(() => {
     const dt = new DataTransfer();
     dt.items.add(new File(['# Gradient checkpointing\n\nRecompute activations in the backward pass.'], 'checkpointing.md', { type: 'text/markdown' }));
@@ -209,6 +212,8 @@ test('read with AI: summaries whose points open the words they quote; suggested 
   await expect(label).toHaveCount(1);
   await expect(label).toHaveAttribute('data-status', 'suggested');
   await expect(label).toHaveText('explains?');
+  // Nothing covers anything: a link's words are on no card, key points stay in their card, clusters apart.
+  await expect.poll(() => coverings(page)).toEqual({ wordsOnCards: 0, pointsOut: 0, clustersOnClusters: 0 });
   await label.click();
   const editor = page.getByTestId('link-editor');
   await expect(editor).toContainText('“Parameter server” explains “Ring all-reduce”');
@@ -239,3 +244,23 @@ test('read with AI: summaries whose points open the words they quote; suggested 
   // Still on the room: picking a card in link mode did not open it.
   await expect(page.getByTestId('room')).toBeVisible();
 });
+
+/** What covers what on the map of a room. */
+async function coverings(page: Page) {
+  return page.evaluate(() => {
+    const r = (e: Element) => e.getBoundingClientRect();
+    const hit = (a: DOMRect, b: DOMRect) => a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
+    const cards = [...document.querySelectorAll('[data-testid=room-card]')];
+    const clusters = [...document.querySelectorAll('[data-testid=room-cluster]')];
+    let wordsOnCards = 0;
+    for (const l of document.querySelectorAll('[data-testid=link-label]')) for (const c of cards) if (hit(r(l), r(c))) wordsOnCards++;
+    let pointsOut = 0;
+    for (const p of document.querySelectorAll('.room-point')) {
+      const c = p.closest('[data-testid=room-card]');
+      if (c && r(p).right > r(c).right + 1) pointsOut++;
+    }
+    let clustersOnClusters = 0;
+    for (let i = 0; i < clusters.length; i++) for (let j = i + 1; j < clusters.length; j++) if (hit(r(clusters[i] as Element), r(clusters[j] as Element))) clustersOnClusters++;
+    return { wordsOnCards, pointsOut, clustersOnClusters };
+  });
+}

@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { placeClusters, type RoomGraph, type RoomRow, roomKey, roomMap, roomMembers } from '../src/index.ts';
+import {
+  type Curve,
+  curveAt,
+  placeClusters,
+  placeLabels,
+  type RoomGraph,
+  type RoomRow,
+  roomKey,
+  roomMap,
+  roomMembers,
+  settleClusters,
+} from '../src/index.ts';
 
 const T = (id: string, over: Partial<RoomGraph['threads'][number]> = {}): RoomGraph['threads'][number] => ({
   id,
@@ -101,4 +112,59 @@ test('a cluster sits where any of its cards was placed; new ones go into the col
     { columns: 2, columnWidth: 280, gap: 24, left: 24, top: 24 },
   );
   assert.deepEqual(Object.fromEntries(spots), { b: { x: 328, y: 24 }, c: { x: 328, y: 148 }, d: { x: 24, y: 248 } });
+});
+
+test('clusters set apart by column and by row', () => {
+  const spots = placeClusters(
+    [
+      { key: 'a', w: 264, h: 200, x: null, y: null },
+      { key: 'b', w: 264, h: 100, x: null, y: null },
+      { key: 'c', w: 264, h: 100, x: null, y: null },
+    ],
+    { columns: 2, columnWidth: 264, gap: 128, rowGap: 48, left: 24, top: 24 },
+  );
+  assert.deepEqual(Object.fromEntries(spots), { a: { x: 24, y: 24 }, b: { x: 416, y: 24 }, c: { x: 416, y: 172 } });
+});
+
+test('a cluster that grew into the one below pushes it down; side by side stay put', () => {
+  const moved = settleClusters(
+    [
+      { key: 'top', x: 24, y: 24, w: 264, h: 400 },
+      { key: 'below', x: 24, y: 200, w: 264, h: 100 },
+      { key: 'under-below', x: 40, y: 330, w: 264, h: 50 },
+      { key: 'beside', x: 416, y: 24, w: 264, h: 600 },
+    ],
+    24,
+  );
+  assert.deepEqual(Object.fromEntries(moved), { below: { x: 24, y: 448 }, 'under-below': { x: 40, y: 572 } });
+  // Already apart: nothing moves.
+  assert.equal(settleClusters([{ key: 'a', x: 0, y: 0, w: 10, h: 10 }, { key: 'b', x: 0, y: 40, w: 10, h: 10 }], 24).size, 0);
+});
+
+test("a link's words go on its line where no card is, and not on each other", () => {
+  // From the right side of a card at the left, behind a card in the middle, to a card at the right.
+  const left = { x: 0, y: 0, w: 260, h: 200 };
+  const middle = { x: 388, y: 0, w: 260, h: 200 };
+  const right = { x: 776, y: 0, w: 260, h: 200 };
+  const curve: Curve = [{ x: 260, y: 28 }, { x: 518, y: 28 }, { x: 518, y: 28 }, { x: 776, y: 28 }];
+  const at = placeLabels([{ id: 'l', curve, w: 90, h: 20 }], [left, middle, right]);
+  const p = at.get('l');
+  assert.ok(p);
+  // Not on the middle card (it would sit at x 518): in one of the two gaps.
+  assert.ok((p.x - 45 >= 264 && p.x + 45 <= 384) || (p.x - 45 >= 652 && p.x + 45 <= 772), `at ${p.x}`);
+  // Two links on the same stretch: their words do not cover each other.
+  const two = placeLabels(
+    [
+      { id: 'a', curve: [{ x: 260, y: 28 }, { x: 324, y: 28 }, { x: 324, y: 28 }, { x: 388, y: 28 }], w: 90, h: 20 },
+      { id: 'b', curve: [{ x: 260, y: 40 }, { x: 324, y: 40 }, { x: 324, y: 40 }, { x: 388, y: 40 }], w: 90, h: 20 },
+    ],
+    [left, middle],
+  );
+  const a = two.get('a');
+  const b = two.get('b');
+  assert.ok(a && b);
+  assert.ok(Math.abs(a.y - b.y) >= 20 || Math.abs(a.x - b.x) >= 90, JSON.stringify([a, b]));
+  // Nowhere clear: still placed, on the line.
+  const boxed = placeLabels([{ id: 'x', curve, w: 90, h: 20 }], [{ x: -1000, y: -1000, w: 3000, h: 3000 }]);
+  assert.deepEqual(boxed.get('x'), { x: Math.round(curveAt(curve, 0.5).x), y: 28 });
 });

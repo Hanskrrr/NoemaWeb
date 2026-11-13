@@ -80,7 +80,7 @@ test('a change is proposed, not done: the learner runs it, opens what it made, a
   const w = await world();
   try {
     const before = (await threads(w)).length;
-    const { events, actions, answer } = await ask(w, `Start one for me ${call('start_thread', { question: 'What is all-reduce?' })}`);
+    const { events, actions, answer } = await ask(w, `Start one for me [[slow]] ${call('start_thread', { question: 'What is all-reduce?' })}`);
     assert.equal(actions.length, 1);
     assert.equal(actions[0]?.status, 'proposed');
     assert.equal(actions[0]?.summary, 'Start a thread: “What is all-reduce?”');

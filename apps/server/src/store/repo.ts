@@ -718,6 +718,7 @@ export class Repo {
       versions: r.versions as number,
       threads: r.threads as number,
       deletedAt: (r.deleted_at as string | null) ?? null,
+      linked: r.folder_id ? { folderId: r.folder_id as string, path: r.file_path as string } : null,
       createdAt: r.created_at as string,
       updatedAt: r.updated_at as string,
     };
@@ -858,8 +859,8 @@ export class Repo {
     this.db.sql
       .prepare(
         `INSERT INTO source_version (id, source_id, seq, content, content_hash, origin, fetched_url, raw, extractor,
-           media_type, file_name, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           media_type, file_name, file_hash, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         ulid(),
@@ -874,8 +875,112 @@ export class Repo {
         v.extractor,
         v.mediaType ?? null,
         v.fileName ?? null,
+        v.fileHash ?? null,
         t,
       );
+  }
+
+  // Folders on the learner's computer (ADR 0025) ----------------------------
+
+  addFolder(notebookId: string, id: string, path: string, name: string): { id: string; name: string; path: string; created: boolean } {
+    return this.db.tx(() => {
+      const same = this.db.sql.prepare('SELECT * FROM folder WHERE notebook_id = ? AND path = ?').get(notebookId, path) as Row | undefined;
+      if (same) return { id: same.id as string, name: same.name as string, path, created: false };
+      if (this.db.sql.prepare('SELECT 1 FROM folder WHERE id = ?').get(id)) throw new ConflictError('folder id already used');
+      // Names are how the Assistant and the sidebar tell folders apart: two of the same name get a number.
+      const taken = new Set(
+        (this.db.sql.prepare('SELECT name FROM folder WHERE notebook_id = ?').all(notebookId) as Row[]).map((r) => r.name as string),
+      );
+      let unique = name;
+      for (let n = 2; taken.has(unique); n++) unique = `${name} ${n}`;
+      this.db.sql
+        .prepare('INSERT INTO folder (id, notebook_id, path, name, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(id, notebookId, path, unique, now());
+      this.logEvent('folder.added', id);
+      return { id, name: unique, path, created: true };
+    });
+  }
+
+  listFolders(notebookId: string): Array<{ id: string; name: string; path: string }> {
+    return (this.db.sql.prepare('SELECT id, name, path FROM folder WHERE notebook_id = ? ORDER BY name').all(notebookId) as Row[]).map(
+      (r) => ({ id: r.id as string, name: r.name as string, path: r.path as string }),
+    );
+  }
+
+  getFolder(id: string): { id: string; notebookId: string; name: string; path: string } | null {
+    const r = this.db.sql.prepare('SELECT * FROM folder WHERE id = ?').get(id) as Row | undefined;
+    return r ? { id: r.id as string, notebookId: r.notebook_id as string, name: r.name as string, path: r.path as string } : null;
+  }
+
+  /** Unlink a folder: its files stay where they are, and the sources read from them stay (no longer linked). */
+  removeFolder(id: string): boolean {
+    const r = this.db.sql.prepare('DELETE FROM folder WHERE id = ?').run(id);
+    if (Number(r.changes) > 0) this.logEvent('folder.removed', id);
+    return Number(r.changes) > 0;
+  }
+
+  /** The source a file was opened as (in the Trash too), if any. */
+  sourceOfFile(folderId: string, path: string): Source | null {
+    const r = this.db.sql.prepare('SELECT id FROM source WHERE folder_id = ? AND file_path = ?').get(folderId, path) as Row | undefined;
+    return r ? this.getSource(r.id as string) : null;
+  }
+
+  /** The files of a folder that were opened, by path. */
+  openedFiles(folderId: string): Map<string, string> {
+    const rows = this.db.sql
+      .prepare('SELECT id, file_path FROM source WHERE folder_id = ? AND deleted_at IS NULL')
+      .all(folderId) as Row[];
+    return new Map(rows.map((r) => [r.file_path as string, r.id as string]));
+  }
+
+  /** A source read from a file of a linked folder. */
+  createFileSource(
+    id: string,
+    notebookId: string,
+    file: { folderId: string; path: string },
+    init: { title: string; version: NewSourceVersion },
+  ): Source {
+    return this.db.tx(() => {
+      const { source } = this.createSource(id, notebookId, { title: init.title, url: null, version: init.version });
+      this.db.sql.prepare('UPDATE source SET folder_id = ?, file_path = ? WHERE id = ?').run(file.folderId, file.path, source.id);
+      return this.getSource(source.id) as Source;
+    });
+  }
+
+  /** The bytes' hash of the latest version read from a file. */
+  latestFileHash(sourceId: string): string | null {
+    const r = this.db.sql
+      .prepare('SELECT file_hash FROM source_version WHERE source_id = ? ORDER BY seq DESC LIMIT 1')
+      .get(sourceId) as Row | undefined;
+    return (r?.file_hash as string | null | undefined) ?? null;
+  }
+
+  /** The bytes' hash a version was read from (a file of a linked folder), or null. */
+  versionFileHash(versionId: string): string | null {
+    const r = this.db.sql.prepare('SELECT file_hash FROM source_version WHERE id = ?').get(versionId) as Row | undefined;
+    return (r?.file_hash as string | null | undefined) ?? null;
+  }
+
+  /** Note that the latest version is the file as it is now (same text, bytes read again). */
+  setLatestFileHash(sourceId: string, hash: string): void {
+    this.db.sql
+      .prepare(
+        'UPDATE source_version SET file_hash = ? WHERE id = (SELECT id FROM source_version WHERE source_id = ? ORDER BY seq DESC LIMIT 1)',
+      )
+      .run(hash, sourceId);
+  }
+
+  addFileBackup(b: { id: string; folderId: string; path: string; before: string | null; afterHash: string }): void {
+    this.db.sql
+      .prepare('INSERT INTO file_backup (id, folder_id, file_path, before, after_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(b.id, b.folderId, b.path, b.before, b.afterHash, now());
+  }
+
+  fileBackup(id: string): { folderId: string; path: string; before: string | null; afterHash: string } | null {
+    const r = this.db.sql.prepare('SELECT * FROM file_backup WHERE id = ?').get(id) as Row | undefined;
+    return r
+      ? { folderId: r.folder_id as string, path: r.file_path as string, before: (r.before as string | null) ?? null, afterHash: r.after_hash as string }
+      : null;
   }
 
   renameSource(id: string, title: string): Source {
@@ -3390,6 +3495,8 @@ export interface NewSourceVersion {
   fileName?: string | null;
   /** Pages read, for a PDF (logged with the count of characters). */
   pages?: number;
+  /** For a file of a linked folder: the sha256 of its bytes as read. */
+  fileHash?: string | null;
 }
 
 /** The PDF pages a passage is on: the page heading before its start, and the one before its end. */

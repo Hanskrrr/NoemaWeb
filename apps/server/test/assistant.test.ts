@@ -71,7 +71,7 @@ test('one Assistant per notebook: made once, kept apart from the threads', async
 test('it looks things up in rounds, says what it is doing, and cites what it found', async () => {
   const me = await assistant();
   // [1] is the newest source in the overview.
-  const { id, events } = await ask(me.id, 'What did Week 4 say? [[search:variance]] [[open:1]]');
+  const { id, events } = await ask(me.id, 'What did Week 4 say? [[slow]] [[search:variance]] [[open:1]]');
   const kinds = events.map((e) => e.event);
   // The phase it is in when the watcher connects comes with the snapshot; then each change.
   const snapshot = (events[0]?.data as { phase?: string }).phase;

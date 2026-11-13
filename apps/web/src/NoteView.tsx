@@ -6,11 +6,12 @@
 // Citations ([E3]) open the exchange they came from beside the note, which
 // stays where it is. Every change is kept as a version on the server.
 
-import { headingLevel, type Note, type NoteBlock, type NoteSummary, plainText, sectionOf, ulid } from '@noema/core';
+import { headingLevel, type Note, type NoteBlock, type NoteSummary, plainText, sectionOf, type Source, ulid } from '@noema/core';
 import { type KeyboardEvent, type MouseEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { citationOrder } from './citations.ts';
 import { EditableTitle } from './EditableTitle.tsx';
+import { SaveNoteToFolder } from './Files.tsx';
 import { arrive, clearFound } from './found.ts';
 import { Outline, type OutlineItem, shortLabel } from './Outline.tsx';
 import { CiteContext, Markdown } from './markdown/Markdown.tsx';
@@ -104,7 +105,12 @@ export function NoteView({
   openRef,
   refIn,
   onRef,
+  notebookId,
+  onOpenFile,
 }: {
+  notebookId: string;
+  /** A file saved into a linked folder, opened as a source (ADR 0025). */
+  onOpenFile: (source: Source) => void;
   noteId: string;
   /** The citation whose exchange is open beside the note ([E2]). */
   openRef?: string | undefined;
@@ -132,6 +138,7 @@ export function NoteView({
   const [toast, setToast] = useState<Toast | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [merging, setMerging] = useState<{ from: NoteSummary | null } | null>(null);
+  const [saving, setSaving] = useState(false);
   const wasWriting = useRef(false);
 
   const load = useCallback(async () => {
@@ -390,6 +397,17 @@ export function NoteView({
               merge a note in
             </button>
             {' · '}
+            <button
+              type="button"
+              className="quiet inline"
+              onClick={() => setSaving((v) => !v)}
+              aria-expanded={saving}
+              title="Save this note into a linked folder, as a Markdown file"
+              data-testid="note-save-to-folder"
+            >
+              save to a folder
+            </button>
+            {' · '}
             {confirmDelete ? (
               <span className="confirm">
                 {note.threadId ? 'Delete this note? The thread stays.' : 'Delete this note?'}
@@ -421,6 +439,9 @@ export function NoteView({
           </p>
         </header>
 
+        {saving && (
+          <SaveNoteToFolder notebookId={notebookId} note={note} onClose={() => setSaving(false)} onOpenFile={onOpenFile} />
+        )}
         {merging && (
           <section className="askbox merge-picker" data-testid="note-merge-picker">
             {merging.from ? (

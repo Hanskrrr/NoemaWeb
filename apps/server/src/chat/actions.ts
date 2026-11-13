@@ -10,6 +10,8 @@ import {
   ActionArgs,
   type ActionKind,
   type AssistantAction,
+  type Note,
+  noteFile,
   pageOfHeading,
   ShowArgs,
   type Source,
@@ -18,6 +20,7 @@ import {
   ulid,
   type VaultTarget,
 } from '@noema/core';
+import { FileProblem, type Folders } from '../files/folders.ts';
 import { HttpError } from '../http/router.ts';
 import type { Logger } from '../log.ts';
 import { type AskPair, ConflictError, InvalidError, NotFoundError, type Repo, type StoredAction } from '../store/repo.ts';
@@ -46,7 +49,12 @@ function bare<T extends VaultTarget>(t: T): T {
 }
 
 /** A change the model asked for, checked and resolved; or why it cannot be, told back to the model. */
-export function planAction(vault: VaultLookup, repo: Repo, call: ToolCall): Plan | { refused: string } {
+export async function planAction(
+  vault: VaultLookup,
+  repo: Repo,
+  call: ToolCall,
+  folders: Folders | null = null,
+): Promise<Plan | { refused: string }> {
   let raw: unknown;
   try {
     raw = call.arguments.trim() === '' ? {} : JSON.parse(call.arguments);
@@ -226,7 +234,83 @@ export function planAction(vault: VaultLookup, repo: Repo, call: ToolCall): Plan
         open: null,
       };
     }
+    case 'write_file':
+    case 'edit_file':
+    case 'save_note_to_file':
+    case 'note_from_file': {
+      if (!folders) return { refused: 'Files are not available here.' };
+      const at = vault.filePath(args.path as string);
+      if (typeof at === 'string') return { refused: at };
+      if (!at.rel) return { refused: 'Give the path of a file inside the folder.' };
+      const shown = `${at.folder}/${at.rel}`;
+      if (kind === 'note_from_file') {
+        return { kind, summary: `Make a note from “${shown}”`, payload: { folderId: at.folderId, rel: at.rel }, open: null };
+      }
+      if (kind === 'save_note_to_file') {
+        const t = target(args.ref as number);
+        if (typeof t === 'string') return { refused: t };
+        if (t.kind !== 'note') return { refused: `[${args.ref}] is not a note.` };
+        const rel = /\.(md|markdown)$/i.test(at.rel) ? at.rel : `${at.rel}.md`;
+        const there = await folders.read(at.folderId, rel).then(
+          () => true,
+          () => false,
+        );
+        return {
+          kind,
+          summary: `Save the note ${q(t.title)} as “${at.folder}/${rel}”${there ? ' (it replaces the file there)' : ''}`,
+          payload: { noteId: t.noteId, folderId: at.folderId, rel },
+          open: null,
+        };
+      }
+      // What is there now, to replace a part of it, or to say the file is replaced.
+      let current: { text: string; hash: string } | null = null;
+      try {
+        const read = await folders.read(at.folderId, at.rel);
+        if (read.kind !== 'text') return { refused: 'That file is not text: only text files can be written.' };
+        current = { text: read.text, hash: read.hash };
+      } catch (err) {
+        if (kind === 'edit_file') return { refused: err instanceof Error ? err.message : 'That file cannot be read.' };
+      }
+      if (kind === 'edit_file') {
+        const text = (current as { text: string }).text;
+        const old = args.old as string;
+        const first = text.indexOf(old);
+        if (first < 0) return { refused: 'Those words are not in the file: open it and copy the old text exactly.' };
+        if (text.indexOf(old, first + 1) >= 0) return { refused: 'That text is in the file more than once: give more of it, so it is found once.' };
+        const content = text.slice(0, first) + (args.new as string) + text.slice(first + old.length);
+        return {
+          kind,
+          summary: `Edit “${shown}”`,
+          payload: { folderId: at.folderId, rel: at.rel, content, expectHash: current?.hash ?? null, detail: diffOf(old, args.new as string) },
+          open: null,
+        };
+      }
+      const content = args.content as string;
+      return {
+        kind,
+        summary: current ? `Write a new text for “${shown}” (it replaces what is there)` : `Make the file “${shown}”`,
+        payload: {
+          folderId: at.folderId,
+          rel: at.rel,
+          content,
+          expectHash: current?.hash ?? null,
+          detail: content.length > 1500 ? `${content.slice(0, 1500)}\n…` : content,
+        },
+        open: null,
+      };
+    }
   }
+}
+
+/** What an edit changes, as lines taken out and put in. */
+function diffOf(old: string, next: string): string {
+  const cut = (t: string) => (t.length > 700 ? `${t.slice(0, 700)}…` : t);
+  const lines = (prefix: string, t: string) =>
+    cut(t)
+      .split('\n')
+      .map((l) => `${prefix} ${l}`)
+      .join('\n');
+  return `${lines('-', old)}\n${lines('+', next)}`;
 }
 
 /** A stored change as the learner is shown it. */
@@ -237,6 +321,7 @@ export function actionView(a: StoredAction): AssistantAction {
     messageId: a.messageId,
     kind: a.kind as AssistantAction['kind'],
     summary: a.summary,
+    detail: typeof a.payload.detail === 'string' ? a.payload.detail : null,
     status: a.status,
     error: a.error,
     open: result?.open ?? (a.payload.open as VaultTarget | null | undefined) ?? null,
@@ -258,6 +343,10 @@ export interface ActionDeps {
   stopAnswer: (messageId: string) => Promise<void>;
   /** Add a source: a page read from its address, or text. */
   addSource: (notebookId: string, id: string, input: { url: string | null; text: string | null; title: string | null }) => Promise<Source>;
+  /** Files of linked folders (ADR 0025). */
+  folders: Folders;
+  /** A note from a text file of a folder. */
+  noteFromFile: (notebookId: string, id: string, folderId: string, path: string) => Promise<Note>;
 }
 
 type Undo =
@@ -268,7 +357,8 @@ type Undo =
   | { rename: { what: 'thread' | 'note' | 'source'; id: string; title: string } }
   | { unpin: { pinId: string } }
   | { repin: { threadId: string; at: Record<string, unknown> } }
-  | { merge: { mergeId: string } };
+  | { merge: { mergeId: string } }
+  | { file: { backupId: string } };
 
 /** Runs, cancels and undoes what the Assistant proposed. */
 export class AssistantActions {
@@ -319,7 +409,12 @@ export class AssistantActions {
         if (m.status === 'pending' || m.status === 'streaming') await this.deps.stopAnswer(m.id);
       }
     }
-    this.reverse(undo);
+    try {
+      await this.reverse(undo);
+    } catch (err) {
+      if (err instanceof FileProblem) throw new ConflictError(err.message);
+      throw err;
+    }
     return actionView(repo.setAction(id, ['done'], 'undone') as StoredAction);
   }
 
@@ -449,6 +544,28 @@ export class AssistantActions {
         restore(repo, what, p.id as string);
         return { open: a.payload.open as VaultTarget | null, undo: { trash: { what, id: p.id as string } } };
       }
+      case 'write_file':
+      case 'edit_file': {
+        const folderId = p.folderId as string;
+        const rel = p.rel as string;
+        const backupId = await this.deps.folders.write(folderId, rel, p.content as string, { expectHash: (p.expectHash as string | null) ?? null });
+        // Read again, so the source (if it was opened) shows the new text.
+        const source = await this.deps.folders.open(folderId, rel).catch(() => null);
+        return {
+          open: source ? { kind: 'source', sourceId: source.id, versionId: source.latestVersionId, at: 0, title: source.title } : null,
+          undo: { file: { backupId } },
+        };
+      }
+      case 'save_note_to_file': {
+        const note = repo.getNote(p.noteId as string);
+        if (!note) throw new NotFoundError('note');
+        const backupId = await this.deps.folders.write(p.folderId as string, p.rel as string, noteFile(note.title, note.blocks.map((b) => b.content)));
+        return { open: { kind: 'note', noteId: note.id, blockId: null, title: note.title }, undo: { file: { backupId } } };
+      }
+      case 'note_from_file': {
+        const note = await this.deps.noteFromFile(this.notebookOf(a), ulid(), p.folderId as string, p.rel as string);
+        return { open: { kind: 'note', noteId: note.id, blockId: null, title: note.title }, undo: { trash: { what: 'note', id: note.id } } };
+      }
       case 'add_source': {
         const id = ulid();
         const source = await this.deps.addSource(this.notebookOf(a), id, {
@@ -464,9 +581,10 @@ export class AssistantActions {
     }
   }
 
-  private reverse(undo: Undo): void {
+  private async reverse(undo: Undo): Promise<void> {
     const { repo } = this.deps;
-    if ('trash' in undo) trash(repo, undo.trash.what, undo.trash.id);
+    if ('file' in undo) await this.deps.folders.undo(undo.file.backupId);
+    else if ('trash' in undo) trash(repo, undo.trash.what, undo.trash.id);
     else if ('restore' in undo) restore(repo, undo.restore.what, undo.restore.id);
     else if ('block' in undo) repo.deleteBlock(undo.block.noteId, undo.block.blockId);
     else if ('proposal' in undo) repo.discardProposal(undo.proposal.noteId, undo.proposal.blockId);
@@ -514,7 +632,7 @@ function restore(repo: Repo, what: 'thread' | 'note' | 'source', id: string): vo
 
 /** A failure the learner can read, or null for one that is ours (logged). */
 function plain(err: unknown): string | null {
-  if (err instanceof HttpError) return err.message;
+  if (err instanceof HttpError || err instanceof FileProblem) return err.message;
   if (err instanceof ConflictError || err instanceof InvalidError || err instanceof NotFoundError) {
     const m = err.message;
     return `${m.charAt(0).toUpperCase()}${m.slice(1)}${/[.!?]$/.test(m) ? '' : '.'}`;

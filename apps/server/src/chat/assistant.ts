@@ -6,6 +6,10 @@
 import {
   type AssistantPlace,
   cutLookup,
+  FindInFilesArgs,
+  fileName,
+  ListFilesArgs,
+  OpenFileArgs,
   quoteRange,
   quotesNear,
   ListArgs,
@@ -19,6 +23,7 @@ import {
   type ToolCall,
   type VaultTarget,
 } from '@noema/core';
+import type { Folders } from '../files/folders.ts';
 import type { Repo } from '../store/repo.ts';
 
 /**
@@ -70,6 +75,13 @@ function line(text: string, max: number): string {
 
 const quoted = (title: string) => `“${title || 'Untitled'}”`;
 
+/** "1.2 MB". */
+function size(bytes: number): string {
+  if (bytes < 1000) return `${bytes} B`;
+  if (bytes < 1_000_000) return `${Math.round(bytes / 1000)} kB`;
+  return `${(bytes / 1_000_000).toFixed(1)} MB`;
+}
+
 function keyOf(t: VaultTarget): string {
   switch (t.kind) {
     case 'thread':
@@ -89,11 +101,24 @@ export class VaultLookup {
   private readonly notebookId: string;
   /** The Assistant's own thread: never shown to it as material. */
   private readonly selfId: string;
+  /** Folders on the learner's computer (ADR 0025), when the server has them. */
+  private readonly folders: Folders | null;
 
-  constructor(repo: Repo, notebookId: string, selfId: string) {
+  constructor(repo: Repo, notebookId: string, selfId: string, folders: Folders | null = null) {
     this.repo = repo;
     this.notebookId = notebookId;
     this.selfId = selfId;
+    this.folders = folders;
+  }
+
+  /** A path the model gave ("Slides/week4.pdf"): the linked folder named first, and the path inside it. */
+  filePath(path: string): { folderId: string; folder: string; rel: string } | string {
+    const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
+    const linked = this.repo.listFolders(this.notebookId);
+    if (linked.length === 0) return 'No folders are linked to this notebook.';
+    const f = linked.find((x) => x.name === parts[0]) ?? linked.find((x) => x.name.toLowerCase() === parts[0]?.toLowerCase());
+    if (!f) return `No linked folder is called “${parts[0] ?? ''}”. The folders: ${linked.map((x) => `“${x.name}”`).join(', ')}.`;
+    return { folderId: f.id, folder: f.name, rel: parts.slice(1).join('/') };
   }
 
   /** The label for a target: the same one if it was labelled before in this answer. */
@@ -160,12 +185,18 @@ export class VaultLookup {
         out.push(`[${l}] ${quoted(b.title)}, asked from ${quoted(b.parentTitle)} · ${day(b.lastAt)}`);
       }
     }
+    const linked = this.repo.listFolders(this.notebookId);
+    if (linked.length > 0) {
+      out.push(
+        `Folders on the learner's computer: ${linked.map((f) => `“${f.name}”`).join(', ')}. Every file there counts as a source: list_files, find_in_files and open_file read them.`,
+      );
+    }
     out.push(`Today is ${day(new Date().toISOString())}.`);
     return out.join('\n');
   }
 
   /** Do one lookup the model asked for. A lookup that cannot be done says why, to the model. */
-  run(call: ToolCall): LookupResult {
+  run(call: ToolCall): LookupResult | Promise<LookupResult> {
     let args: unknown;
     try {
       args = call.arguments.trim() === '' ? {} : JSON.parse(call.arguments);
@@ -185,8 +216,69 @@ export class VaultLookup {
         const a = ListArgs.safeParse(args);
         return a.success ? this.list(a.data.what) : this.refused('list', 'Say what to list: threads, sources, notes or trash.');
       }
+      case 'list_files': {
+        const a = ListFilesArgs.safeParse(args);
+        return a.success ? this.listFiles(a.data.path ?? '') : this.refused('list', 'Give a path, or none for the folders.');
+      }
+      case 'find_in_files': {
+        const a = FindInFilesArgs.safeParse(args);
+        return a.success ? this.findInFiles(a.data.query) : this.refused('search', 'Give a query: {"query": "a few words"}.');
+      }
+      case 'open_file': {
+        const a = OpenFileArgs.safeParse(args);
+        return a.success ? this.openFile(a.data.path, a.data.page) : this.refused('open', 'Give a path: {"path": "Slides/week4.pdf"}.');
+      }
       default:
         return this.refused(call.name, 'There is no such tool. Use search, open or list.');
+    }
+  }
+
+  private async listFiles(path: string): Promise<LookupResult> {
+    if (!this.folders) return this.refused('list', 'Files are not available here.');
+    const linked = this.repo.listFolders(this.notebookId);
+    if (path.trim() === '') {
+      const out = linked.length === 0 ? ['No folders are linked to this notebook.'] : [`Linked folders: ${linked.length}.`];
+      for (const f of linked) out.push(`- ${f.name}/`);
+      return { content: out.join('\n'), step: { tool: 'list', label: 'Listed the folders', found: linked.length } };
+    }
+    const at = this.filePath(path);
+    if (typeof at === 'string') return this.refused('list', at);
+    try {
+      const entries = await this.folders.tree(at.folderId, at.rel);
+      const where = at.rel ? `${at.folder}/${at.rel}` : at.folder;
+      const out = [`In “${where}”: ${entries.length}.`];
+      for (const e of entries) {
+        const p = `${at.folder}/${e.path}`;
+        if (e.kind === 'dir') out.push(`- ${p}/`);
+        else out.push(`- ${p} · ${size(e.size ?? 0)}${e.readable ? '' : ' · cannot be read here'}${e.sourceId ? ' · opened before' : ''}`);
+      }
+      return { content: cutLookup(out.join('\n')), step: { tool: 'list', label: `Listed “${line(where, 40)}”`, found: entries.length } };
+    } catch (err) {
+      return this.refused('list', err instanceof Error ? err.message : 'That folder cannot be read.');
+    }
+  }
+
+  private async findInFiles(query: string): Promise<LookupResult> {
+    if (!this.folders) return this.refused('search', 'Files are not available here.');
+    const linked = this.repo.listFolders(this.notebookId);
+    const names = new Map(linked.map((f) => [f.id, f.name]));
+    const hits = await this.folders.find(linked.map((f) => f.id), query);
+    const out = [`In the files, “${line(query, 60)}”: ${hits.length === 0 ? 'nothing found.' : `${hits.length} found.`}`];
+    for (const h of hits) out.push(h.line > 0 ? `- ${names.get(h.folderId)}/${h.path}:${h.line}: ${h.text}` : `- ${names.get(h.folderId)}/${h.path} (its name)`);
+    if (hits.length > 0) out.push('Open a file with open_file to read and cite it.');
+    return { content: cutLookup(out.join('\n')), step: { tool: 'search', label: `Searched the files for “${line(query, 30)}”`, found: hits.length } };
+  }
+
+  private async openFile(path: string, page?: number): Promise<LookupResult> {
+    if (!this.folders) return this.refused('open', 'Files are not available here.');
+    const at = this.filePath(path);
+    if (typeof at === 'string') return this.refused('open', at);
+    try {
+      const source = await this.folders.open(at.folderId, at.rel);
+      const result = this.openSource(source.id, source.latestVersionId, 0, page);
+      return { content: `${at.folder}/${at.rel}, opened as a source.\n${result.content}`, step: { ...result.step, label: `Opened the file “${line(fileName(at.rel), 40)}”` } };
+    } catch (err) {
+      return this.refused('open', err instanceof Error ? err.message : 'That file cannot be read.');
     }
   }
 

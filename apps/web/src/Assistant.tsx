@@ -501,7 +501,30 @@ const ACTION_GLYPH: Record<AssistantAction['kind'], string> = {
   move_to_trash: '🗑',
   restore: '↺',
   add_source: '❡',
+  write_file: '⌸',
+  edit_file: '✎',
+  save_note_to_file: '⇣',
+  note_from_file: '▤',
 };
+
+/** What a change to a file does, as lines: taken out (−) and put in (+), or the new text. */
+function ActionDetail({ kind, detail }: { kind: AssistantAction['kind']; detail: string }) {
+  const lines = detail.split('\n');
+  const diff = kind === 'edit_file';
+  return (
+    <details className="action-detail" open={lines.length <= 14} data-testid="action-detail">
+      <summary>{diff ? 'The change' : 'The text'}</summary>
+      <pre>
+        {lines.map((l, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: lines of one fixed text
+          <span key={i} className={`line${diff ? (l.startsWith('- ') ? ' del' : l.startsWith('+ ') ? ' ins' : '') : ''}`}>
+            {l || ' '}
+          </span>
+        ))}
+      </pre>
+    </details>
+  );
+}
 
 /** The changes an answer proposed: Do it or Cancel; then Open and Undo. */
 function ActionCards({
@@ -553,6 +576,7 @@ function ActionCards({
               </button>
             )}
           </span>
+          {a.detail && a.status === 'proposed' && <ActionDetail kind={a.kind} detail={a.detail} />}
           {a.error && (a.status === 'failed' || a.status === 'done') && (
             <span className="action-error" role="alert">
               {a.error}

@@ -13,3 +13,4 @@ export * from './readable.ts';
 export * from './asked.ts';
 export * from './pdf.ts';
 export * from './assistant.ts';
+export * from './files.ts';

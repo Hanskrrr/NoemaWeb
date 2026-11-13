@@ -155,6 +155,8 @@ export const Source = z.object({
   /** Threads asked about its passages (not in the Trash). */
   threads: z.number().int().nonnegative(),
   deletedAt: z.string().nullable(),
+  /** A file in a linked folder (ADR 0025): the folder, and the file's path inside it. */
+  linked: z.object({ folderId: Id, path: z.string() }).nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -626,6 +628,55 @@ export const UpdateNotebookRequest = z
   .partial()
   .refine((v) => Object.keys(v).length > 0, 'nothing to update');
 export type UpdateNotebookRequest = z.infer<typeof UpdateNotebookRequest>;
+
+// Folders on the learner's computer (ADR 0025).
+
+/** A folder linked to the notebook: read in place; Noema writes into it only when asked. */
+export const Folder = z.object({
+  id: Id,
+  name: z.string(),
+  path: z.string(),
+  /** It is not there any more (moved, renamed, or a drive not connected). */
+  missing: z.boolean(),
+});
+export type Folder = z.infer<typeof Folder>;
+export const FolderList = z.object({ folders: z.array(Folder) });
+export const AddFolderRequest = z.object({ id: Id, path: z.string().trim().min(1).max(4096) });
+export const FileEntry = z.object({
+  name: z.string(),
+  /** Inside the folder, parts joined with /. */
+  path: z.string(),
+  kind: z.enum(['dir', 'file']),
+  /** Bytes, for a file. */
+  size: z.number().int().nonnegative().nullable(),
+  /** It can be opened: text of any kind, or a PDF. */
+  readable: z.boolean(),
+  /** The source it is open as, if it was opened. */
+  sourceId: Id.nullable(),
+});
+export type FileEntry = z.infer<typeof FileEntry>;
+export const FolderTree = z.object({ entries: z.array(FileEntry) });
+export const FilePathRequest = z.object({ path: z.string().trim().min(1).max(4096) });
+/** Write a text file of a linked folder: what it should say, and the version it was edited from. */
+export const SaveFileRequest = z.object({
+  path: z.string().trim().min(1).max(4096),
+  content: z.string().max(5_000_000),
+  /** The version edited: refused if the file changed on disk since. */
+  versionId: Id.optional(),
+  /** Or the file as it was read for editing (FileText.hash): the same check. */
+  hash: z.string().regex(/^[0-9a-f]{16,128}$/).optional(),
+});
+/** A text file of a linked folder, as it is on disk, to edit. */
+export const FileText = z.object({ path: z.string(), text: z.string(), hash: z.string() });
+export type FileText = z.infer<typeof FileText>;
+export const SaveNoteToFolderRequest = z.object({
+  folderId: Id,
+  path: z.string().trim().min(1).max(4096),
+  /** Write over a file of that name (refused otherwise). */
+  replace: z.boolean().optional(),
+});
+export const NoteFromFileRequest = z.object({ id: Id, folderId: Id, path: z.string().trim().min(1).max(4096) });
+export const SavedFile = z.object({ ok: z.literal(true), path: z.string() });
 
 /** The Assistant's thread is made with an id the client chose, so a retried POST makes one. */
 export const CreateAssistantRequest = z.object({ id: Id });

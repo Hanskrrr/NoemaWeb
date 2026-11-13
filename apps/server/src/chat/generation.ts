@@ -32,6 +32,7 @@ import {
 import type { Config } from '../config.ts';
 import { type ModelProvider, ProviderError, type StreamEvent, type Usage } from '../llm/provider.ts';
 import type { ModelSource } from '../llm/settings.ts';
+import type { Folders } from '../files/folders.ts';
 import type { Logger } from '../log.ts';
 import type { Repo } from '../store/repo.ts';
 import { ACTION_TOOL_NAMES, actionView, planAction } from './actions.ts';
@@ -93,6 +94,8 @@ export class Generations {
   private readonly headliner: Headliner | null;
   private readonly config: Pick<Config, 'contextBudgetTokens' | 'maxOutputTokens'>;
   private readonly log: Logger;
+  /** Folders on the learner's computer (ADR 0025), for the Assistant's file tools. */
+  private readonly folders: Folders | null;
 
   constructor(deps: {
     repo: Repo;
@@ -101,7 +104,9 @@ export class Generations {
     headliner?: Headliner;
     config: Pick<Config, 'contextBudgetTokens' | 'maxOutputTokens'>;
     log: Logger;
+    folders?: Folders;
   }) {
+    this.folders = deps.folders ?? null;
     this.repo = deps.repo;
     this.models = deps.models;
     this.titler = deps.titler ?? null;
@@ -360,7 +365,7 @@ export class Generations {
    */
   private async assistant(entry: Live, args: StartArgs, provider: ModelProvider, rec: Recorder): Promise<Lookups> {
     const notebook = this.repo.getNotebook(args.notebookId);
-    const vault = new VaultLookup(this.repo, args.notebookId, args.threadId);
+    const vault = new VaultLookup(this.repo, args.notebookId, args.threadId, this.folders);
     // Earlier answers go back as their text, without the labels that meant something only in them.
     const labelsOf = new Map(
       this.repo.listMessages(args.threadId).map((m) => [m.id, Object.keys(m.lookups?.refs ?? {})] as const),
@@ -456,19 +461,22 @@ export class Generations {
       const asked = calls.map((c, i) => ({ ...c, id: c.id || `call_${round}_${i}` }));
       const turn: ChatMessage = { role: 'assistant', content: said, toolCalls: asked };
       if (reasoning) turn.reasoning = reasoning;
-      const answers: ChatMessage[] = asked.map((call, i) => {
+      const answers: ChatMessage[] = [];
+      for (const [i, call] of asked.entries()) {
         if (i >= MAX_LOOKUPS_PER_ROUND) {
-          return { role: 'tool', toolCallId: call.id, content: `Not looked up: at most ${MAX_LOOKUPS_PER_ROUND} lookups at once.` };
+          answers.push({ role: 'tool', toolCallId: call.id, content: `Not looked up: at most ${MAX_LOOKUPS_PER_ROUND} lookups at once.` });
+          continue;
         }
         if (ACTION_TOOL_NAMES.has(call.name)) {
-          return { role: 'tool', toolCallId: call.id, content: this.propose(entry, vault, call) };
+          answers.push({ role: 'tool', toolCallId: call.id, content: await this.propose(entry, vault, call) });
+          continue;
         }
-        const result = vault.run(call);
+        const result = await vault.run(call);
         lookedUp++;
         entry.steps.push(result.step);
         this.emit(entry, (w) => w.step?.(result.step));
-        return { role: 'tool', toolCallId: call.id, content: result.content };
-      });
+        answers.push({ role: 'tool', toolCallId: call.id, content: result.content });
+      }
       for (const a of answers) {
         const tokens = estimateTokens(a.content);
         parts.push({ kind: 'lookup', tokens });
@@ -499,8 +507,8 @@ export class Generations {
   }
 
   /** A change the model asked for: checked and kept as a proposal (or done, for show). What the model is told. */
-  private propose(entry: Live, vault: VaultLookup, call: ToolCall): string {
-    const plan = planAction(vault, this.repo, call);
+  private async propose(entry: Live, vault: VaultLookup, call: ToolCall): Promise<string> {
+    const plan = await planAction(vault, this.repo, call, this.folders);
     if ('refused' in plan) return plan.refused;
     const show = plan.kind === 'show';
     const stored = this.repo.addAction({

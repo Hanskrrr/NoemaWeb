@@ -52,4 +52,6 @@ export const keys = {
   /** The Assistant open beside what is open, and how wide. */
   assistantDock: 'noema:assistant-dock',
   assistantDockWidth: 'noema:assistant-dock-width',
+  /** Folders of linked folders shown open in Files. */
+  filesOpen: 'noema:files-open',
 };

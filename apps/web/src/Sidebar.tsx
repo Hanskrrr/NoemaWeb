@@ -20,7 +20,8 @@
 import { type NoteSummary, readableQuote, type Source, type Thread, type Trash } from '@noema/core';
 import { Orb } from './LivingFrame.tsx';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
-import { NotesIcon, SourcesIcon, ThreadsIcon, TrashIcon } from './icons.tsx';
+import { FilesPanel } from './Files.tsx';
+import { FilesIcon, NotesIcon, SourcesIcon, ThreadsIcon, TrashIcon } from './icons.tsx';
 import { sourceFamily } from './reading.ts';
 import { keys, storage } from './storage.ts';
 
@@ -114,9 +115,15 @@ function markOf(t: Thread, depth: number, byId: Map<string, Thread>): { glyph: s
   return null;
 }
 
-export type SidebarSection = 'threads' | 'sources' | 'notes' | 'trash';
-const SECTIONS: SidebarSection[] = ['threads', 'sources', 'notes', 'trash'];
-const NAMES: Record<SidebarSection, string> = { threads: 'Threads', sources: 'Sources', notes: 'Notes', trash: 'Trash' };
+export type SidebarSection = 'threads' | 'sources' | 'notes' | 'files' | 'trash';
+const SECTIONS: SidebarSection[] = ['threads', 'sources', 'notes', 'files', 'trash'];
+const NAMES: Record<SidebarSection, string> = {
+  threads: 'Threads',
+  sources: 'Sources',
+  notes: 'Notes',
+  files: 'Files',
+  trash: 'Trash',
+};
 
 export function Sidebar({
   threads,
@@ -138,7 +145,12 @@ export function Sidebar({
   onOpenSource,
   onAddSource,
   onRestoreSource,
+  notebookId,
+  onOpenFile,
 }: {
+  notebookId: string;
+  /** A file of a linked folder was opened as a source (ADR 0025). */
+  onOpenFile: (source: Source) => void;
   threads: Thread[];
   sources: Source[];
   notes: NoteSummary[];
@@ -186,7 +198,8 @@ export function Sidebar({
   const sectionOf = (id: string | null): SidebarSection | null => {
     if (!id) return null;
     if (byId.has(id)) return underSource(id) ? 'sources' : 'threads';
-    if (listed.has(id)) return 'sources';
+    // A file of a linked folder is shown where it is, in Files.
+    if (listed.has(id)) return sources.find((x) => x.id === id)?.linked ? 'files' : 'sources';
     const note = notes.find((n) => n.id === id);
     if (!note) return null;
     // A note made from a thread is shown under it, with what it was made from.
@@ -366,11 +379,11 @@ export function Sidebar({
             className={`thread-link source-link${x.id === activeId ? ' active' : ''}`}
             aria-current={x.id === activeId ? 'page' : undefined}
             onClick={() => onOpenSource(x.id)}
-            title={x.url ?? 'Pasted text'}
+            title={x.linked ? `A file in a linked folder: ${x.linked.path}` : (x.url ?? 'Pasted text')}
             data-testid="source-link"
             data-source-id={x.id}
           >
-            <span aria-hidden>❡ </span>
+            <span aria-hidden>{x.linked ? '⌸ ' : '❡ '}</span>
             {x.title || 'Untitled'}
           </button>
           {closed && (
@@ -388,12 +401,15 @@ export function Sidebar({
     threads: roots.length,
     sources: sources.length,
     notes: notes.length,
+    // Files lists its own folders.
+    files: 0,
     trash: inTrash,
   };
   const icons: Record<SidebarSection, ReactNode> = {
     threads: <ThreadsIcon />,
     sources: <SourcesIcon />,
     notes: <NotesIcon />,
+    files: <FilesIcon />,
     trash: <TrashIcon />,
   };
   const panelShown = !collapsed || open;
@@ -408,7 +424,13 @@ export function Sidebar({
         onClick={() => pick(x)}
         aria-pressed={current}
         aria-controls="sidebar-panel"
-        title={current ? `Hide the list of ${NAMES[x].toLowerCase()}` : `${NAMES[x]} · ${counts[x]}`}
+        title={
+          current
+            ? `Hide the list of ${NAMES[x].toLowerCase()}`
+            : x === 'files'
+              ? 'Files: folders on this computer'
+              : `${NAMES[x]} · ${counts[x]}`
+        }
         data-testid={`rail-${x}`}
       >
         {icons[x]}
@@ -508,6 +530,17 @@ export function Sidebar({
         )}
       </>
     );
+  } else if (section === 'files') {
+    panel = (
+      <FilesPanel
+        notebookId={notebookId}
+        activeSourceId={activeId && listed.has(activeId) ? activeId : null}
+        onOpened={(source) => {
+          picked.current = source.id;
+          onOpenFile(source);
+        }}
+      />
+    );
   } else {
     panel = (
       <>
@@ -596,6 +629,7 @@ export function Sidebar({
         {railButton('threads')}
         {railButton('sources')}
         {railButton('notes')}
+        {railButton('files')}
         <span className="rail-space" />
         {railButton('trash')}
       </div>

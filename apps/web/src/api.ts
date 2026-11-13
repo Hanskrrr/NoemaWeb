@@ -14,6 +14,10 @@ import {
   CreateBranchResponse,
   type CreatePinRequest,
   DeleteThreadResponse,
+  FileText,
+  Folder,
+  FolderList,
+  FolderTree,
   Health,
   ImportResponse,
   type InsertBlockRequest,
@@ -36,6 +40,7 @@ import {
   PageImageResponse,
   Pin,
   RefetchResponse,
+  SavedFile,
   type SearchOpenedRequest,
   SearchResponse,
   Source,
@@ -63,6 +68,7 @@ import {
 import { z } from 'zod';
 
 const Ok = z.object({ ok: z.literal(true) });
+const Opened = z.object({ source: Source });
 
 export class ApiFailure extends Error {
   override name = 'ApiFailure';
@@ -274,6 +280,26 @@ export const api = {
   discardMerge: (id: string) => call(Merge, 'POST', `/api/merges/${id}/discard`, {}),
   moveOut: (noteId: string, newId: string, blockIds: string[]) =>
     call(Note, 'POST', `/api/notes/${noteId}/move-out`, { id: newId, blockIds }),
+  // Folders on this computer (ADR 0025): read in place, written only when asked.
+  folders: (notebookId: string) => call(FolderList, 'GET', `/api/notebooks/${notebookId}/folders`),
+  linkFolder: (notebookId: string, id: string, path: string) =>
+    call(Folder, 'POST', `/api/notebooks/${notebookId}/folders`, { id, path }),
+  unlinkFolder: (folderId: string) => call(Ok, 'DELETE', `/api/folders/${folderId}`),
+  folderTree: (folderId: string, dir = '') =>
+    call(FolderTree, 'GET', `/api/folders/${folderId}/tree?dir=${encodeURIComponent(dir)}`),
+  /** A file opened as a source: made the first time, read again when it changed on disk. */
+  openFile: (folderId: string, path: string) =>
+    call(Opened, 'POST', `/api/folders/${folderId}/open`, { path }).then((r) => r.source),
+  /** A text file as it is on disk, to edit. */
+  fileText: (folderId: string, path: string) =>
+    call(FileText, 'GET', `/api/folders/${folderId}/file?path=${encodeURIComponent(path)}`),
+  /** Write a text file, against the text it was edited from: refused if it changed on disk since. */
+  saveFile: (folderId: string, path: string, content: string, hash: string) =>
+    call(Opened, 'PUT', `/api/folders/${folderId}/file`, { path, content, hash }).then((r) => r.source),
+  saveNoteToFolder: (noteId: string, folderId: string, path: string, replace = false) =>
+    call(SavedFile, 'POST', `/api/notes/${noteId}/save-to-folder`, { folderId, path, ...(replace ? { replace } : {}) }),
+  noteFromFile: (notebookId: string, id: string, folderId: string, path: string) =>
+    call(Note, 'POST', `/api/notebooks/${notebookId}/notes/from-file`, { id, folderId, path }),
 };
 
 export interface StreamHandlers {

@@ -4415,3 +4415,304 @@ body.resizing {
     padding-right: 0;
   }
 }
+
+/* Files: folders on this computer (ADR 0025), listed like a code editor's files. */
+.sidebar ul.file-list {
+  padding-left: 0;
+  margin-left: 0;
+  border-left: 0;
+}
+.file-folders {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.file-folder-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.file-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  padding: 0.2rem 0.4rem;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+.file-row:hover:not(:disabled) {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+.file-row.active {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.file-row.is-folder {
+  flex: 1;
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 0.88rem;
+}
+.file-row.unreadable {
+  color: var(--ink-faint);
+  opacity: 0.7;
+  cursor: default;
+}
+.file-row.is-source .file-name {
+  text-decoration: underline 1px color-mix(in srgb, var(--accent) 35%, transparent);
+  text-underline-offset: 3px;
+}
+.file-caret {
+  flex: none;
+  width: 1.05rem;
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  text-align: center;
+}
+.file-glyph {
+  font: 0.68rem / 1 var(--mono);
+}
+.file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-busy {
+  flex: none;
+  color: var(--ink-faint);
+  font-size: 0.78rem;
+}
+.file-tool {
+  flex: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  border-radius: 5px;
+  opacity: 0;
+}
+.file-folder-row:hover .file-tool,
+.file-folder-row:focus-within .file-tool {
+  opacity: 1;
+}
+.file-tool:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+.file-note {
+  margin: 0.15rem 0;
+  padding: 0.1rem 0.4rem;
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+}
+.file-note.is-error {
+  color: var(--bad);
+}
+.file-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.2rem 0 0.4rem 1.2rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--sheet);
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+.file-confirm-buttons {
+  display: flex;
+  gap: 0.35rem;
+}
+.file-confirm-buttons button {
+  font-size: 0.8rem;
+  padding: 0.15rem 0.6rem;
+}
+.link-folder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0 0.2rem 0.8rem;
+  padding: 0.6rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--rule));
+  border-radius: 8px;
+  background: var(--sheet);
+  font-size: 0.84rem;
+}
+.link-folder label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  color: var(--ink-soft);
+}
+.link-folder input {
+  font: 0.82rem var(--mono);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 0.35rem 0.45rem;
+  min-width: 0;
+}
+.link-folder .hint {
+  margin: 0;
+  text-align: left;
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+.link-folder-buttons {
+  display: flex;
+  gap: 0.35rem;
+}
+.link-folder-buttons button {
+  font-size: 0.82rem;
+  padding: 0.25rem 0.75rem;
+}
+
+/* A source that is a file: where it is. */
+.source-file-path {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+}
+
+/* A text file edited in place. */
+.file-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.4rem 0 1.5rem;
+}
+.file-editor-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.4rem 0.2rem;
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
+}
+.file-editor-path {
+  font: 0.82rem var(--mono);
+  color: var(--ink-soft);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.file-editor-dot {
+  color: var(--accent);
+}
+.file-editor-buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.file-editor-buttons .hint {
+  margin: 0;
+  font-size: 0.76rem;
+}
+.file-editor-buttons button {
+  font-size: 0.84rem;
+  padding: 0.25rem 0.8rem;
+}
+.file-editor-text {
+  width: 100%;
+  min-height: 60vh;
+  resize: vertical;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--sheet);
+  color: var(--ink);
+  font: 0.95rem / 1.6 var(--serif);
+  tab-size: 4;
+}
+.file-editor-text.is-code {
+  font: 0.84rem / 1.55 var(--mono);
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+  background: var(--code);
+}
+.file-editor-text:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: 1px;
+}
+
+/* A note saved into a folder. */
+.save-to-folder {
+  margin-left: 0;
+}
+.save-to-folder-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.save-to-folder-form .merge-explain {
+  margin: 0;
+}
+.save-to-folder-field select,
+.save-to-folder-field input {
+  font: 0.84rem var(--mono);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 0.3rem 0.45rem;
+  min-width: 0;
+  width: 100%;
+}
+.save-to-folder-field.grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.save-to-folder code {
+  font-size: 0.86em;
+  overflow-wrap: anywhere;
+}
+
+/* What a change to a file does, before Do it. */
+.action-detail {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.action-detail summary {
+  cursor: pointer;
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+}
+.action-detail pre {
+  margin: 0.3rem 0 0;
+  max-height: 16rem;
+  overflow: auto;
+  padding: 0.45rem 0.55rem;
+  border-radius: 6px;
+  background: var(--code);
+  font: 0.78rem / 1.5 var(--mono);
+  white-space: pre;
+}
+.action-detail .line {
+  display: block;
+}
+.action-detail .del {
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 9%, transparent);
+}
+.action-detail .ins {
+  color: color-mix(in srgb, #2f7a45 85%, var(--ink));
+  background: color-mix(in srgb, #2f7a45 10%, transparent);
+}

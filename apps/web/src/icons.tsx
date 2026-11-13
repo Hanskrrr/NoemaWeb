@@ -43,6 +43,14 @@ export const NotesIcon = () => (
   </Svg>
 );
 
+/** Files: a folder. */
+export const FilesIcon = () => (
+  <Svg>
+    <path d="M3 6.5a1.5 1.5 0 0 1 1.5-1.5h4.3l2 2.2h8.7A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5Z" />
+    <path d="M3 10h18" />
+  </Svg>
+);
+
 /** The Trash. */
 export const TrashIcon = () => (
   <Svg>

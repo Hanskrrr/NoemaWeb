@@ -14,7 +14,17 @@ import {
   CreateNoteRequest,
   CreatePinRequest,
   CreateSourceRequest,
+  AddFolderRequest,
   CreateAssistantRequest,
+  FilePathRequest,
+  fileMarkdown,
+  fileName,
+  isMarkdownFile,
+  NoteFromFileRequest,
+  noteFile,
+  SaveFileRequest,
+  SaveNoteToFolderRequest,
+  ulid,
   CreateThreadRequest,
   describeError,
   EditBlockRequest,
@@ -49,6 +59,7 @@ import {
   UseRevisionRequest,
 } from '@noema/core';
 import { AssistantActions } from './chat/actions.ts';
+import { FileProblem, Folders } from './files/folders.ts';
 import { AskedJudge, askedHit } from './chat/asked.ts';
 import { Generations } from './chat/generation.ts';
 import { fullTranscript, MergeWriter } from './chat/merges.ts';
@@ -126,10 +137,11 @@ export function createApp(deps: AppDeps): App {
       version: { content: text, origin: 'paste', fetchedUrl: null, raw: null, extractor: 'pasted' },
     }).source;
   };
+  const folders = new Folders({ repo, log });
   const titler = new Titler({ repo, models, log });
   const askedJudge = new AskedJudge({ repo, models, log });
   const headliner = new Headliner({ repo, models, log });
-  const generations = new Generations({ repo, models, titler, headliner, config: deps.config, log });
+  const generations = new Generations({ repo, models, titler, headliner, config: deps.config, log, folders });
   const notes = new NoteWriter({ repo, models, maxOutputTokens: deps.config.maxOutputTokens, log });
   const suggestions = new Suggester({ repo, models, maxOutputTokens: deps.config.maxOutputTokens, log });
   const merges = new MergeWriter({ repo, models, log });
@@ -143,6 +155,25 @@ export function createApp(deps: AppDeps): App {
       question: { id: pair.user.id, content: pair.user.content, seq: pair.user.seq },
     });
   // What the Assistant proposed, run when the learner confirms it (ADR 0024).
+  /** A note from a text file: titled by its first heading or its name; its text as the learner's blocks. */
+  const noteFromFile = async (notebookId: string, id: string, folderId: string, path: string) => {
+    const file = await folders.read(folderId, path);
+    if (file.kind !== 'text') throw new HttpError(400, 'invalid', 'Only a text file can become a note: open a PDF as a source instead.');
+    const text = file.text.replace(/\r\n?/g, '\n').trim();
+    if (!text) throw new HttpError(400, 'invalid', 'That file is empty.');
+    // Markdown that opens with a heading: that heading is the note's title (and not a block too).
+    const heading = isMarkdownFile(file.rel) ? /^#\s+(.+)\n*/.exec(text) : null;
+    const title = (heading?.[1]?.trim() ?? fileName(file.rel).replace(/\.[^.]+$/, '')).slice(0, 200) || 'Untitled';
+    const body = heading ? text.slice(heading[0].length).trim() : text;
+    if (!body) throw new HttpError(400, 'invalid', 'That file has only a title.');
+    const { note, created } = repo.createNote(id, notebookId, title);
+    if (created) {
+      const content = isMarkdownFile(file.rel) ? body : fileMarkdown(file.rel, text);
+      repo.insertBlock(note.id, { id: ulid(), after: null, content });
+      repo.logEvent('note.from_file', note.id);
+    }
+    return repo.getNote(note.id) as NonNullable<ReturnType<typeof repo.getNote>>;
+  };
   const actions = new AssistantActions({
     repo,
     log,
@@ -151,6 +182,8 @@ export function createApp(deps: AppDeps): App {
     draftMerge: (mergeId) => merges.start(mergeId),
     stopAnswer: (messageId) => generations.stopAndWait(messageId),
     addSource,
+    folders,
+    noteFromFile,
   });
 
   const notFound = (what: string) => new HttpError(404, 'not_found', `${what} not found`);
@@ -223,6 +256,68 @@ export function createApp(deps: AppDeps): App {
     const body = await ctx.body(CreateAssistantRequest);
     const { thread, created } = repo.assistantThread(notebookId, body.id);
     sendJson(ctx.res, created ? 201 : 200, thread);
+  });
+
+  // Folders on the learner's computer (ADR 0025): linked, listed, read in place, written when asked.
+  router.on('GET', '/api/notebooks/:id/folders', async ({ res, params }) => {
+    if (!repo.getNotebook(params.id as string)) throw notFound('notebook');
+    sendJson(res, 200, { folders: await folders.list(params.id as string) });
+  });
+
+  router.on('POST', '/api/notebooks/:id/folders', async (ctx) => {
+    if (!repo.getNotebook(ctx.params.id as string)) throw notFound('notebook');
+    const body = await ctx.body(AddFolderRequest);
+    sendJson(ctx.res, 201, await folders.add(ctx.params.id as string, body.id, body.path));
+  });
+
+  router.on('DELETE', '/api/folders/:id', ({ res, params }) => {
+    if (!repo.removeFolder(params.id as string)) throw notFound('folder');
+    sendJson(res, 200, { ok: true });
+  });
+
+  router.on('GET', '/api/folders/:id/tree', async ({ res, params, url }) => {
+    sendJson(res, 200, { entries: await folders.tree(params.id as string, url.searchParams.get('dir') ?? '') });
+  });
+
+  // Open a file as a source (made, or read again if it changed on disk).
+  router.on('POST', '/api/folders/:id/open', async (ctx) => {
+    const { path } = await ctx.body(FilePathRequest);
+    sendJson(ctx.res, 200, { source: await folders.open(ctx.params.id as string, path) });
+  });
+
+  // A text file as it is on disk, to edit.
+  router.on('GET', '/api/folders/:id/file', async ({ res, params, url }) => {
+    const file = await folders.read(params.id as string, url.searchParams.get('path') ?? '');
+    if (file.kind !== 'text') throw new FileProblem('That is a PDF: Noema reads it, but writes only text files.');
+    sendJson(res, 200, { path: file.rel, text: file.text, hash: file.hash });
+  });
+
+  // Write a text file of the folder, from Noema's editor; read again as a new version.
+  router.on('PUT', '/api/folders/:id/file', async (ctx) => {
+    const folderId = ctx.params.id as string;
+    const body = await ctx.body(SaveFileRequest);
+    const expectHash = body.hash ?? (body.versionId ? repo.versionFileHash(body.versionId) : null);
+    await folders.write(folderId, body.path, body.content, { expectHash });
+    sendJson(ctx.res, 200, { source: await folders.open(folderId, body.path) });
+  });
+
+  // A note saved into a folder as Markdown; over a file of that name only when asked to replace it.
+  router.on('POST', '/api/notes/:id/save-to-folder', async (ctx) => {
+    const note = repo.getNote(ctx.params.id as string);
+    if (!note) throw notFound('note');
+    const body = await ctx.body(SaveNoteToFolderRequest);
+    const path = /\.(md|markdown)$/i.test(body.path) ? body.path : `${body.path}.md`;
+    await folders.write(body.folderId, path, noteFile(note.title, note.blocks.map((b) => b.content)), { mustBeNew: !body.replace });
+    repo.logEvent('note.saved_to_folder', note.id);
+    sendJson(ctx.res, 200, { ok: true, path });
+  });
+
+  // A note made from a text file of a folder: its paragraphs and headings become blocks.
+  router.on('POST', '/api/notebooks/:id/notes/from-file', async (ctx) => {
+    const notebookId = ctx.params.id as string;
+    if (!repo.getNotebook(notebookId)) throw notFound('notebook');
+    const body = await ctx.body(NoteFromFileRequest);
+    sendJson(ctx.res, 201, await noteFromFile(notebookId, body.id, body.folderId, body.path));
   });
 
   // The Assistant's proposed changes in a thread, and doing, cancelling or undoing one.
@@ -918,6 +1013,8 @@ export function createApp(deps: AppDeps): App {
         sendError(res, 400, 'invalid_request', err.message);
       } else if (err instanceof NotFoundError) {
         sendError(res, 404, 'not_found', err.message);
+      } else if (err instanceof FileProblem) {
+        sendError(res, err.status, err.status === 404 ? 'not_found' : err.status === 409 ? 'conflict' : 'invalid', err.message);
       } else {
         log.error('request failed', { method: req.method, path: url.pathname, err });
         sendError(res, 500, 'internal', 'something went wrong; see the server log');

@@ -23,8 +23,8 @@ const known = (...labels: string[]) => (label: string) => labels.includes(label)
 
 test('the lookups come first, then the changes; all in the model\'s own format', () => {
   assert.deepEqual(
-    ASSISTANT_TOOLS.slice(0, 4).map((t) => t.name),
-    ['search', 'open', 'list', 'show'],
+    ASSISTANT_TOOLS.slice(0, 7).map((t) => t.name),
+    ['search', 'open', 'list', 'list_files', 'find_in_files', 'open_file', 'show'],
   );
   for (const t of ASSISTANT_TOOLS) {
     assert.equal((t.parameters as { type: string }).type, 'object');

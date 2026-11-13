@@ -19,6 +19,7 @@ import {
 import { memo, type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { EditableTitle } from './EditableTitle.tsx';
+import { FileEditor } from './Files.tsx';
 import { arrive, centre, clearFound } from './found.ts';
 import { dayOf } from './hits.ts';
 import { Markdown, type Slot } from './markdown/Markdown.tsx';
@@ -238,6 +239,61 @@ export function SourceView({
     },
     [],
   );
+
+  // A file of a linked folder (ADR 0025): read again when it is opened, so what
+  // is shown is what is on disk; edited here, made into a note.
+  const linked = detail?.source.linked ?? null;
+  const linkedKey = linked ? `${linked.folderId}:${linked.path}` : null;
+  const [editing, setEditing] = useState(false);
+  const [folderName, setFolderName] = useState<string | null>(null);
+  const shownLatest = useRef<string | null>(null);
+  shownLatest.current = detail?.source.latestVersionId ?? null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the file, not the object it came in
+  const checkFile = useCallback(
+    async (said: boolean) => {
+      if (!linked) return;
+      try {
+        const now = await api.openFile(linked.folderId, linked.path);
+        if (now.latestVersionId !== shownLatest.current) {
+          onChanged();
+          setNotice(
+            `The file changed on disk: this is version ${now.versions}. What you asked stays with the version you asked it about.`,
+          );
+          if (version) onVersion(undefined);
+          else await load();
+        } else if (said) {
+          setNotice('The file is as it was when it was read.');
+        }
+      } catch (err) {
+        setNotice(`${errorText(err)} This is the text as it was last read.`);
+      }
+    },
+    [linkedKey, version, load, onChanged, onVersion],
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on opening the file, and on opening it again
+  useEffect(() => {
+    if (linkedKey && !version) void checkFile(false);
+  }, [linkedKey, jump]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once per file
+  useEffect(() => {
+    if (!linked) return;
+    api.folders(notebookId).then(
+      (r) => setFolderName(r.folders.find((f) => f.id === linked.folderId)?.name ?? null),
+      () => {},
+    );
+  }, [linkedKey, notebookId]);
+  useEffect(() => setEditing(false), [sourceId]);
+
+  const noteFromFile = async () => {
+    if (!linked) return;
+    try {
+      const note = await api.noteFromFile(notebookId, ulid(), linked.folderId, linked.path);
+      onChanged();
+      onOpenNote(note.id);
+    } catch (err) {
+      setNotice(errorText(err));
+    }
+  };
 
   // A new thread opened from elsewhere: any question being written is dropped.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset when the thread or the jump changes
@@ -577,7 +633,17 @@ export function SourceView({
             <EditableTitle title={source.title} onRename={rename} label="Source title" testId="source-rename" />
           </h1>
           <div className="source-meta">
-            {source.url ? (
+            {source.linked ? (
+              <span
+                className="source-file-path"
+                title={`A file in a linked folder: ${folderName ? `${folderName}/` : ''}${source.linked.path}`}
+                data-testid="source-file-path"
+              >
+                <span aria-hidden>⌸ </span>
+                {folderName ? `${folderName}/` : ''}
+                {source.linked.path}
+              </span>
+            ) : source.url ? (
               <a href={source.url} target="_blank" rel="noreferrer noopener" title={source.url} data-testid="source-url">
                 {hostOf(source.url)} ↗
               </a>
@@ -657,6 +723,40 @@ export function SourceView({
               >
                 Open the PDF ↗
               </a>
+            )}
+            {source.linked && !source.deletedAt && !shown.file && latest && (
+              <button
+                type="button"
+                className={editing ? 'active' : 'quiet'}
+                onClick={() => setEditing((e) => !e)}
+                aria-pressed={editing}
+                title="Edit the file itself, here; saved into the folder"
+                data-testid="source-edit-file"
+              >
+                Edit
+              </button>
+            )}
+            {source.linked && !source.deletedAt && !shown.file && (
+              <button
+                type="button"
+                className="quiet"
+                onClick={() => void noteFromFile()}
+                title="Make a note from this file: its paragraphs become blocks you can edit"
+                data-testid="source-note-from-file"
+              >
+                Make a note
+              </button>
+            )}
+            {source.linked && !source.deletedAt && (
+              <button
+                type="button"
+                className="quiet"
+                onClick={() => void checkFile(true)}
+                title="Read the file again. If it changed, it becomes a new version; what you asked stays with the old one."
+                data-testid="source-reread-file"
+              >
+                Read again
+              </button>
             )}
             {source.url && !source.deletedAt && (
               <button
@@ -756,6 +856,23 @@ export function SourceView({
             </button>
           </div>
         )}
+        {editing && source.linked ? (
+          <FileEditor
+            folderId={source.linked.folderId}
+            path={source.linked.path}
+            onCancel={() => setEditing(false)}
+            onSaved={(saved) => {
+              setEditing(false);
+              onChanged();
+              setNotice(
+                saved.latestVersionId === source.latestVersionId
+                  ? 'Saved: nothing had changed.'
+                  : `Saved into the folder: this is version ${saved.versions}. What you asked stays with the version you asked it about.`,
+              );
+              void load();
+            }}
+          />
+        ) : (
         <div
           className={`source-text${titleInText ? ' title-in-text' : ''}${shown.file ? ' source-pdf' : ''}${onPages ? ' source-pages' : ''}`}
           ref={text}
@@ -790,6 +907,7 @@ export function SourceView({
             <SourceText source={content} slots={slots} />
           )}
         </div>
+        )}
       </section>
       <div className="conversation">{right}</div>
       {selection && !source.deletedAt && (

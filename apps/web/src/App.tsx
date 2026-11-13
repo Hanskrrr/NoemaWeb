@@ -223,6 +223,15 @@ function NotebookView({
   const toMessage = useCallback((id: string, message: string) => go({ kind: 'thread', id, message }), [go]);
   const openNote = useCallback((id: string) => go({ kind: 'note', id }), [go]);
   const openSource = useCallback((id: string) => go({ kind: 'source', id }), [go]);
+  /** A file of a linked folder, opened as a source (read again if it changed): the lists first, then it. */
+  const openFile = useCallback(
+    (source: Source) => {
+      void refresh();
+      setJump((j) => j + 1);
+      go({ kind: 'source', id: source.id });
+    },
+    [refresh, go],
+  );
   /** Open a thread just made: the lists first, so it is known whether it goes beside a source. */
   const openNew = useCallback(
     async (id: string) => {
@@ -492,6 +501,8 @@ function NotebookView({
         key={`${route.id}:${route.block ?? ''}:${jump}`}
         noteId={route.id}
         block={route.block}
+        notebookId={notebook.id}
+        onOpenFile={openFile}
         onCite={toMessage}
         onOpenThread={(id) => open(id)}
         onOpenNote={openNote}
@@ -743,6 +754,8 @@ function NotebookView({
           onOpenSource={openSource}
           onAddSource={() => setAdding(true)}
           onRestoreSource={(id) => void restoreSource(id)}
+          notebookId={notebook.id}
+          onOpenFile={openFile}
         />
         <div className="main">
           {leftOpen.length > 0 && (

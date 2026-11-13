@@ -70,6 +70,11 @@ export const OpenArgs = z.object({
 });
 export const ListArgs = z.object({ what: z.enum(['threads', 'sources', 'notes', 'trash']) });
 export const ShowArgs = OpenArgs;
+// Files of linked folders (ADR 0025): paths start with the folder's name ("Slides/week4.pdf").
+const FilePath = z.string().trim().min(1).max(4096);
+export const ListFilesArgs = z.object({ path: z.string().trim().max(4096).optional() });
+export const FindInFilesArgs = z.object({ query: z.string().trim().min(1).max(200) });
+export const OpenFileArgs = z.object({ path: FilePath, page: z.coerce.number().int().positive().max(100_000).optional() });
 
 // Changes (ADR 0024): each is proposed to the learner, who confirms it.
 const Question = z.string().trim().min(1).max(8000);
@@ -94,11 +99,15 @@ export const ActionArgs = {
   add_source: z
     .object({ url: z.string().trim().url().max(2000).optional(), text: Text.optional(), title: Title.optional() })
     .refine((v) => Boolean(v.url) !== Boolean(v.text), 'give a url or a text, not both'),
+  write_file: z.object({ path: FilePath, content: z.string().max(2_000_000) }),
+  edit_file: z.object({ path: FilePath, old: z.string().min(1).max(200_000), new: z.string().max(200_000) }),
+  save_note_to_file: z.object({ ref: Ref, path: FilePath }),
+  note_from_file: z.object({ path: FilePath }),
 } as const;
 export type ActionKind = keyof typeof ActionArgs;
 export const ACTION_KINDS = Object.keys(ActionArgs) as ActionKind[];
 
-export type ToolName = 'search' | 'open' | 'list' | 'show' | ActionKind;
+export type ToolName = 'search' | 'open' | 'list' | 'show' | 'list_files' | 'find_in_files' | 'open_file' | ActionKind;
 
 export interface ToolSpec {
   name: ToolName;
@@ -139,6 +148,41 @@ export const ASSISTANT_TOOLS: ToolSpec[] = [
       type: 'object',
       properties: { what: { type: 'string', enum: ['threads', 'sources', 'notes', 'trash'] } },
       required: ['what'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'list_files',
+    description:
+      'List the folders on the learner\'s computer linked to the notebook (no path), or what is in one: a path starting with the folder\'s name ("Slides" or "Slides/week4").',
+    parameters: {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'Empty for the folders; else a folder name and a path inside it.' } },
+      required: [],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'find_in_files',
+    description: 'Find lines with all these words in the text files (code, notes, Markdown) of the linked folders, and files named with them.',
+    parameters: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'A few words.' } },
+      required: ['query'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'open_file',
+    description:
+      'Open a file of a linked folder (text, Markdown, code, or a PDF) as a source and read it, labelled; read again if it changed on disk. For a PDF, give a page.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'The folder\'s name, then the path inside it: "Slides/week4.pdf".' },
+        page: { type: 'integer', description: 'For a PDF: the page to read.' },
+      },
+      required: ['path'],
       additionalProperties: false,
     },
   },
@@ -250,6 +294,29 @@ function actionTools(): ToolSpec[] {
       parameters: refParams(),
     },
     {
+      name: 'write_file',
+      description: `Write a text file in a linked folder: a new file, or a whole new text for one (what it said before is kept, to undo).${proposed}`,
+      parameters: object({ path: str('The folder\'s name, then the path: "Notes/summary.md".'), content: str('The whole text of the file.') }, ['path', 'content']),
+    },
+    {
+      name: 'edit_file',
+      description: `Change part of a text file in a linked folder: replace text that occurs exactly once with new text. Open it first to copy the old text exactly.${proposed}`,
+      parameters: object(
+        { path: str('The folder\'s name, then the path.'), old: str('The text to replace, copied exactly.'), new: str('What it becomes.') },
+        ['path', 'old', 'new'],
+      ),
+    },
+    {
+      name: 'save_note_to_file',
+      description: `Save a note (its label) as a Markdown file in a linked folder.${proposed}`,
+      parameters: refParams({ path: str('The folder\'s name, then the path: "Notes/week4.md".') }, ['ref', 'path']),
+    },
+    {
+      name: 'note_from_file',
+      description: `Make a note from a text or Markdown file of a linked folder; its paragraphs and headings become blocks.${proposed}`,
+      parameters: object({ path: str('The folder\'s name, then the path.') }, ['path']),
+    },
+    {
       name: 'add_source',
       description: `Add a source to read: a web page or arXiv paper by its address, or text.${proposed}`,
       parameters: object({ url: str('The address.'), text: str('Text to add instead.'), title: str('A title, if you want one.') }, []),
@@ -264,6 +331,8 @@ export const AssistantAction = z.object({
   kind: z.enum(['show', ...(Object.keys(ActionArgs) as [ActionKind, ...ActionKind[]])]),
   /** One line saying what it does, with titles. */
   summary: z.string(),
+  /** What it will write, to look at before Do it (a file's new text, or what an edit changes). */
+  detail: z.string().nullable(),
   status: z.enum(['proposed', 'running', 'done', 'cancelled', 'failed', 'undone']),
   error: z.string().nullable(),
   /** Where to go to see it: what it made or changed. */

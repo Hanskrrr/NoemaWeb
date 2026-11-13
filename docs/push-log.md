@@ -4,7 +4,7 @@ How each push to GitHub (`Hanskrrr/NoemaWeb`) was made, so the next one can be m
 
 ## Next push: `notebook-features`, asked before, PDF sources and the Assistant
 
-- **What.** The commits on top of `5bb1ccb`: "asked before" by words and by the chat model reading for meaning (ADR 0020), `pnpm asked:check`; the study-structure draft (docs only); PDF sources and pages (ADRs 0021, 0022, migrations 014 and 015, a new dependency `pdfjs-dist` 6.2.108, made-up PDF fixtures); the Assistant and its frame (ADR 0023, migration 016); and their docs. No force needed.
+- **What.** The commits on top of `5bb1ccb`: "asked before" by words and by the chat model reading for meaning (ADR 0020), `pnpm asked:check`; the study-structure draft (docs only); PDF sources and pages (ADRs 0021, 0022, migrations 014 and 015, a new dependency `pdfjs-dist` 6.2.108, made-up PDF fixtures); the Assistant, its frame, the panel beside what is open, and changes it proposes (ADRs 0023, 0024, migrations 016 and 017); and their docs. No force needed.
 - **Checks before pushing.** See the 2026-11-11 to 2026-11-13 handoffs: `node --test` and Playwright in the Claude sandbox, tsc on the Mac. Before pushing: `pnpm install` on the Mac (it adds pdf.js and updates `pnpm-lock.yaml`, which should be committed with it), then `pnpm check`. No notebook content in code, tests or docs; the fixture PDFs' metadata names no person or path.
 - **How.** A plain push from the Mac:
 

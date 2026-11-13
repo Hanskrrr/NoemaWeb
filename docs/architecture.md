@@ -71,6 +71,8 @@ Merging one thread into another adds a card and a summary the learner accepted; 
 
 **The Assistant** (ADR 0023). One thread per notebook of its own kind (`thread.kind = 'assistant'`), at the top of the sidebar, that answers from the whole notebook. It is not sent everything: each question carries a short labelled overview of the notebook, and the model looks the rest up with three read-only tools (`search`, `open`, `list`; `apps/server/src/chat/assistant.ts`). An answer goes in rounds (at most six, four lookups a round); each round is a model call of its own, and the last one's request, kept for What was sent, holds every lookup and what came back. Everything it is shown carries a label (`[3]`), numbered through the answer; the labels it cites are kept with the revision (`message_revision.lookups`) and become buttons that open the message, passage or note. While it works, the stream also says what it is doing (`phase`) and each lookup (`step`); the browser shows them under the answer and as a light around the window (`LivingFrame.tsx`). DeepSeek's reasoning before a lookup is sent back in the next round, as DeepSeek requires; a model that refuses lookups while thinking is asked without thinking, and one that refuses lookups answers from the overview.
 
+Since ADR 0024 it sits beside whatever is open (`Assistant.tsx`, ⌘J), and each question carries what is open and what is selected (`message.place`). Quotes it makes are checked against the original when the answer ends and kept with the text around them, for the cards and the preview. Besides lookups it can `show` the learner a place at once, and propose fourteen kinds of change (`chat/actions.ts`): each is checked and resolved to ids and offsets when the model asks, kept in `assistant_action` as a proposal, and run only when the learner taps Do it, through the same store calls as the app's buttons; what it made is kept for Open and Undo.
+
 **Search** (`packages/core/src/search.ts`, `store/repo.ts`). One SQLite FTS5 table over titles, messages, headlines, note blocks and source passages. Chinese and Japanese are indexed as single characters and overlapping pairs, so a two-character word matches inside a longer one. The index has a version; when it changes, it is rebuilt at start-up.
 
 ## The database
@@ -89,6 +91,7 @@ One SQLite file, `data/noema.db`, in WAL mode, with numbered migrations in `apps
 | `thread_merge` | Merges between threads: draft, accepted text, state |
 | `source`, `source_version`, `source_anchor` | What the learner reads, its immutable versions with the original HTML, and passages asked about |
 | `search` | The FTS5 index |
+| `assistant_action` | Changes the Assistant proposed: what, resolved arguments, proposed / done / cancelled / undone, what it made |
 | `event` | An append-only log of what the learner did |
 | `meta` | Facts about the store itself, such as the search index version |
 

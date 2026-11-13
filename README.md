@@ -7,6 +7,7 @@ A learning notebook for studying hard material with an AI, on your own computer.
 - Link a folder on your computer and open its files (notes, slides, code) as you would in a code editor: ask about them, edit them, make notes from them and save notes into the folder.
 - Find any question, answer, note or passage again with ⌘K, or ask the Assistant: one assistant for the whole notebook that looks things up before it answers and shows where it found them.
 - Turn a thread into a study note you edit block by block; its citations open the exchange they came from.
+- Keep what you learn about one subject together in a room: the sources, the threads asked about them and the notes, as a map that shows where you asked most and what you left open. Drag things in, or right-click.
 - See exactly what the AI was sent for any answer, tell it about yourself once, pin the passages it should keep in view, and ask again for another answer without losing the first.
 - Everything stays in one file on your computer, and nothing is lost when a tab closes or the server restarts.
 

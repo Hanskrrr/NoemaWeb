@@ -75,6 +75,14 @@ Since ADR 0024 it sits beside whatever is open (`Assistant.tsx`, ⌘J), and each
 
 **Folders on this computer** (ADR 0025). The server runs on the learner's own machine, so it can read a folder he links by its path (`apps/server/src/files/folders.ts`). Every path is resolved inside the folder's real path, so `..` and links that lead out are refused. Files, in the sidebar, lists a folder a level at a time. A file opened is a source linked to it (`source.folder_id`, `file_path`): Markdown as it is, other text as a code block, a PDF read as any PDF. Each version keeps the hash of the bytes it was read from, and opening the file again reads it again: a changed file is a new version, like a page fetched again. Text files are written only when asked (the editor in the reading pane, a note saved into the folder, or an Assistant proposal on Do it), against the hash of what was read, and each write keeps what it replaced (`file_backup`) for Undo. The Assistant has three file lookups (`list_files`, `find_in_files`, `open_file`) and four file changes, proposed like the others.
 
+**Rooms** (ADR 0026). A room sets the things of one subject together, whatever kind they are. The store keeps only what was put in by hand (`room_item`, state `in`), what came along and was taken out (`out`), and where clusters sit (`placed`, with x and y). Everything else is worked out on each draw by `packages/core/src/rooms.ts` from the notebook as it is:
+- **Members:** a source brings the threads asked about it and their notes; a thread brings its notes; a side question counts as its thread.
+- **Clusters:** things made from one another.
+- **Lines:** only where a split-off, a merge, a pin of a source passage or a citation links two clusters.
+- **Marks:** questions asked, side questions, those not come back from.
+
+So a thread asked tomorrow about a source in a room is in the room at once, and nothing goes stale. The browser places new clusters and saves the places, so a room stays as it was left. The right-click menu (`ContextMenu.tsx`) and dragging (`drag.ts`) put things in rooms; files and links dropped from outside become sources.
+
 **Search** (`packages/core/src/search.ts`, `store/repo.ts`). One SQLite FTS5 table over titles, messages, headlines, note blocks and source passages. Chinese and Japanese are indexed as single characters and overlapping pairs, so a two-character word matches inside a longer one. The index has a version; when it changes, it is rebuilt at start-up.
 
 ## The database
@@ -92,6 +100,7 @@ One SQLite file, `data/noema.db`, in WAL mode, with numbered migrations in `apps
 | `note`, `note_block`, `note_revision` | Notes, their blocks, and every saved version |
 | `thread_merge` | Merges between threads: draft, accepted text, state |
 | `source`, `source_version`, `source_anchor` | What the learner reads (a file of a linked folder: its folder and path), its immutable versions with the original HTML (a file's: the hash of its bytes), and passages asked about |
+| `room`, `room_item` | Rooms; what was put in each by hand, taken out, or only placed, and where it sits on the room's map |
 | `folder`, `file_backup` | Folders linked to the notebook by their path; what a file said before Noema wrote to it, to undo the write |
 | `search` | The FTS5 index |
 | `assistant_action` | Changes the Assistant proposed: what, resolved arguments, proposed / done / cancelled / undone, what it made |

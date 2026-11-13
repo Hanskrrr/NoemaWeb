@@ -9,7 +9,7 @@
 //   chunks. Either becomes a named "timeout" error.
 // - Every failure leaves as a ProviderError with a kind the UI can explain.
 
-import { isRetryable } from '@noema/core';
+import { isRetryable, type ToolCall, type ToolSpec } from '@noema/core';
 import {
   type ModelProvider,
   ProviderError,
@@ -71,8 +71,17 @@ export class SseParser {
   }
 }
 
+interface ToolCallDelta {
+  index?: number;
+  id?: string;
+  function?: { name?: string; arguments?: string };
+}
+
 interface ChunkJson {
-  choices?: Array<{ delta?: { content?: string | null }; finish_reason?: string | null }>;
+  choices?: Array<{
+    delta?: { content?: string | null; reasoning_content?: string | null; tool_calls?: ToolCallDelta[] | null };
+    finish_reason?: string | null;
+  }>;
   usage?: {
     prompt_tokens?: number;
     completion_tokens?: number;
@@ -111,16 +120,52 @@ function parseRetryAfter(value: string | null): number | undefined {
  * reject fields they do not know.
  */
 export function extraBody(baseUrl: string, req: Pick<StreamRequest, 'light'>): Record<string, unknown> {
-  let host = '';
-  try {
-    host = new URL(baseUrl).hostname;
-  } catch {
-    return {};
-  }
-  if (req.light && (host === 'api.deepseek.com' || host.endsWith('.deepseek.com'))) {
-    return { thinking: { type: 'disabled' } };
-  }
+  if (req.light && isDeepSeek(baseUrl)) return { thinking: { type: 'disabled' } };
   return {};
+}
+
+/** DeepSeek's own API: it thinks by default, and wants its reasoning back between lookups. */
+export function isDeepSeek(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname;
+    return host === 'api.deepseek.com' || host.endsWith('.deepseek.com');
+  } catch {
+    return false;
+  }
+}
+
+/** Lookups as the API takes them. */
+export function wireTools(tools: ToolSpec[]): unknown[] {
+  return tools.map((t) => ({
+    type: 'function',
+    function: { name: t.name, description: t.description, parameters: t.parameters },
+  }));
+}
+
+/** Pieces of tool calls, as they stream, put together by their index. */
+export class ToolCallParts {
+  private readonly calls = new Map<number, { id: string; name: string; arguments: string }>();
+
+  push(deltas: ToolCallDelta[]): void {
+    for (const d of deltas) {
+      const i = d.index ?? 0;
+      const call = this.calls.get(i) ?? { id: '', name: '', arguments: '' };
+      if (d.id) call.id = d.id;
+      if (d.function?.name) call.name += d.function.name;
+      if (d.function?.arguments) call.arguments += d.function.arguments;
+      this.calls.set(i, call);
+    }
+  }
+
+  get size(): number {
+    return this.calls.size;
+  }
+
+  done(): ToolCall[] {
+    return [...this.calls.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([i, c]) => ({ id: c.id || `call_${i}`, name: c.name, arguments: c.arguments }));
+  }
 }
 
 export function httpError(status: number, body: string, retryAfter: string | null): ProviderError {
@@ -297,10 +342,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
           },
           body: JSON.stringify({
             model: this.model,
-            messages: wireMessages(req),
+            messages: wireMessages(req, { reasoning: isDeepSeek(this.baseUrl) }),
             stream: true,
             stream_options: { include_usage: true },
             ...(req.maxTokens ? { max_tokens: req.maxTokens } : {}),
+            ...(req.tools && req.tools.length > 0
+              ? { tools: wireTools(req.tools), ...(req.toolChoice ? { tool_choice: req.toolChoice } : {}) }
+              : {}),
             ...extraBody(this.baseUrl, req),
           }),
           signal: ctrl.signal,
@@ -325,6 +373,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       const parser = new SseParser();
       let finishReason: string | null = null;
       let done = false;
+      const calls = new ToolCallParts();
       const handle = function* (payloads: string[]): Generator<StreamEvent> {
         for (const data of payloads) {
           if (data === '[DONE]') {
@@ -341,8 +390,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
             throw httpError(Number(json.error.code) || 500, JSON.stringify({ error: json.error }), null);
           }
           const choice = json.choices?.[0];
+          const reasoning = choice?.delta?.reasoning_content;
+          if (typeof reasoning === 'string' && reasoning.length > 0) yield { type: 'reasoning', text: reasoning };
           const text = choice?.delta?.content;
           if (typeof text === 'string' && text.length > 0) yield { type: 'text', text };
+          if (choice?.delta?.tool_calls) calls.push(choice.delta.tool_calls);
           if (choice?.finish_reason) finishReason = choice.finish_reason;
           if (json.usage) yield { type: 'usage', usage: mapUsage(json.usage) };
         }
@@ -367,6 +419,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       }
       if (!done && finishReason === null)
         throw new ProviderError('network', 'the stream ended before the answer finished');
+      if (calls.size > 0) yield { type: 'tool_calls', calls: calls.done() };
       yield { type: 'finish', reason: finishReason };
     } finally {
       clearTimeout(timer);
@@ -377,10 +430,24 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
 /**
  * The messages as the API takes them: a question with pictures becomes a list
- * of parts, the pictures first (as data: URLs), then its text.
+ * of parts, the pictures first (as data: URLs), then its text. A turn that
+ * asked for lookups carries them as tool_calls, each answer is a tool turn,
+ * and (for DeepSeek, `reasoning`) the reasoning before a lookup goes back.
  */
-export function wireMessages(req: Pick<StreamRequest, 'messages' | 'images'>): unknown[] {
+export function wireMessages(
+  req: Pick<StreamRequest, 'messages' | 'images'>,
+  options: { reasoning?: boolean } = {},
+): unknown[] {
   return req.messages.map((m) => {
+    if (m.role === 'tool') return { role: 'tool', tool_call_id: m.toolCallId ?? '', content: m.content };
+    if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+      return {
+        role: 'assistant',
+        content: m.content,
+        ...(options.reasoning && m.reasoning ? { reasoning_content: m.reasoning } : {}),
+        tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } })),
+      };
+    }
     const pictures = (m.images ?? [])
       .map((image) => req.images?.(image.ref))
       .filter((p): p is { mediaType: string; data: string } => p !== null && p !== undefined);

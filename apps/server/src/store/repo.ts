@@ -22,6 +22,7 @@ import {
   type MapNode,
   type Merge,
   type MergedText,
+  Lookups,
   type Message,
   type MessageContext,
   type MessageError,
@@ -92,6 +93,7 @@ function toThread(r: Row): Thread {
     sourceQuote: r.source_exact ? shorten(r.source_exact as string, 160) : null,
     title: r.title as string,
     titleSource: ((r.title_source as string | undefined) ?? 'question') as Thread['titleSource'],
+    kind: ((r.kind as string | undefined) ?? 'chat') as Thread['kind'],
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };
@@ -168,15 +170,27 @@ function toMessage(r: Row): Message {
     error: kind ? { kind, message: (r.error_message as string | null) ?? '' } : null,
     model: (r.model as string | null) ?? null,
     headline: (r.headline as string | null | undefined) ?? null,
+    lookups: lookupsOf(r.lookups),
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };
 }
 
+/** An Assistant answer's lookups as stored, or null (none, or unreadable). */
+function lookupsOf(value: unknown): Lookups | null {
+  if (typeof value !== 'string' || value === '') return null;
+  try {
+    const parsed = Lookups.safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
 const MESSAGE_SELECT = `
   SELECT m.id, m.thread_id, m.role, m.seq, m.reply_to, m.created_at,
          r.id AS revision_id, r.n, r.content, r.status, r.error_kind, r.error_message, r.model, r.updated_at,
-         r.headline, (SELECT count(*) FROM message_revision x WHERE x.message_id = m.id) AS revisions
+         r.headline, r.lookups, (SELECT count(*) FROM message_revision x WHERE x.message_id = m.id) AS revisions
   FROM message m JOIN message_revision r ON r.id = m.current_revision_id`;
 
 export class ConflictError extends Error {
@@ -278,9 +292,40 @@ export class Repo {
   listThreads(notebookId: string): Thread[] {
     return (
       this.db.sql
-        .prepare(`${THREAD_SELECT} WHERE t.notebook_id = ? AND t.deleted_at IS NULL ORDER BY t.updated_at DESC`)
+        .prepare(
+          `${THREAD_SELECT} WHERE t.notebook_id = ? AND t.deleted_at IS NULL AND t.kind = 'chat' ORDER BY t.updated_at DESC`,
+        )
         .all(notebookId) as Row[]
     ).map(toThread);
+  }
+
+  /** The notebook's Assistant (ADR 0023): made the first time it is asked for, with this id. */
+  assistantThread(notebookId: string, id: string): { thread: Thread; created: boolean } {
+    return this.db.tx(() => {
+      const row = this.db.sql
+        .prepare(`${THREAD_SELECT} WHERE t.notebook_id = ? AND t.kind = 'assistant'`)
+        .get(notebookId) as Row | undefined;
+      if (row) {
+        const existing = toThread(row);
+        // In the Trash: it comes back (it is not a thread one throws away).
+        if (existing.deletedAt) this.db.sql.prepare('UPDATE thread SET deleted_at = NULL WHERE id = ?').run(existing.id);
+        return { thread: { ...existing, deletedAt: null }, created: false };
+      }
+      if (this.getThread(id)) throw new ConflictError('thread id already used');
+      const t = now();
+      this.db.sql
+        .prepare(
+          "INSERT INTO thread (id, notebook_id, title, title_source, kind, created_at, updated_at) VALUES (?, ?, 'Assistant', 'user', 'assistant', ?, ?)",
+        )
+        .run(id, notebookId, t, t);
+      this.logEvent('assistant.created', id, { notebookId });
+      return { thread: this.getThread(id) as Thread, created: true };
+    });
+  }
+
+  /** Keep an Assistant answer's lookups with its revision. */
+  saveLookups(revisionId: string, lookups: Lookups): void {
+    this.db.sql.prepare('UPDATE message_revision SET lookups = ? WHERE id = ?').run(JSON.stringify(lookups), revisionId);
   }
 
   getThread(id: string): Thread | null {
@@ -316,6 +361,7 @@ export class Repo {
         sourceQuote: null,
         title,
         titleSource: 'question',
+        kind: 'chat',
         createdAt: t,
         updatedAt: t,
       };
@@ -1626,7 +1672,7 @@ export class Repo {
          LEFT JOIN message_revision ar ON ar.id = am.current_revision_id
          LEFT JOIN anchor a ON a.id = t.origin_anchor_id
          LEFT JOIN source_anchor sa ON sa.id = t.source_anchor_id
-         WHERE t.notebook_id = ? AND t.deleted_at IS NULL AND m.role = 'user'
+         WHERE t.notebook_id = ? AND t.deleted_at IS NULL AND t.kind = 'chat' AND m.role = 'user'
          ORDER BY m.created_at, m.rowid`,
       )
       .all(notebookId) as Row[];
@@ -2859,9 +2905,9 @@ export class Repo {
     return true;
   }
 
-  search(query: string, limit = 30): { terms: string[]; hits: SearchHit[] } {
+  search(query: string, limit = 30, options: { any?: boolean } = {}): { terms: string[]; hits: SearchHit[] } {
     const { terms } = parseQuery(query);
-    const match = ftsQuery(query);
+    const match = ftsQuery(query, options);
     if (!match) return { terms, hits: [] };
     const rows = this.db.sql
       .prepare('SELECT kind, target_id, thread_id FROM search WHERE search MATCH ? ORDER BY rank LIMIT ?')

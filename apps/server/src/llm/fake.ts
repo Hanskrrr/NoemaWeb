@@ -6,6 +6,14 @@
 //   [[no-judge]]      the "asked before" check by meaning fails
 //   [[tex]]           answer with math written \( … \) and \[ … \], as many models do
 // Asked again (a revision after the first), it adds a line saying which one.
+// As the Assistant (purpose 'assistant', with tools), it looks things up as
+// the question says, one marker a round, then answers citing what it found:
+//   [[search:WORDS]] [[open:N]] [[open:N:PAGE]] [[list:WHAT]]   a lookup
+//   [[together]]       all the lookups in one round
+//   [[cite:3, 4]]      write this citation as given (to test normalising)
+//   [[no-tools]]       refuse a request with tools (a model without them)
+//   [[no-thinking-tools]]  refuse tools unless thinking is off
+//   [[say-first]]      write a sentence before the first lookup
 
 import { type ErrorKind, subjectTokens } from '@noema/core';
 import { type ModelProvider, ProviderError, type StreamEvent, type StreamRequest, sleep } from './provider.ts';
@@ -176,6 +184,10 @@ export class FakeProvider implements ModelProvider {
       yield { type: 'finish', reason: 'stop' };
       return;
     }
+    if (req.purpose === 'assistant') {
+      yield* this.assistant(req);
+      return;
+    }
     if (req.purpose === 'asked') {
       yield { type: 'text', text: fakeVerdict(question) };
       yield { type: 'finish', reason: 'stop' };
@@ -218,6 +230,60 @@ export class FakeProvider implements ModelProvider {
         cacheMissTokens: Math.ceil(promptChars / 3),
       },
     };
+    yield { type: 'finish', reason: 'stop' };
+  }
+
+  private async *assistant(req: StreamRequest): AsyncIterable<StreamEvent> {
+    const at = req.messages.map((m) => m.role).lastIndexOf('user');
+    const question = req.messages[at]?.content ?? '';
+    if (/\[\[fail:([a-z_]+)\]\]/.test(question)) {
+      const kind = /\[\[fail:([a-z_]+)\]\]/.exec(question)?.[1] as ErrorKind;
+      throw new ProviderError(kind, `fake failure: ${kind}`);
+    }
+    if (req.tools && question.includes('[[no-tools]]')) throw new ProviderError('bad_request', 'fake model: tools are not supported');
+    if (req.tools && !req.light && question.includes('[[no-thinking-tools]]')) {
+      throw new ProviderError('bad_request', 'fake model: reasoning_content is missing');
+    }
+    const slow = question.includes('[[slow]]');
+    const delay = slow ? Math.max(this.delayMs, 25) : this.delayMs;
+    const after = req.messages.slice(at + 1);
+    const rounds = after.filter((m) => m.role === 'assistant' && m.toolCalls).length;
+    const lookups = [...question.matchAll(/\[\[(search|open|list):([^\]]*)\]\]/g)].map((m) => {
+      const [name, arg] = [m[1] as string, m[2] as string];
+      if (name === 'search') return { name, arguments: JSON.stringify({ query: arg }) };
+      if (name === 'list') return { name, arguments: JSON.stringify({ what: arg }) };
+      const [ref, page] = arg.split(':');
+      return { name, arguments: JSON.stringify(page ? { ref: Number(ref), page: Number(page) } : { ref: Number(ref) }) };
+    });
+    const together = question.includes('[[together]]');
+    const pending = together ? (rounds === 0 ? lookups : []) : lookups.slice(rounds, rounds + 1);
+    await sleep(delay, req.signal);
+    yield { type: 'reasoning', text: pending.length > 0 ? 'I should look this up.' : 'I can answer now.' };
+    if (req.tools && req.toolChoice !== 'none' && pending.length > 0) {
+      if (rounds === 0 && question.includes('[[say-first]]')) yield { type: 'text', text: 'Let me look.' };
+      await sleep(delay, req.signal);
+      yield { type: 'tool_calls', calls: pending.map((c, i) => ({ id: `fake_${rounds}_${i}`, ...c })) };
+      yield { type: 'finish', reason: 'tool_calls' };
+      return;
+    }
+    // The answer: cites the first label of the last lookup, or of the overview.
+    const results = after.filter((m) => m.role === 'tool').map((m) => m.content);
+    const source = results.at(-1) ?? question;
+    const first = /^\[(\d+)\]/m.exec(source)?.[1];
+    const cite = /\[\[cite:([^\]]*)\]\]/.exec(question)?.[1];
+    const asked = question.slice(question.lastIndexOf('\n\n') + 2).replace(/\[\[[^\]]*\]\]/g, '').trim();
+    const answer = [
+      `You asked the Assistant: "${asked}"`,
+      '',
+      `I looked ${results.length} time${results.length === 1 ? '' : 's'}.${first ? ` The first thing I found is here [${first}].` : ''}${cite ? ` See also [${cite}].` : ''}`,
+      '',
+      'A label it was never given stays as written [99].',
+    ].join('\n');
+    for (const part of chunks(answer, slow ? 2 : 6)) {
+      await sleep(delay, req.signal);
+      yield { type: 'text', text: part };
+    }
+    yield { type: 'usage', usage: { promptTokens: 100, completionTokens: 20, cacheHitTokens: 0, cacheMissTokens: 100 } };
     yield { type: 'finish', reason: 'stop' };
   }
 }

@@ -3,6 +3,7 @@
 // every response with them, so a drift between the two fails loudly.
 
 import { z } from 'zod';
+import { AssistantPhase, LookupStep, Lookups } from './assistant.ts';
 import { isUlid } from './ids.ts';
 
 export const Id = z.string().refine(isUlid, 'expected a ULID');
@@ -68,6 +69,8 @@ export const Thread = z.object({
   title: z.string(),
   /** question: the first question; model: written by the AI; user: renamed by the learner. */
   titleSource: z.enum(['question', 'model', 'user']),
+  /** 'assistant': the notebook's one Assistant (ADR 0023), which looks things up across the notebook. */
+  kind: z.enum(['chat', 'assistant']),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -97,6 +100,8 @@ export const Message = z.object({
    * the exchange established. Shown on the map and in the catalog; null until written.
    */
   headline: z.string().nullable(),
+  /** For an answer of the Assistant: the lookups it made, and where the labels it cites point. */
+  lookups: Lookups.nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -584,7 +589,9 @@ export const MessageContext = z.object({
           'origin',
           'image',
           'merged',
+          'overview',
           'question',
+          'lookup',
         ]),
         id: z.string().optional(),
         ref: z.string().optional(),
@@ -600,10 +607,14 @@ export const MessageContext = z.object({
   request: z
     .array(
       z.object({
-        role: z.enum(['system', 'user', 'assistant']),
+        role: z.enum(['system', 'user', 'assistant', 'tool']),
         content: z.string(),
         /** Pictures sent with a question, by reference (see SentImage). */
         images: z.array(z.object({ ref: z.string(), label: z.string() })).optional(),
+        /** The Assistant: lookups asked for, the lookup a tool turn answers, and the reasoning sent back. */
+        toolCalls: z.array(z.object({ id: z.string(), name: z.string(), arguments: z.string() })).optional(),
+        toolCallId: z.string().optional(),
+        reasoning: z.string().optional(),
       }),
     )
     .nullable(),
@@ -615,6 +626,10 @@ export const UpdateNotebookRequest = z
   .partial()
   .refine((v) => Object.keys(v).length > 0, 'nothing to update');
 export type UpdateNotebookRequest = z.infer<typeof UpdateNotebookRequest>;
+
+/** The Assistant's thread is made with an id the client chose, so a retried POST makes one. */
+export const CreateAssistantRequest = z.object({ id: Id });
+export type CreateAssistantRequest = z.infer<typeof CreateAssistantRequest>;
 
 /** The client makes the user message id, so a retried POST cannot ask twice. */
 export const AskRequest = z.object({
@@ -830,13 +845,18 @@ export type ModelSettingsResponse = z.infer<typeof ModelSettingsResponse>;
 // Server-sent events on GET /api/messages/:id/events.
 // Every connection starts with a snapshot of everything so far, then deltas,
 // so a reload or a dropped connection can never duplicate or lose text.
-export const StreamSnapshot = z.object({ message: Message });
+export const StreamSnapshot = z.object({ message: Message, phase: AssistantPhase.optional() });
 export const StreamDelta = z.object({ text: z.string() });
 export const StreamStatus = z.object({ status: MessageStatus, error: MessageError.nullable() });
 export type StreamSnapshot = z.infer<typeof StreamSnapshot>;
 export type StreamDelta = z.infer<typeof StreamDelta>;
 export type StreamStatus = z.infer<typeof StreamStatus>;
-export const STREAM_EVENTS = ['snapshot', 'delta', 'status', 'end'] as const;
+/** The Assistant: what it is doing now, and each lookup as it is made. */
+export const StreamPhase = z.object({ phase: AssistantPhase });
+export const StreamStep = z.object({ step: LookupStep });
+export type StreamPhase = z.infer<typeof StreamPhase>;
+export type StreamStep = z.infer<typeof StreamStep>;
+export const STREAM_EVENTS = ['snapshot', 'delta', 'status', 'phase', 'step', 'end'] as const;
 
 /** Sent on every state-changing request; the server rejects requests without it. */
 export const CLIENT_HEADER = 'x-noema-client';

@@ -2,7 +2,14 @@ import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, test } from 'node:test';
-import { httpError, mapUsage, OpenAICompatibleProvider, SseParser } from '../src/llm/openai-compatible.ts';
+import {
+  httpError,
+  isDeepSeek,
+  mapUsage,
+  OpenAICompatibleProvider,
+  SseParser,
+  wireMessages,
+} from '../src/llm/openai-compatible.ts';
 import type { ProviderError, StreamEvent } from '../src/llm/provider.ts';
 
 // A stand-in for api.deepseek.com. Each test sets `behave` to script one response.
@@ -232,4 +239,100 @@ test('error bodies become readable messages and the right kinds', () => {
   assert.equal(httpError(400, "This model's maximum context length is 65536 tokens", null).kind, 'context_too_large');
   assert.equal(httpError(502, '<html>bad gateway</html>', null).kind, 'unavailable');
   assert.equal(httpError(429, '', '2').retryAfterMs, 2000);
+});
+
+test('lookups: tools go out with the request; reasoning and tool calls come back in pieces, put together', async () => {
+  hits = 0;
+  let seen: Record<string, unknown> = {};
+  behave = (_req, res, body) => {
+    seen = body;
+    sse(res);
+    chunk(res, { choices: [{ index: 0, delta: { reasoning_content: 'I should ' }, finish_reason: null }] });
+    chunk(res, { choices: [{ index: 0, delta: { reasoning_content: 'search.' }, finish_reason: null }] });
+    chunk(res, {
+      choices: [
+        {
+          index: 0,
+          delta: { tool_calls: [{ index: 0, id: 'call_a', type: 'function', function: { name: 'search', arguments: '{"que' } }] },
+          finish_reason: null,
+        },
+      ],
+    });
+    chunk(res, {
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: 'ry":"variance"}' } }] }, finish_reason: null }],
+    });
+    chunk(res, {
+      choices: [
+        {
+          index: 0,
+          delta: { tool_calls: [{ index: 1, id: 'call_b', type: 'function', function: { name: 'list', arguments: '{"what":"notes"}' } }] },
+          finish_reason: null,
+        },
+      ],
+    });
+    chunk(res, { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] });
+    res.end('data: [DONE]\n\n');
+  };
+  const p = provider();
+  const events: StreamEvent[] = [];
+  for await (const ev of p.stream({
+    messages: [{ role: 'user', content: 'What did I ask?' }],
+    tools: [{ name: 'search', description: 'Search.', parameters: { type: 'object', properties: {} } }],
+    toolChoice: 'auto',
+    signal: new AbortController().signal,
+  })) {
+    events.push(ev);
+  }
+  assert.deepEqual(seen.tools, [
+    { type: 'function', function: { name: 'search', description: 'Search.', parameters: { type: 'object', properties: {} } } },
+  ]);
+  assert.equal(seen.tool_choice, 'auto');
+  assert.equal(
+    events
+      .filter((e) => e.type === 'reasoning')
+      .map((e) => (e.type === 'reasoning' ? e.text : ''))
+      .join(''),
+    'I should search.',
+  );
+  assert.deepEqual(
+    events.filter((e) => e.type === 'tool_calls'),
+    [
+      {
+        type: 'tool_calls',
+        calls: [
+          { id: 'call_a', name: 'search', arguments: '{"query":"variance"}' },
+          { id: 'call_b', name: 'list', arguments: '{"what":"notes"}' },
+        ],
+      },
+    ],
+  );
+  assert.deepEqual(events.at(-1), { type: 'finish', reason: 'tool_calls' });
+  assert.equal(textOf(events), '');
+});
+
+test('lookups go back as tool turns; the reasoning before them goes back to DeepSeek only', async () => {
+  const messages = [
+    { role: 'user' as const, content: 'Q' },
+    {
+      role: 'assistant' as const,
+      content: '',
+      reasoning: 'Search first.',
+      toolCalls: [{ id: 'c1', name: 'search', arguments: '{"query":"x"}' }],
+    },
+    { role: 'tool' as const, toolCallId: 'c1', content: '[1] found' },
+  ];
+  const deepseek = wireMessages({ messages }, { reasoning: true });
+  assert.deepEqual(deepseek.slice(1), [
+    {
+      role: 'assistant',
+      content: '',
+      reasoning_content: 'Search first.',
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'search', arguments: '{"query":"x"}' } }],
+    },
+    { role: 'tool', tool_call_id: 'c1', content: '[1] found' },
+  ]);
+  const other = wireMessages({ messages });
+  assert.equal('reasoning_content' in (other[1] as object), false);
+  assert.equal(isDeepSeek('https://api.deepseek.com/v1'), true);
+  assert.equal(isDeepSeek('https://openrouter.ai/api/v1'), false);
 });

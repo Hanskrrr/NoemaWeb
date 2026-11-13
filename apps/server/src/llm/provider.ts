@@ -2,7 +2,7 @@
 // report, and errors with a name. Providers translate their own failures
 // into ProviderError so nothing above this layer sees raw HTTP or fetch errors.
 
-import type { ChatMessage, ErrorKind } from '@noema/core';
+import type { ChatMessage, ErrorKind, ToolCall, ToolSpec } from '@noema/core';
 
 export interface StreamRequest {
   messages: ChatMessage[];
@@ -13,7 +13,11 @@ export interface StreamRequest {
   /** A short utility call (a title): skip the model's reasoning step where the provider allows it. */
   light?: boolean | undefined;
   /** What the call is for; the fake model answers titles differently. */
-  purpose?: 'answer' | 'title' | 'headline' | 'note' | 'suggest' | 'merge' | 'asked' | undefined;
+  purpose?: 'answer' | 'assistant' | 'title' | 'headline' | 'note' | 'suggest' | 'merge' | 'asked' | undefined;
+  /** Lookups the model may ask for (the Assistant, ADR 0023). */
+  tools?: ToolSpec[] | undefined;
+  /** 'none': the tools are described, but this round must answer (the last round). */
+  toolChoice?: 'auto' | 'none' | undefined;
   /** Which revision of an answer this is: 2 and up when the learner asked again. Real providers ignore it; the fake answers differently, so tests can tell revisions apart. */
   revision?: number | undefined;
   signal: AbortSignal;
@@ -30,6 +34,10 @@ export interface Usage {
 export type StreamEvent =
   | { type: 'attempt'; n: number }
   | { type: 'text'; text: string }
+  /** The model's reasoning before it answers (DeepSeek's reasoning_content); not shown, but sent back with tools. */
+  | { type: 'reasoning'; text: string }
+  /** The lookups the model asked for, complete, just before the stream finishes with reason 'tool_calls'. */
+  | { type: 'tool_calls'; calls: ToolCall[] }
   | { type: 'usage'; usage: Usage }
   | { type: 'finish'; reason: string | null };
 

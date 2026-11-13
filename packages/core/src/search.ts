@@ -64,8 +64,10 @@ export function parseQuery(input: string): ParsedQuery {
  * An FTS5 MATCH expression, or null when the query has nothing searchable.
  * Every token is quoted, so user input can never inject FTS syntax. The last
  * non-CJK token is a prefix match, so results appear while typing.
+ * `any`: rows with any of the tokens (the Assistant's second try, ranked by
+ * how well they match), instead of all of them.
  */
-export function ftsQuery(input: string): string | null {
+export function ftsQuery(input: string, options: { any?: boolean } = {}): string | null {
   const { tokens } = parseQuery(input);
   if (tokens.length === 0) return null;
   return tokens
@@ -73,7 +75,7 @@ export function ftsQuery(input: string): string | null {
       const quoted = `"${t.replaceAll('"', '""')}"`;
       return i === tokens.length - 1 && !CJK_CHAR.test(t) ? `${quoted}*` : quoted;
     })
-    .join(' AND ');
+    .join(options.any ? ' OR ' : ' AND ');
 }
 
 /**

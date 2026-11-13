@@ -4,21 +4,35 @@
 // gets everything so far, then the rest as it arrives.
 
 import {
+  ASSISTANT_TOOLS,
+  type AssistantPhase,
   assembleContext,
+  type ChatMessage,
+  citedLabels,
   ContextBudgetError,
   describeError,
   type ErrorKind,
+  estimateTokens,
+  type LookupStep,
+  type Lookups,
+  type ManifestPart,
+  MAX_LOOKUP_ROUNDS,
+  MAX_LOOKUPS_PER_ROUND,
   type MessageError,
   type MessageStatus,
+  normalizeNumbered,
   pageImageRef,
   parsePageImageRef,
   type SentImage,
+  type ToolCall,
+  withoutLabels,
 } from '@noema/core';
 import type { Config } from '../config.ts';
-import { ProviderError, type StreamEvent, type Usage } from '../llm/provider.ts';
+import { type ModelProvider, ProviderError, type StreamEvent, type Usage } from '../llm/provider.ts';
 import type { ModelSource } from '../llm/settings.ts';
 import type { Logger } from '../log.ts';
 import type { Repo } from '../store/repo.ts';
+import { ASSISTANT_PROMPT, VaultLookup } from './assistant.ts';
 import { SYSTEM_PROMPT } from './prompt.ts';
 import type { Headliner } from './headlines.ts';
 import type { Titler } from './titles.ts';
@@ -28,6 +42,10 @@ export const FLUSH_MS = 200;
 export interface Watcher {
   delta(text: string): void;
   status(status: MessageStatus, error: MessageError | null): void;
+  /** The Assistant: what it is doing now. */
+  phase?(phase: AssistantPhase): void;
+  /** The Assistant: a lookup it just made. */
+  step?(step: LookupStep): void;
   end(): void;
 }
 
@@ -37,6 +55,9 @@ interface Live {
   content: string;
   status: MessageStatus;
   error: MessageError | null;
+  /** The Assistant: what it is doing, and the lookups so far (null and empty for other answers). */
+  phase: AssistantPhase | null;
+  steps: LookupStep[];
   watchers: Set<Watcher>;
   controller: AbortController;
   stopReason: 'user' | 'shutdown' | null;
@@ -57,6 +78,10 @@ export class Generations {
   private readonly live = new Map<string, Live>();
   /** Models (provider and name) that refused a picture: asked with text only from then on. */
   private readonly textOnly = new Set<string>();
+  /** Models that refused lookups while thinking: the Assistant asks them without thinking. */
+  private readonly noThinkingTools = new Set<string>();
+  /** Models that refused lookups altogether: the Assistant answers from its overview. */
+  private readonly noTools = new Set<string>();
   private readonly repo: Repo;
   private readonly models: ModelSource;
   private readonly titler: Titler | null;
@@ -80,7 +105,7 @@ export class Generations {
     this.log = deps.log;
   }
 
-  get(messageId: string): Pick<Live, 'content' | 'status' | 'error'> | undefined {
+  get(messageId: string): Pick<Live, 'content' | 'status' | 'error' | 'phase' | 'steps'> | undefined {
     return this.live.get(messageId);
   }
 
@@ -96,6 +121,8 @@ export class Generations {
       content: '',
       status: 'pending',
       error: null,
+      phase: null,
+      steps: [],
       watchers: new Set(),
       controller: new AbortController(),
       stopReason: null,
@@ -152,11 +179,7 @@ export class Generations {
 
   private async run(entry: Live, args: StartArgs): Promise<void> {
     const started = Date.now();
-    let callId: string | null = null;
-    let attempts = 0;
-    let firstTokenAt: string | null = null;
-    let usage: Usage = {};
-    let finishReason: string | null = null;
+    const rec: Recorder = { callId: null, attempts: 0, firstTokenAt: null, usage: {}, finishReason: null };
     let flushedLength = 0;
     const flush = () => {
       if (entry.content.length === flushedLength) return;
@@ -171,25 +194,90 @@ export class Generations {
     const timer = setInterval(flush, FLUSH_MS);
 
     let final: { status: 'done' | 'failed' | 'stopped' | 'interrupted'; error: MessageError | null };
+    let lookups: Lookups | null = null;
     try {
       // The provider in effect when the question was asked answers it, even if settings change meanwhile.
       const provider = this.models.current();
       if (!provider.configured) throw new ProviderError('not_configured', 'the model provider is not configured');
-      const notebook = this.repo.getNotebook(args.notebookId);
-      const origin = this.repo.originOf(args.threadId);
-      // What the learner is reading, when this thread (or the one it came from) was asked about a source.
-      const reading = this.repo.sourceContextFor(args.threadId);
-      const fromSource = this.repo.sourceOriginOf(args.threadId);
-      // A question about a passage of a PDF goes with a picture of its page(s), when the browser made one.
-      const modelKey = `${provider.name}:${provider.model}`;
-      const images: SentImage[] =
-        reading && !this.textOnly.has(modelKey)
-          ? this.repo.pagesWithImages(reading.versionId, reading.pages).map((page) => ({
-              ref: pageImageRef(reading.versionId, page),
-              label: `Page ${page} of “${reading.title || 'Untitled'}”`,
-            }))
-          : [];
-      const assemble = (withImages: SentImage[]) => assembleContext({
+      if (this.repo.getThread(args.threadId)?.kind === 'assistant') {
+        lookups = await this.assistant(entry, args, provider, rec);
+      } else {
+        await this.answer(entry, args, provider, rec);
+      }
+      if (entry.controller.signal.aborted) throw new ProviderError('aborted', 'stopped');
+      final = { status: 'done', error: null };
+    } catch (err) {
+      final = this.toFinal(entry, err);
+    } finally {
+      clearInterval(timer);
+    }
+
+    const errorKind: ErrorKind | null = final.error?.kind ?? null;
+    if (rec.callId) {
+      const { callId, attempts, firstTokenAt, usage, finishReason } = rec;
+      this.repo.endModelCall(callId, { attempts, firstTokenAt, ...usage, finishReason, errorKind });
+    }
+    // An Assistant answer keeps its lookups and where its labels point (even when it stopped half way).
+    const kept = lookups ?? { steps: entry.steps, refs: {} };
+    if (kept.steps.length > 0 || Object.keys(kept.refs).length > 0) this.repo.saveLookups(entry.revisionId, kept);
+    this.repo.finishRevision(entry.revisionId, entry.content, final.status, final.error);
+    this.setStatus(entry, final.status, final.error);
+    // Name the thread after its first answer, and write the exchange's line
+    // for the map, before telling watchers the answer has ended, so what they
+    // refresh shows both. The answer is already marked done for them.
+    if (final.status === 'done' && entry.stopReason === null) {
+      await Promise.all([this.titler?.title(args.threadId), this.headliner?.headline(entry.messageId)]);
+    }
+    this.emit(entry, (w) => w.end());
+    this.live.delete(entry.messageId);
+    this.log.info('answer finished', {
+      messageId: entry.messageId,
+      status: final.status,
+      errorKind,
+      ms: Date.now() - started,
+      chars: entry.content.length,
+      attempts: rec.attempts,
+      lookups: entry.steps.length,
+      cacheHitTokens: rec.usage.cacheHitTokens,
+      cacheMissTokens: rec.usage.cacheMissTokens,
+    });
+  }
+
+  /** Text from the model, as it comes: the first of it marks the answer as streaming. */
+  private write(entry: Live, model: string, rec: Recorder, text: string): void {
+    if (entry.status === 'pending') {
+      rec.firstTokenAt = new Date().toISOString();
+      this.repo.markStreaming(entry.revisionId, model);
+      this.setStatus(entry, 'streaming', null);
+    }
+    entry.content += text;
+    this.emit(entry, (w) => w.delta(text));
+  }
+
+  private setPhase(entry: Live, phase: AssistantPhase): void {
+    if (entry.phase === phase) return;
+    entry.phase = phase;
+    this.emit(entry, (w) => w.phase?.(phase));
+  }
+
+  /** An answer in a thread: one call, with the thread's context. */
+  private async answer(entry: Live, args: StartArgs, provider: ModelProvider, rec: Recorder): Promise<void> {
+    const notebook = this.repo.getNotebook(args.notebookId);
+    const origin = this.repo.originOf(args.threadId);
+    // What the learner is reading, when this thread (or the one it came from) was asked about a source.
+    const reading = this.repo.sourceContextFor(args.threadId);
+    const fromSource = this.repo.sourceOriginOf(args.threadId);
+    // A question about a passage of a PDF goes with a picture of its page(s), when the browser made one.
+    const modelKey = `${provider.name}:${provider.model}`;
+    const images: SentImage[] =
+      reading && !this.textOnly.has(modelKey)
+        ? this.repo.pagesWithImages(reading.versionId, reading.pages).map((page) => ({
+            ref: pageImageRef(reading.versionId, page),
+            label: `Page ${page} of “${reading.title || 'Untitled'}”`,
+          }))
+        : [];
+    const assemble = (withImages: SentImage[]) =>
+      assembleContext({
         system: SYSTEM_PROMPT,
         aboutMe: notebook?.aboutMe ?? '',
         ...(reading ? { source: { title: reading.title, url: reading.url, section: reading.section } } : {}),
@@ -211,83 +299,181 @@ export class Generations {
         ...(withImages.length > 0 ? { images: withImages } : {}),
         budgetTokens: this.config.contextBudgetTokens,
       });
-      const send = (withImages: SentImage[]) => {
-        const { messages, manifest } = assemble(withImages);
-        callId = this.repo.startModelCall({
-          revisionId: entry.revisionId,
-          provider: provider.name,
-          model: provider.model,
-          manifest,
-          request: messages,
-        });
-        return provider.stream({
-          messages,
-          images: (ref) => this.pageImageFor(ref),
-          maxTokens: this.config.maxOutputTokens ?? undefined,
-          revision: args.revision,
-          signal: entry.controller.signal,
-        });
-      };
-      let stream = send(images);
-      if (images.length > 0) {
-        // A model that cannot take pictures refuses the request before answering: ask again with text only.
-        try {
-          stream = await primed(stream);
-        } catch (err) {
-          if (!(err instanceof ProviderError) || err.kind !== 'bad_request') throw err;
-          this.textOnly.add(modelKey);
-          this.log.warn('model refused a picture: asking with text only', { model: modelKey, detail: err.message });
-          if (callId) this.repo.endModelCall(callId, { attempts: 1, firstTokenAt: null, finishReason: null, errorKind: 'bad_request' });
-          stream = send([]);
+    const send = (withImages: SentImage[]) => {
+      const { messages, manifest } = assemble(withImages);
+      rec.callId = this.repo.startModelCall({
+        revisionId: entry.revisionId,
+        provider: provider.name,
+        model: provider.model,
+        manifest,
+        request: messages,
+      });
+      return provider.stream({
+        messages,
+        images: (ref) => this.pageImageFor(ref),
+        maxTokens: this.config.maxOutputTokens ?? undefined,
+        revision: args.revision,
+        signal: entry.controller.signal,
+      });
+    };
+    let stream = send(images);
+    if (images.length > 0) {
+      // A model that cannot take pictures refuses the request before answering: ask again with text only.
+      try {
+        stream = await primed(stream);
+      } catch (err) {
+        if (!(err instanceof ProviderError) || err.kind !== 'bad_request') throw err;
+        this.textOnly.add(modelKey);
+        this.log.warn('model refused a picture: asking with text only', { model: modelKey, detail: err.message });
+        if (rec.callId) {
+          this.repo.endModelCall(rec.callId, { attempts: 1, firstTokenAt: null, finishReason: null, errorKind: 'bad_request' });
         }
+        stream = send([]);
       }
-      for await (const ev of stream) {
-        if (ev.type === 'attempt') attempts = ev.n;
-        else if (ev.type === 'usage') usage = ev.usage;
-        else if (ev.type === 'finish') finishReason = ev.reason;
-        else if (ev.type === 'text') {
-          if (entry.status === 'pending') {
-            firstTokenAt = new Date().toISOString();
-            this.repo.markStreaming(entry.revisionId, provider.model);
-            this.setStatus(entry, 'streaming', null);
-          }
-          entry.content += ev.text;
-          this.emit(entry, (w) => w.delta(ev.text));
-        }
-        if (entry.controller.signal.aborted) break;
-      }
-      if (entry.controller.signal.aborted) throw new ProviderError('aborted', 'stopped');
-      final = { status: 'done', error: null };
-    } catch (err) {
-      final = this.toFinal(entry, err);
-    } finally {
-      clearInterval(timer);
     }
+    for await (const ev of stream) {
+      if (ev.type === 'attempt') rec.attempts = ev.n;
+      else if (ev.type === 'usage') rec.usage = ev.usage;
+      else if (ev.type === 'finish') rec.finishReason = ev.reason;
+      else if (ev.type === 'text') this.write(entry, provider.model, rec, ev.text);
+      if (entry.controller.signal.aborted) break;
+    }
+  }
 
-    const errorKind: ErrorKind | null = final.error?.kind ?? null;
-    if (callId) {
-      this.repo.endModelCall(callId as string, { attempts, firstTokenAt, ...usage, finishReason, errorKind });
-    }
-    this.repo.finishRevision(entry.revisionId, entry.content, final.status, final.error);
-    this.setStatus(entry, final.status, final.error);
-    // Name the thread after its first answer, and write the exchange's line
-    // for the map, before telling watchers the answer has ended, so what they
-    // refresh shows both. The answer is already marked done for them.
-    if (final.status === 'done' && entry.stopReason === null) {
-      await Promise.all([this.titler?.title(args.threadId), this.headliner?.headline(entry.messageId)]);
-    }
-    this.emit(entry, (w) => w.end());
-    this.live.delete(entry.messageId);
-    this.log.info('answer finished', {
-      messageId: entry.messageId,
-      status: final.status,
-      errorKind,
-      ms: Date.now() - started,
-      chars: entry.content.length,
-      attempts,
-      cacheHitTokens: usage.cacheHitTokens,
-      cacheMissTokens: usage.cacheMissTokens,
+  /**
+   * An answer of the Assistant (ADR 0023): rounds of looking things up, then
+   * the answer. Each round is a model call of its own; the last one's request
+   * holds every lookup and what came back. Returns what to keep with the answer.
+   */
+  private async assistant(entry: Live, args: StartArgs, provider: ModelProvider, rec: Recorder): Promise<Lookups> {
+    const notebook = this.repo.getNotebook(args.notebookId);
+    const vault = new VaultLookup(this.repo, args.notebookId, args.threadId);
+    // Earlier answers go back as their text, without the labels that meant something only in them.
+    const labelsOf = new Map(
+      this.repo.listMessages(args.threadId).map((m) => [m.id, Object.keys(m.lookups?.refs ?? {})] as const),
+    );
+    const history = this.repo
+      .history(args.threadId, args.question.seq)
+      .map((h) => (h.role === 'assistant' ? { ...h, content: withoutLabels(h.content, labelsOf.get(h.id) ?? []) } : h));
+    const base = assembleContext({
+      system: ASSISTANT_PROMPT,
+      aboutMe: notebook?.aboutMe ?? '',
+      history,
+      overview: vault.overview(),
+      question: { id: args.question.id, content: args.question.content },
+      budgetTokens: this.config.contextBudgetTokens,
     });
+    const modelKey = `${provider.name}:${provider.model}`;
+    let messages: ChatMessage[] = base.messages;
+    const parts: ManifestPart[] = [...base.manifest.parts];
+    let lookedUp = 0;
+    let spent = base.manifest.estimatedTokens;
+    let wrote = false;
+    for (let round = 1; ; round++) {
+      const tools = !this.noTools.has(modelKey);
+      const thinking = !this.noThinkingTools.has(modelKey);
+      // The last round, or past the budget: the tools are still described, but it must answer now.
+      const last = round > MAX_LOOKUP_ROUNDS || spent > this.config.contextBudgetTokens;
+      this.setPhase(entry, 'thinking');
+      rec.callId = this.repo.startModelCall({
+        revisionId: entry.revisionId,
+        provider: provider.name,
+        model: provider.model,
+        manifest: { ...base.manifest, parts, estimatedTokens: spent },
+        request: messages,
+      });
+      const stream = provider.stream({
+        messages,
+        purpose: 'assistant',
+        ...(tools ? { tools: ASSISTANT_TOOLS, ...(last ? { toolChoice: 'none' as const } : {}) } : {}),
+        ...(tools && !thinking ? { light: true } : {}),
+        maxTokens: this.config.maxOutputTokens ?? undefined,
+        revision: args.revision,
+        signal: entry.controller.signal,
+      });
+      let calls: ToolCall[] = [];
+      let reasoning = '';
+      let said = '';
+      const before = entry.content.length;
+      try {
+        for await (const ev of stream) {
+          if (ev.type === 'attempt') rec.attempts = ev.n;
+          else if (ev.type === 'usage') rec.usage = ev.usage;
+          else if (ev.type === 'finish') rec.finishReason = ev.reason;
+          else if (ev.type === 'reasoning') reasoning += ev.text;
+          else if (ev.type === 'tool_calls') calls = ev.calls;
+          else if (ev.type === 'text') {
+            // Text after lookups starts a new paragraph after text before them.
+            const text = wrote && entry.content.length === before && said === '' ? `\n\n${ev.text.replace(/^\s+/, '')}` : ev.text;
+            said += ev.text;
+            this.setPhase(entry, 'writing');
+            this.write(entry, provider.model, rec, text);
+          }
+          if (entry.controller.signal.aborted) break;
+        }
+      } catch (err) {
+        // Refused before any text: ask the round again without thinking, then without lookups.
+        const refused = err instanceof ProviderError && err.kind === 'bad_request' && said === '' && tools;
+        if (!refused) throw err;
+        this.repo.endModelCall(rec.callId, { attempts: rec.attempts, firstTokenAt: null, finishReason: null, errorKind: 'bad_request' });
+        rec.callId = null;
+        if (thinking) {
+          this.noThinkingTools.add(modelKey);
+          this.log.warn('model refused lookups while thinking: asking without thinking', { model: modelKey, detail: err.message });
+        } else {
+          this.noTools.add(modelKey);
+          this.log.warn('model refused lookups: answering from the overview', { model: modelKey, detail: err.message });
+        }
+        round--;
+        continue;
+      }
+      if (said.trim() !== '') wrote = true;
+      if (entry.controller.signal.aborted || calls.length === 0 || last || !tools) break;
+
+      // Look things up, then go round again with what came back.
+      this.repo.endModelCall(rec.callId, {
+        attempts: rec.attempts,
+        firstTokenAt: rec.firstTokenAt,
+        ...rec.usage,
+        finishReason: rec.finishReason,
+        errorKind: null,
+      });
+      rec.callId = null;
+      this.setPhase(entry, 'looking');
+      const asked = calls.map((c, i) => ({ ...c, id: c.id || `call_${round}_${i}` }));
+      const turn: ChatMessage = { role: 'assistant', content: said, toolCalls: asked };
+      if (reasoning) turn.reasoning = reasoning;
+      const answers: ChatMessage[] = asked.map((call, i) => {
+        if (i >= MAX_LOOKUPS_PER_ROUND) {
+          return { role: 'tool', toolCallId: call.id, content: `Not looked up: at most ${MAX_LOOKUPS_PER_ROUND} lookups at once.` };
+        }
+        const result = vault.run(call);
+        lookedUp++;
+        entry.steps.push(result.step);
+        this.emit(entry, (w) => w.step?.(result.step));
+        return { role: 'tool', toolCallId: call.id, content: result.content };
+      });
+      for (const a of answers) {
+        const tokens = estimateTokens(a.content);
+        parts.push({ kind: 'lookup', tokens });
+        spent += tokens;
+      }
+      spent += estimateTokens(said + reasoning);
+      messages = [...messages, turn, ...answers];
+    }
+    if (!wrote && !entry.controller.signal.aborted) {
+      // It looked things up but wrote nothing: say so rather than end empty.
+      this.write(entry, provider.model, rec, 'I looked through the notebook but could not put an answer together. Try asking again, perhaps more narrowly.');
+    }
+    this.log.info('assistant looked up', { messageId: entry.messageId, lookups: lookedUp });
+    // The labels it cites, in one form, and where each points.
+    entry.content = normalizeNumbered(entry.content, (label) => vault.has(label));
+    const refs: Lookups['refs'] = {};
+    for (const label of citedLabels(entry.content, (l) => vault.has(l))) {
+      const target = vault.target(label);
+      if (target) refs[label] = target;
+    }
+    return { steps: entry.steps, refs };
   }
 
   /** The picture a reference names, for the provider. */
@@ -312,6 +498,15 @@ export class Generations {
     this.log.error('unexpected generation error', { messageId: entry.messageId, err });
     return { status: 'failed', error: { kind: 'internal', message: describeError('internal') } };
   }
+}
+
+/** One answer's model call, as it goes: recorded when the call ends. */
+interface Recorder {
+  callId: string | null;
+  attempts: number;
+  firstTokenAt: string | null;
+  usage: Usage;
+  finishReason: string | null;
 }
 
 /**

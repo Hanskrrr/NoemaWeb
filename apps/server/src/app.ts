@@ -14,6 +14,7 @@ import {
   CreateNoteRequest,
   CreatePinRequest,
   CreateSourceRequest,
+  CreateAssistantRequest,
   CreateThreadRequest,
   describeError,
   EditBlockRequest,
@@ -115,7 +116,10 @@ export function createApp(deps: AppDeps): App {
   /** The stored message, with live text and status if it is still generating. */
   const current = (m: Message): Message => {
     const live = generations.get(m.id);
-    return live ? { ...m, content: live.content, status: live.status, error: live.error } : m;
+    if (!live) return m;
+    // The Assistant's lookups so far; where they point is known when it ends.
+    const lookups = live.steps.length > 0 ? { steps: live.steps, refs: {} } : m.lookups;
+    return { ...m, content: live.content, status: live.status, error: live.error, lookups };
   };
 
   router.on('GET', '/api/health', ({ res }) => {
@@ -168,6 +172,15 @@ export function createApp(deps: AppDeps): App {
   router.on('GET', '/api/notebooks/:id/threads', ({ res, params }) => {
     if (!repo.getNotebook(params.id as string)) throw notFound('notebook');
     sendJson(res, 200, { threads: repo.listThreads(params.id as string) });
+  });
+
+  // The notebook's Assistant (ADR 0023): made the first time it is opened, with the id the client chose.
+  router.on('POST', '/api/notebooks/:id/assistant', async (ctx) => {
+    const notebookId = ctx.params.id as string;
+    if (!repo.getNotebook(notebookId)) throw notFound('notebook');
+    const body = await ctx.body(CreateAssistantRequest);
+    const { thread, created } = repo.assistantThread(notebookId, body.id);
+    sendJson(ctx.res, created ? 201 : 200, thread);
   });
 
   router.on('POST', '/api/notebooks/:id/threads', async (ctx) => {
@@ -724,12 +737,15 @@ export function createApp(deps: AppDeps): App {
     const unwatch = generations.watch(stored.id, {
       delta: (text) => sse.send('delta', { text }),
       status: (status, error) => sse.send('status', { status, error }),
+      phase: (phase) => sse.send('phase', { phase }),
+      step: (step) => sse.send('step', { step }),
       end: () => {
         sse.send('end', {});
         sse.close();
       },
     });
-    sse.send('snapshot', { message: current(stored) });
+    const phase = generations.get(stored.id)?.phase;
+    sse.send('snapshot', { message: current(stored), ...(phase ? { phase } : {}) });
     if (unwatch) {
       sse.onClose(unwatch);
     } else {

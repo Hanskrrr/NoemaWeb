@@ -8,7 +8,7 @@
 // question and never About me. The manifest is stored with every model call
 // so "what did the model see?" always has an answer.
 
-export type Role = 'system' | 'user' | 'assistant';
+export type Role = 'system' | 'user' | 'assistant' | 'tool';
 
 export interface ChatMessage {
   role: Role;
@@ -19,6 +19,22 @@ export interface ChatMessage {
    * themselves in (see SentImage).
    */
   images?: SentImage[];
+  /** An assistant turn that looked something up (the Assistant, ADR 0023): the lookups it asked for. */
+  toolCalls?: ToolCall[];
+  /** A tool turn: the lookup it answers. */
+  toolCallId?: string;
+  /**
+   * The model's reasoning before it asked for a lookup. DeepSeek requires it
+   * back in the next round of the same answer when tools are sent.
+   */
+  reasoning?: string;
+}
+
+/** One lookup the model asked for: a tool by name, with its arguments as the JSON text the model wrote. */
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: string;
 }
 
 /** A picture sent with a question: a page of a PDF the question is about. */
@@ -78,6 +94,11 @@ export interface ContextInput {
   question: { id: string; content: string };
   /** Pictures sent with the question: the pages of a PDF the passage is on. */
   images?: SentImage[];
+  /**
+   * For the Assistant: what is in the notebook now, labelled. It goes with
+   * the question, not the instructions, so the cached prefix stays the same.
+   */
+  overview?: string;
   /** Prompt budget in tokens, excluding the room kept for the answer. */
   budgetTokens: number;
 }
@@ -109,7 +130,10 @@ export type ManifestPart =
   | { kind: 'origin'; tokens: number }
   | { kind: 'image'; ref: string; tokens: number }
   | { kind: 'merged'; id: string; tokens: number }
-  | { kind: 'question'; id: string; tokens: number };
+  | { kind: 'overview'; tokens: number }
+  | { kind: 'question'; id: string; tokens: number }
+  /** The Assistant: one lookup, asked for after the question, with what came back. */
+  | { kind: 'lookup'; tokens: number };
 
 export interface ContextManifest {
   parts: ManifestPart[];
@@ -235,13 +259,23 @@ export function assembleContext(input: ContextInput): AssembledContext {
   const pinnedTokens = pinnedText ? estimateTokens(systemContent) - estimateTokens(withSource) : 0;
   const originText = input.origin ? formatOrigin(input.origin.quote, input.origin.from) : null;
   const originTokens = originText ? estimateTokens(originText) : 0;
+  const overviewText = input.overview?.trim() ? input.overview.trim() : null;
+  const overviewTokens = overviewText ? estimateTokens(overviewText) : 0;
   const mergedNow = (input.mergedNow ?? []).map((m) => ({ id: m.id, tokens: estimateTokens(formatMerged(m)) }));
   const mergedTokens = mergedNow.reduce((n, m) => n + m.tokens, 0);
   const questionTokens = estimateTokens(input.question.content);
   const images = input.images ?? [];
   const imageTokens = images.length * IMAGE_TOKENS;
   const fixed =
-    systemTokens + aboutTokens + sourceTokens + pinnedTokens + originTokens + mergedTokens + questionTokens + imageTokens;
+    systemTokens +
+    aboutTokens +
+    sourceTokens +
+    pinnedTokens +
+    originTokens +
+    overviewTokens +
+    mergedTokens +
+    questionTokens +
+    imageTokens;
   if (fixed > input.budgetTokens) throw new ContextBudgetError(fixed, input.budgetTokens);
 
   // Inherited turns come first, then the thread's own; walk newest to oldest, keeping what fits.
@@ -274,7 +308,8 @@ export function assembleContext(input: ContextInput): AssembledContext {
 
   // The origin goes with the question, not before the history, so the
   // history prefix stays identical across a branch's turns (prompt cache).
-  const asked = originText ? `${originText}\n\n${input.question.content}` : input.question.content;
+  const before = [overviewText, originText].filter((t): t is string => t !== null);
+  const asked = before.length > 0 ? `${before.join('\n\n')}\n\n${input.question.content}` : input.question.content;
   const question = withMerged(asked, input.mergedNow);
   const messages: ChatMessage[] = [
     { role: 'system', content: systemContent },
@@ -295,6 +330,7 @@ export function assembleContext(input: ContextInput): AssembledContext {
     parts.push({ kind: h.inherited ? 'inherited' : 'history', id: h.id, role: h.role, tokens: Math.max(1, own) });
   }
   for (const m of mergedNow) parts.push({ kind: 'merged', id: m.id, tokens: m.tokens });
+  if (overviewText) parts.push({ kind: 'overview', tokens: overviewTokens });
   if (originText) parts.push({ kind: 'origin', tokens: originTokens });
   for (const image of images) parts.push({ kind: 'image', ref: image.ref, tokens: IMAGE_TOKENS });
   parts.push({ kind: 'question', id: input.question.id, tokens: questionTokens });
@@ -304,7 +340,7 @@ export function assembleContext(input: ContextInput): AssembledContext {
 
 /** One part of what was sent, as the learner is shown it: its text exactly as sent. */
 export interface SentPart {
-  kind: 'instructions' | 'about_me' | 'source' | 'pinned' | 'inherited' | 'history' | 'question';
+  kind: 'instructions' | 'about_me' | 'source' | 'pinned' | 'inherited' | 'history' | 'question' | 'lookup';
   role: Role;
   text: string;
   /** The estimate made when it was sent. */
@@ -315,8 +351,16 @@ export interface SentPart {
   merged: number;
   /** The question carries the passage it is about. */
   withPassage: boolean;
+  /** The question carries the Assistant's overview of the notebook. */
+  withOverview?: boolean;
   /** Pictures sent with the question. */
   images?: SentImage[];
+  /** For a lookup: what the model asked for (the text is what came back). */
+  call?: { name: string; arguments: string };
+  /** For the first lookup of a round: the model's reasoning before it, sent back with the round (DeepSeek). */
+  thinking?: string;
+  /** For the first lookup of a round: what the model wrote before asking, if anything. */
+  said?: string;
 }
 
 /** A manifest's part as it is read back (from the database or over HTTP). */
@@ -335,8 +379,9 @@ const PINNED_SPLIT = `\n\n${PINNED_HEADING}\n`;
 /**
  * What was sent (`request`, the exact messages), split into the parts the
  * manifest names: the system message into instructions, About me and the
- * source; then each turn of the conversation; then the question. Joining
- * the parts' texts gives back the messages exactly.
+ * source; then each turn of the conversation; then the question; then, for
+ * the Assistant, each lookup it made and what came back. Joining the parts'
+ * texts gives back the messages exactly.
  */
 export function describeSent(manifest: { parts: SentManifestPart[] }, request: ChatMessage[]): SentPart[] {
   const tokensOf = (kind: ManifestPart['kind']) =>
@@ -375,8 +420,12 @@ export function describeSent(manifest: { parts: SentManifestPart[] }, request: C
     if (pinned !== null) out.push({ ...base, kind: 'pinned', text: pinned, tokens: tokensOf('pinned') });
   }
 
+  // The question is the last turn the learner wrote; the Assistant's lookups come after it.
+  let q = turns.length - 1;
+  while (q >= 0 && turns[q]?.role !== 'user') q--;
+  if (q < 0) q = turns.length - 1;
   // The turns of the conversation, in the manifest's order; merged parts belong to the turn after them.
-  const conversation = turns.slice(0, -1);
+  const conversation = turns.slice(0, Math.max(0, q));
   const kinds: Array<{ kind: 'history' | 'inherited'; id: string | undefined; merged: number; tokens: number }> = [];
   let pending = { merged: 0, tokens: 0 };
   for (const p of manifest.parts) {
@@ -399,17 +448,42 @@ export function describeSent(manifest: { parts: SentManifestPart[] }, request: C
       withPassage: false,
     });
   });
-  const question = turns.at(-1);
+  const question = turns[q];
   if (question) {
     out.push({
       kind: 'question',
       role: question.role,
       text: question.content,
-      tokens: tokensOf('question') + tokensOf('origin') + tokensOf('image') + pending.tokens,
+      tokens: tokensOf('question') + tokensOf('origin') + tokensOf('image') + tokensOf('overview') + pending.tokens,
       id: manifest.parts.find((p) => p.kind === 'question')?.id ?? '',
       merged: pending.merged,
       withPassage: has('origin'),
+      ...(has('overview') ? { withOverview: true } : {}),
       ...(question.images && question.images.length > 0 ? { images: question.images } : {}),
+    });
+  }
+
+  // Each lookup: what was asked for, and what came back.
+  const lookupTokens = manifest.parts.filter((p) => p.kind === 'lookup').map((p) => p.tokens);
+  const after = turns.slice(q + 1);
+  let n = 0;
+  for (const m of after) {
+    if (m.role !== 'assistant' || !m.toolCalls) continue;
+    m.toolCalls.forEach((call, i) => {
+      const answer = after.find((t) => t.role === 'tool' && t.toolCallId === call.id);
+      const text = answer?.content ?? '';
+      out.push({
+        kind: 'lookup',
+        role: 'tool',
+        text,
+        tokens: lookupTokens[n] ?? estimateTokens(text),
+        merged: 0,
+        withPassage: false,
+        call: { name: call.name, arguments: call.arguments },
+        ...(i === 0 && m.reasoning ? { thinking: m.reasoning } : {}),
+        ...(i === 0 && m.content ? { said: m.content } : {}),
+      });
+      n++;
     });
   }
   return out;

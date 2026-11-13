@@ -18,7 +18,7 @@ Also built along the way: **the Assistant** (ADR 0023), one assistant for the wh
 
 ## How it is checked
 
-- 316 unit and integration tests (`pnpm test`) and 76 end-to-end tests (`pnpm e2e`), all with the fake model.
+- 320 unit and integration tests (`pnpm test`) and 76 end-to-end tests (`pnpm e2e`), all with the fake model.
 - The brief's acceptance tests are in the suite (see [codebase.md](codebase.md#e2e-the-app-end-to-end)).
 - Tried by the founder with DeepSeek on his Mac: connecting a key, streaming answers, prompt caching, titles and headlines, and reading a real arXiv paper (over 1,600 formulas, all rendered).
 
@@ -31,7 +31,7 @@ Also built along the way: **the Assistant** (ADR 0023), one assistant for the wh
 - The reading pane does not mark the passages pinned from it (ADR 0019).
 - An export imports only into a Noema of the same schema version, and only into an empty one (ADR 0018).
 - The Assistant has been tried only with the fake model: how DeepSeek uses the lookups and the change tools (and its thinking with them), and whether it quotes exactly, is to be seen on the Mac (ADRs 0023, 0024).
-- Reading a room (ADR 0027) is tested with the fake model only: the quality of DeepSeek's summaries and suggested links, and how often its quotes are word for word, are not known yet.
+- Reading a room (ADR 0027) has been used once by the founder with DeepSeek (a room of six things): six summaries and eight suggested links, which overlapped on the map; fixed the same day (ADR 0027 addendum). How good the summaries and links are, and how often quotes are word for word, is still to be judged.
 - Rooms (ADR 0026) are tested with made-up notebooks; not yet used on the founder's own. Dragging is tested in Chromium (Playwright); Safari's drag and drop is not tried.
 - Folders (ADR 0025) are tested with folders the tests make; not yet tried on the founder's own folders, or with the Assistant on DeepSeek. There is no file watching: a file changed on disk is read again when opened again.
 - "Asked before" by meaning has been tried only with the fake model: how well a real model judges is to be seen in use (`pnpm asked:check` replays a notebook through it; ADR 0020).

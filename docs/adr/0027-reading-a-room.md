@@ -68,3 +68,20 @@ The scope fence lists knowledge graphs and concept extraction. Links suggested b
 ## How to reverse
 
 Remove the button, the summary and link parts of the room page, the reader (`apps/server/src/rooms/reader.ts`) and the three Assistant tools. A later migration can drop `gist` and `item_link`; nothing else refers to them.
+
+## Addendum, 2026-11-13: nothing covers anything
+
+The founder's first real reading (DeepSeek, a room of four threads and two notes, eight suggested links) overlapped:
+- the words of links sat on cards' titles and summaries, because they went at the middle of each line and the columns were 28px apart;
+- key points ran past the right edge of their card (DeepSeek writes points of 40 to 80 characters, not "a few words");
+- clusters placed before reading could grow into the ones below them once their summaries came in.
+
+What changed:
+- **Columns stand 128px apart** (rows 48px), so the words of a link (at most 116px wide, two lines) fit between two columns. Migration 021 moves the columns of rooms laid out before apart in proportion (from 24 + n × 292 to 24 + n × 392); their order and rows stay. A narrow window shows fewer columns.
+- **A cluster that grows into the one below pushes it down**, 24px apart (`settleClusters`); so does a cluster dropped onto another. Clusters side by side are left alone.
+- **The words of a link go where they cover nothing** (`placeLabels`): on the line, as near its middle as can be without covering a card or other words, else just beside the line; where nothing is clear, where the least is covered. Their sizes are measured once drawn.
+- A link between two cards one above the other goes round the side with room (the right, unless the room is too narrow there).
+- **Key points wrap** inside their card.
+- **The right-click menu closes when you scroll** (the wheel or a finger), no longer on any scroll event: a scroll made just before a right-click could close the menu it opened.
+
+To reverse: set the gaps back in `RoomView.tsx`, drop the calls to `settleClusters` and `placeLabels`; migration 021 only moved positions, which Arrange places again.

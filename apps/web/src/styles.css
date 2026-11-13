@@ -4021,6 +4021,8 @@ button.cite.cite-n {
   flex-shrink: 0;
   width: var(--dock-width, 27rem);
   position: sticky;
+  /* Above whatever is open beside it; below the selection buttons, menus and toasts (10 and up). */
+  z-index: 9;
   top: 3.1rem;
   align-self: flex-start;
   height: calc(100vh - 3.1rem);
@@ -4976,8 +4978,19 @@ body.resizing {
   font-size: 0.74rem;
   margin: 0;
 }
+/* The map's own space: wider than the room, it scrolls sideways here, never under the Assistant beside it. */
+.room-map {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
 .room-canvas {
   position: relative;
+  /* Its clusters, lines and words are layered among themselves, not with the rest of the window. */
+  isolation: isolate;
   flex: 1;
   border-radius: 14px;
   background-color: color-mix(in srgb, var(--paper) 70%, var(--sheet));

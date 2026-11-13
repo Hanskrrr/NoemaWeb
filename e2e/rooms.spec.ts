@@ -245,6 +245,47 @@ test('read with AI: summaries whose points open the words they quote; suggested 
   await expect(page.getByTestId('room')).toBeVisible();
 });
 
+test('with the Assistant open beside a room, nothing of the room is drawn over it; the map scrolls sideways instead', async ({
+  page,
+  request,
+}) => {
+  await freshThread(request);
+  const ids = [await addSource(request, 'Tensor parallel'), await addSource(request, 'Pipeline parallel'), await addSource(request, 'Expert parallel')];
+  const nb = await notebookId(request);
+  const room = ulidish();
+  await request.post(`/api/notebooks/${nb}/rooms`, {
+    data: { id: room, title: 'Parallelism', items: ids.map((id) => ({ kind: 'source', id })) },
+    headers: H,
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/#/room/${room}`);
+  await expect(page.getByTestId('room-cluster')).toHaveCount(3);
+  await page.getByTestId('assistant-open').click();
+  const dock = page.getByTestId('assistant-dock');
+  await expect(dock).toBeVisible();
+  // Every point of the Assistant shows the Assistant, not a card of the room.
+  const covered = await page.evaluate(() => {
+    const d = document.querySelector('[data-testid=assistant-dock]')?.getBoundingClientRect();
+    if (!d) return -1;
+    let n = 0;
+    for (let x = d.left + 8; x < d.right; x += 24) {
+      for (let y = d.top + 8; y < d.bottom; y += 24) {
+        const e = document.elementFromPoint(x, y);
+        if (e && !e.closest('[data-testid=assistant-dock]')) n++;
+      }
+    }
+    return n;
+  });
+  expect(covered).toBe(0);
+  // The map keeps its place and scrolls sideways to the cluster that does not fit.
+  const map = page.getByTestId('room-map');
+  expect(await map.evaluate((e) => e.scrollWidth > e.clientWidth)).toBe(true);
+  const last = page.getByTestId('room-cluster').nth(2);
+  await last.scrollIntoViewIfNeeded();
+  const [b, d] = [await last.boundingBox(), await dock.boundingBox()];
+  expect(b && d && b.x + b.width <= d.x + 1).toBe(true);
+});
+
 /** What covers what on the map of a room. */
 async function coverings(page: Page) {
   return page.evaluate(() => {

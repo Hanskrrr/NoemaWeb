@@ -660,6 +660,8 @@ export function RoomView({
           </button>
         </p>
       )}
+      {/* The map scrolls sideways in its own space: with the Assistant beside it, nothing goes under it. */}
+      <div className="room-map" data-testid="room-map">
       <div
         ref={canvas}
         className={`room-canvas${dropOver ? ' drop-over' : ''}`}
@@ -778,6 +780,7 @@ export function RoomView({
             </div>
           );
         })}
+      </div>
       </div>
     </section>
   );

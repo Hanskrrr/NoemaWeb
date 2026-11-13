@@ -18,6 +18,8 @@ import {
   sourceHeadings,
   type ToolCall,
   ulid,
+  LINK_WORDS,
+  type LinkKind,
   type VaultTarget,
 } from '@noema/core';
 import { FileProblem, type Folders } from '../files/folders.ts';
@@ -49,6 +51,13 @@ function bare<T extends VaultTarget>(t: T): T {
 }
 
 /** A change the model asked for, checked and resolved; or why it cannot be, told back to the model. */
+/** The thing a label points at, as a room or a link holds it: a thread, a source or a note. */
+function itemOf(t: VaultTarget): { kind: 'thread' | 'source' | 'note'; id: string; title: string } {
+  if (t.kind === 'thread') return { kind: 'thread', id: t.threadId, title: t.title };
+  if (t.kind === 'note') return { kind: 'note', id: t.noteId, title: t.title };
+  return { kind: 'source', id: t.sourceId, title: t.title };
+}
+
 export async function planAction(
   vault: VaultLookup,
   repo: Repo,
@@ -170,6 +179,46 @@ export async function planAction(
         kind,
         summary: room ? `Put ${names} in the room ${q(room.title)}` : `Make the room ${q(title)} with ${names}`,
         payload: { roomId: room?.id ?? null, title: room?.title ?? title, items: items.map(({ kind: k, id }) => ({ kind: k, id })) },
+        open: null,
+      };
+    }
+    case 'take_out_of_room': {
+      const items: Array<{ kind: 'thread' | 'source' | 'note'; id: string; title: string }> = [];
+      for (const ref of args.refs as number[]) {
+        const t = target(ref);
+        if (typeof t === 'string') return { refused: t };
+        items.push(itemOf(t));
+      }
+      const title = (args.room as string).trim().toLowerCase();
+      const room = repo.listRooms(vault.notebook).find((r) => r.title.trim().toLowerCase() === title);
+      if (!room) return { refused: `No room is called “${args.room as string}”. List rooms to see them.` };
+      const inIt = items.filter((x) => room.members.includes(`${x.kind}:${x.id}` as (typeof room.members)[number]));
+      if (inIt.length === 0) return { refused: `None of those is in the room “${room.title}”.` };
+      return {
+        kind,
+        summary: `Take ${inIt.map((x) => q(x.title)).join(', ')} out of the room ${q(room.title)}`,
+        payload: { roomId: room.id, items: inIt.map(({ kind: k, id }) => ({ kind: k, id })) },
+        open: null,
+      };
+    }
+    case 'link': {
+      const a = target(args.from as number);
+      if (typeof a === 'string') return { refused: a };
+      const b = target(args.to as number);
+      if (typeof b === 'string') return { refused: b };
+      const from = itemOf(a);
+      const to = itemOf(b);
+      if (from.kind === to.kind && from.id === to.id) return { refused: 'Those two labels are the same thing.' };
+      const same = repo.linkBetween(vault.notebook, from, to);
+      if (same && same.status !== 'dismissed') {
+        return { refused: `Those two are linked already (${LINK_WORDS[same.kind]}); the learner can change that link in the room.` };
+      }
+      const linkKind = args.kind as LinkKind;
+      const words = (args.words as string | undefined) ?? null;
+      return {
+        kind,
+        summary: `Link ${q(from.title)} → ${q(to.title)}: ${words ?? LINK_WORDS[linkKind]}`,
+        payload: { from: { kind: from.kind, id: from.id }, to: { kind: to.kind, id: to.id }, linkKind, words },
         open: null,
       };
     }
@@ -383,6 +432,7 @@ type Undo =
   | { repin: { threadId: string; at: Record<string, unknown> } }
   | { merge: { mergeId: string } }
   | { file: { backupId: string } }
+  | { link: { linkId: string } }
   | { room: { roomId: string; made: boolean; before: Array<{ kind: 'thread' | 'source' | 'note'; id: string; state: 'in' | 'out' | 'placed' | null }> } };
 
 /** Runs, cancels and undoes what the Assistant proposed. */
@@ -536,6 +586,25 @@ export class AssistantActions {
         repo.addRoomItems(existing.id, items, 'assistant');
         return { open: null, undo: { room: { roomId: existing.id, made: false, before } } };
       }
+      case 'take_out_of_room': {
+        const items = p.items as Array<{ kind: 'thread' | 'source' | 'note'; id: string }>;
+        const roomId = p.roomId as string;
+        if (!repo.getRoom(roomId)) throw new InvalidError('that room is not there any more');
+        const before = items.map((x) => ({ ...x, state: repo.roomItemState(roomId, x) }));
+        for (const x of items) repo.removeRoomItem(roomId, x);
+        return { open: null, undo: { room: { roomId, made: false, before } } };
+      }
+      case 'link': {
+        const from = p.from as { kind: 'thread' | 'source' | 'note'; id: string };
+        const to = p.to as { kind: 'thread' | 'source' | 'note'; id: string };
+        const notebookId = this.notebookOf(a);
+        const same = repo.linkBetween(notebookId, from, to);
+        if (same && same.status !== 'dismissed') throw new InvalidError('those two are linked already');
+        if (same) repo.deleteItemLink(same.id);
+        const id = ulid();
+        repo.createItemLink(id, notebookId, { from, to, kind: p.linkKind as LinkKind, label: (p.words as string | null) ?? null }, 'assistant', 'accepted');
+        return { open: null, undo: { link: { linkId: id } } };
+      }
       case 'rename': {
         const what = p.what as 'thread' | 'note' | 'source';
         rename(repo, what, p.id as string, p.to as string);
@@ -626,6 +695,7 @@ export class AssistantActions {
     else if ('block' in undo) repo.deleteBlock(undo.block.noteId, undo.block.blockId);
     else if ('proposal' in undo) repo.discardProposal(undo.proposal.noteId, undo.proposal.blockId);
     else if ('rename' in undo) rename(repo, undo.rename.what, undo.rename.id, undo.rename.title);
+    else if ('link' in undo) repo.deleteItemLink(undo.link.linkId);
     else if ('room' in undo) {
       if (undo.room.made) repo.deleteRoom(undo.room.roomId);
       else for (const x of undo.room.before) repo.setRoomItemState(undo.room.roomId, x, x.state);

@@ -5057,34 +5057,56 @@ body.resizing {
   --heat: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
-  width: 100%;
   min-width: 0;
-  padding: 0.35rem 0.55rem;
-  border: 0;
   border-left: 3px solid color-mix(in srgb, var(--accent) calc(var(--heat) * 85%), transparent);
   border-radius: 0;
-  background: transparent;
-  color: var(--ink);
-  text-align: left;
-  font: inherit;
-  cursor: pointer;
 }
 .room-card:hover,
-.room-card:focus-visible {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  outline: none;
+.room-card:focus-within {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
 .room-card.is-head {
-  padding: 0.45rem 0.6rem 0.5rem;
   background: var(--sheet);
   border: 1px solid var(--rule);
   border-left: 4px solid color-mix(in srgb, var(--accent) calc(15% + var(--heat) * 75%), var(--rule));
   border-radius: 8px;
 }
 .room-card.is-head:hover,
-.room-card.is-head:focus-visible {
-  background: color-mix(in srgb, var(--accent) 6%, var(--sheet));
+.room-card.is-head:focus-within {
+  background: color-mix(in srgb, var(--accent) 5%, var(--sheet));
+}
+.room-card.is-target {
+  outline: 2px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+  cursor: crosshair;
+}
+.room-card.is-linking {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.room-card-open {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.35rem 0.55rem 0.3rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+}
+.room-card.is-target .room-card-open {
+  cursor: crosshair;
+}
+.room-card-open:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: -2px;
+}
+.room-card.is-head .room-card-open {
+  padding: 0.45rem 0.6rem 0.35rem;
 }
 .room-card-kind {
   display: flex;
@@ -5118,4 +5140,190 @@ body.resizing {
 }
 .room-open {
   color: var(--accent);
+}
+
+/* Reading a room (ADR 0027): what the AI wrote of each thing, and links between things. */
+.room-gist {
+  padding: 0 0.55rem 0.45rem;
+  font-size: 0.79rem;
+  line-height: 1.4;
+  color: var(--ink-soft);
+}
+.room-card.is-head .room-gist {
+  padding: 0 0.6rem 0.5rem;
+}
+.room-gist p {
+  margin: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+.room-gist.is-stale p {
+  color: var(--ink-faint);
+}
+.room-gist-by {
+  color: var(--ink-faint);
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+}
+.room-points {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.35rem;
+  margin: 0.3rem 0 0;
+  padding: 0;
+}
+.room-point {
+  max-width: 100%;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--rule));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.room-point:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.room-point.is-unfound {
+  display: inline-block;
+  border-style: dashed;
+  color: var(--ink-faint);
+  cursor: default;
+}
+.room-status.is-error {
+  color: var(--bad);
+}
+.room-linking {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0.4rem 0.7rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--sheet));
+  color: var(--ink);
+  font-size: 0.86rem;
+}
+.item-lines {
+  position: absolute;
+  inset: 0 auto auto 0;
+  z-index: 1;
+  pointer-events: none;
+  overflow: visible;
+}
+.room-cluster {
+  z-index: 2;
+}
+.item-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  opacity: 0.85;
+  transition: opacity 0.15s;
+}
+.item-line.is-suggested {
+  stroke-dasharray: 6 5;
+  opacity: 0.6;
+}
+.item-line.is-faded {
+  opacity: 0.12;
+}
+.item-lines marker path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.link-label {
+  position: absolute;
+  z-index: 3;
+  transform: translate(-50%, -50%);
+  max-width: 11rem;
+  padding: 0.05rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--rule));
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--accent);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: opacity 0.15s;
+}
+.link-label.is-suggested {
+  border-style: dashed;
+  font-style: italic;
+  color: var(--ink-soft);
+}
+.link-label.is-faded {
+  opacity: 0.25;
+}
+.link-label.is-open,
+.link-label:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  opacity: 1;
+}
+.link-editor {
+  position: absolute;
+  z-index: 4;
+  transform: translateX(-50%);
+  width: 20rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--sheet);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--ink) 14%, transparent);
+  font-size: 0.84rem;
+  cursor: default;
+}
+.link-editor-says {
+  margin: 0;
+  line-height: 1.4;
+}
+.link-editor-says strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+.link-editor-by {
+  margin: 0;
+  text-align: left;
+  font-size: 0.76rem;
+}
+.link-editor-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+.link-editor-row select,
+.link-editor-row input {
+  font: 0.82rem var(--sans);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 0.25rem 0.4rem;
+  min-width: 0;
+}
+.link-editor-row input {
+  flex: 1;
+}
+.link-editor-row button {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.65rem;
 }

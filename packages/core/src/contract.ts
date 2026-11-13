@@ -3,7 +3,8 @@
 // every response with them, so a drift between the two fails loudly.
 
 import { z } from 'zod';
-import { AssistantAction, AssistantPhase, AssistantPlace, LookupStep, Lookups } from './assistant.ts';
+import { AssistantAction, AssistantPhase, AssistantPlace, LookupStep, Lookups, VaultTarget } from './assistant.ts';
+import { LINK_KINDS } from './links.ts';
 import { isUlid } from './ids.ts';
 
 export const Id = z.string().refine(isUlid, 'expected a ULID');
@@ -1003,8 +1004,68 @@ export const RoomCardSchema = z.object({
   quote: z.string().nullable(),
   file: z.boolean(),
 });
+// Reading a room (ADR 0027): summaries of what is in it, and links between things.
+export const LinkKindSchema = z.enum(LINK_KINDS);
+export const ItemLink = z.object({
+  id: Id,
+  from: RoomItemRef,
+  to: RoomItemRef,
+  kind: LinkKindSchema,
+  /** The learner's own words for it, instead of the kind's. */
+  label: z.string().nullable(),
+  /** Why the AI suggested it. */
+  why: z.string().nullable(),
+  by: z.enum(['you', 'ai', 'assistant']),
+  status: z.enum(['suggested', 'accepted', 'dismissed']),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type ItemLink = z.infer<typeof ItemLink>;
+export const CreateLinkRequest = z.object({
+  id: Id,
+  from: RoomItemRef,
+  to: RoomItemRef,
+  kind: LinkKindSchema,
+  label: z.string().trim().max(200).nullable().optional(),
+});
+export const UpdateLinkRequest = z
+  .object({
+    kind: LinkKindSchema.optional(),
+    label: z.string().trim().max(200).nullable().optional(),
+    status: z.enum(['accepted', 'dismissed']).optional(),
+    /** Turn it around: from becomes to. */
+    flip: z.boolean().optional(),
+  })
+  .refine((b) => Object.keys(b).length > 0, 'nothing to change');
+export const Gist = z.object({
+  text: z.string(),
+  points: z.array(z.object({ text: z.string(), target: VaultTarget.nullable() })),
+  model: z.string(),
+  at: z.string(),
+  /** Written from the thing as it is now; false when it changed since. */
+  fresh: z.boolean(),
+});
+export type Gist = z.infer<typeof Gist>;
+export const RoomReading = z.object({
+  phase: z.enum(['summaries', 'links', 'done', 'failed']),
+  done: z.number().int(),
+  total: z.number().int(),
+  /** Links suggested this time. */
+  suggested: z.number().int(),
+  error: z.string().nullable(),
+});
+export type RoomReading = z.infer<typeof RoomReading>;
+
 export const RoomView = z.object({
   room: Room,
+  /** Summaries by "kind:id", for what has one. */
+  gists: z.record(z.string(), Gist),
+  /** Links between things in the room (both ends in it), not dismissed. */
+  itemLinks: z.array(ItemLink),
+  /** Things with no summary, or one written before they changed. */
+  unread: z.number().int(),
+  /** The last or current reading of the room, while the server remembers it. */
+  reading: RoomReading.nullable(),
   clusters: z.array(
     z.object({ key: RoomKeySchema, x: z.number().nullable(), y: z.number().nullable(), cards: z.array(RoomCardSchema) }),
   ),

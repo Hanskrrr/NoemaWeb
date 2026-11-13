@@ -369,7 +369,7 @@ export function AssistantChat({
         {where && (
           <p className="assistant-where" data-testid="assistant-where">
             <span className="assistant-where-glyph" aria-hidden>
-              {GLYPH[where.place.kind]}
+              {where.place.kind === 'room' ? '⌂' : GLYPH[where.place.kind]}
             </span>
             <span className="assistant-where-text">
               {where.title ? `“${where.title}”` : `This ${where.place.kind}`}
@@ -502,6 +502,8 @@ const ACTION_GLYPH: Record<AssistantAction['kind'], string> = {
   restore: '↺',
   add_source: '❡',
   put_in_room: '⌂',
+  take_out_of_room: '⌂',
+  link: '⟷',
   write_file: '⌸',
   edit_file: '✎',
   save_note_to_file: '⇣',

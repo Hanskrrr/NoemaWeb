@@ -1,5 +1,5 @@
 import { expect, type APIRequestContext, type Page, test } from '@playwright/test';
-import { freshThread, ulidish } from './helpers.ts';
+import { freshThread, highlighted, ulidish } from './helpers.ts';
 
 // Rooms (ADR 0026): things of one subject set together, whatever kind they
 // are. Made in the sidebar; things go in by dragging them onto a room, by
@@ -127,7 +127,7 @@ test('in a room, you choose what is in it; clusters stay where they are moved, a
   await page.mouse.move(box.x + 130, box.y + 152, { steps: 6 });
   await page.mouse.up();
   // Alt+arrow moves it on from the keyboard.
-  await first.getByTestId('room-card').first().focus();
+  await first.getByTestId('room-card-open').first().focus();
   await page.keyboard.press('Alt+ArrowRight');
   const moved = (await first.boundingBox()) as typeof box;
   expect(Math.round(moved.x - box.x)).toBe(124);
@@ -173,4 +173,69 @@ test('files dropped on Sources are read as sources; dropped on a room, they are 
   await page.getByTestId('room-canvas').dispatchEvent('drop', { dataTransfer: more, clientX: 600, clientY: 500 });
   await expect(page.getByTestId('room-status')).toContainText('Added 1 source to this room.');
   await expect(page.getByTestId('room-card').filter({ hasText: 'ZeRO' })).toBeVisible();
+});
+
+test('read with AI: summaries whose points open the words they quote; suggested links kept, changed, deleted; a link drawn by hand', async ({
+  page,
+  request,
+}) => {
+  await freshThread(request);
+  const a = await addSource(request, 'Ring all-reduce');
+  const b = await addSource(request, 'Parameter server');
+  const c = await addNote(request, 'Bandwidth note');
+  const nb = await notebookId(request);
+  await request.post(`/api/notes/${c}/blocks`, { data: { id: ulidish(), after: null, content: 'Each worker sends and receives about twice the gradient size.' }, headers: H });
+  const room = ulidish();
+  await request.post(`/api/notebooks/${nb}/rooms`, {
+    data: { id: room, title: 'Communication', items: [{ kind: 'source', id: a }, { kind: 'source', id: b }] },
+    headers: H,
+  });
+  await page.goto(`/#/room/${room}`);
+  await expect(page.getByTestId('room-read')).toHaveText('Read with AI · 2 new');
+  await page.getByTestId('room-read').click();
+  await expect(page.getByTestId('room-reading')).toContainText('Read. 2 summaries written; 1 link suggested');
+  await expect(page.getByTestId('room-read')).toHaveText('Read again');
+
+  // A summary on each card; its first point opens the source at the words it quotes.
+  const card = page.locator(`[data-testid=room-card][data-id="${a}"]`);
+  await expect(card.getByTestId('room-gist')).toContainText('Fake summary of “Ring all-reduce”');
+  await card.getByTestId('room-point').first().click();
+  await expect(page).toHaveURL(new RegExp(`#/s/${a}`));
+  await expect.poll(() => highlighted(page, 'noema-found')).toContain('Ring all-reduce');
+  await page.goBack();
+
+  // The suggested link: dashed until kept; then its kind changed, and it is deleted.
+  const label = page.getByTestId('link-label');
+  await expect(label).toHaveCount(1);
+  await expect(label).toHaveAttribute('data-status', 'suggested');
+  await expect(label).toHaveText('explains?');
+  await label.click();
+  const editor = page.getByTestId('link-editor');
+  await expect(editor).toContainText('“Parameter server” explains “Ring all-reduce”');
+  await expect(editor).toContainText('Suggested by the AI, not kept yet');
+  await editor.getByTestId('link-keep').click();
+  await expect(label).toHaveAttribute('data-status', 'accepted');
+  await editor.getByTestId('link-kind').selectOption('contrasts-with');
+  await expect(label).toHaveText('contrasts with');
+  await editor.getByTestId('link-words').fill('central vs ring');
+  await editor.getByTestId('link-words').press('Enter');
+  await expect(label).toHaveText('central vs ring');
+  await editor.getByTestId('link-delete').click();
+  await expect(label).toHaveCount(0);
+
+  // Drawn by hand: right-click, Link to…, pick the other card, then say what kind.
+  await page.getByTestId('room-pick').click();
+  await page.locator(`[data-testid=room-picker-row][data-id="${c}"] input`).check();
+  const noteCard = page.locator(`[data-testid=room-card][data-id="${c}"]`);
+  await expect(noteCard).toBeVisible();
+  await noteCard.click({ button: 'right' });
+  await page.getByTestId('context-menu').getByTestId('menu-link-to').click();
+  await expect(page.getByTestId('room-linking')).toContainText('Pick the card “Bandwidth note” links to');
+  await card.getByTestId('room-card-open').click();
+  await expect(editor).toContainText('“Bandwidth note” is related to “Ring all-reduce”');
+  await expect(editor).toContainText('Drawn by you');
+  await editor.getByTestId('link-kind').selectOption('example-of');
+  await expect(page.getByTestId('link-label')).toHaveText('is an example of');
+  // Still on the room: picking a card in link mode did not open it.
+  await expect(page.getByTestId('room')).toBeVisible();
 });

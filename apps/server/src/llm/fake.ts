@@ -186,6 +186,39 @@ export class FakeProvider implements ModelProvider {
       yield { type: 'finish', reason: 'stop' };
       return;
     }
+    if (req.purpose === 'gist') {
+      // A predictable summary: its points quote the first lines of the text (so they link there), and one
+      // quote that is not in the text (so it links nowhere).
+      const text = /<<<TEXT>>>\n([\s\S]*?)\n<<<END>>>/.exec(question)?.[1] ?? '';
+      if (text.includes('[[fail-gist]]')) throw new ProviderError('unavailable', 'fake failure: unavailable');
+      const title = /: “(.*)”\n/.exec(question)?.[1] ?? '';
+      const lines = text
+        .split('\n')
+        .map((l) => l.replace(/^(#+|Q:|A:|Side question:|-)\s*/, '').trim())
+        .filter((l) => l.length > 8 && !l.startsWith('['));
+      const points = lines.slice(0, 2).map((l, i) => ({ point: `Point ${i + 1}`, quote: l.split(/\s+/).slice(0, 6).join(' ') }));
+      points.push({ point: 'Not in the text', quote: 'words that are nowhere in it' });
+      await sleep(this.delayMs, req.signal);
+      yield { type: 'text', text: JSON.stringify({ gist: `Fake summary of “${title}”: ${(lines[0] ?? 'nothing').slice(0, 80)}.`, points }) };
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
+    if (req.purpose === 'links') {
+      // Predictable links: each thing to the one before it, kinds in turn, none twice.
+      if (question.includes('[[fail-links]]')) throw new ProviderError('unavailable', 'fake failure: unavailable');
+      const n = [...question.matchAll(/^(\d+)\. /gm)].length;
+      const already = new Set([...(/Already linked: (.*)\./.exec(question)?.[1] ?? '').matchAll(/(\d+)–(\d+)/g)].map((m) => `${m[1]}-${m[2]}`));
+      const kinds = ['explains', 'builds-on', 'example-of', 'contrasts-with'];
+      const links = [];
+      for (let i = 2; i <= n; i++) {
+        if (already.has(`${i - 1}-${i}`)) continue;
+        links.push({ from: i, to: i - 1, kind: kinds[(i - 2) % kinds.length], why: `Fake: ${i} bears on ${i - 1}.` });
+      }
+      await sleep(this.delayMs, req.signal);
+      yield { type: 'text', text: JSON.stringify({ links }) };
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
     if (req.purpose === 'assistant') {
       yield* this.assistant(req);
       return;

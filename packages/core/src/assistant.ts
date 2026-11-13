@@ -5,6 +5,7 @@
 // become buttons that open the exact place.
 
 import { z } from 'zod';
+import { LINK_KINDS } from './links.ts';
 
 /** At most this many rounds of looking up; then it answers with what it has. */
 export const MAX_LOOKUP_ROUNDS = 6;
@@ -105,6 +106,9 @@ export const ActionArgs = {
   note_from_file: z.object({ path: FilePath }),
   // Rooms (ADR 0026): things of one subject set together.
   put_in_room: z.object({ refs: z.array(Ref).min(1).max(30), room: Title }),
+  take_out_of_room: z.object({ refs: z.array(Ref).min(1).max(30), room: Title }),
+  // Links between things (ADR 0027), read "from <kind> to".
+  link: z.object({ from: Ref, to: Ref, kind: z.enum(LINK_KINDS), words: Title.optional() }),
 } as const;
 export type ActionKind = keyof typeof ActionArgs;
 export const ACTION_KINDS = Object.keys(ActionArgs) as ActionKind[];
@@ -331,6 +335,30 @@ function actionTools(): ToolSpec[] {
       ),
     },
     {
+      name: 'take_out_of_room',
+      description: `Take threads, sources or notes (their labels) out of a room, by the room's name. A thread that came with its source stays out.${proposed}`,
+      parameters: object(
+        {
+          refs: { type: 'array', items: { type: 'integer' }, description: 'Labels of the threads, sources or notes.' },
+          room: str('The room\'s name.'),
+        },
+        ['refs', 'room'],
+      ),
+    },
+    {
+      name: 'link',
+      description: `Link two things (threads, sources or notes, by their labels), read "from <kind> to": explains, example-of (is an example of), builds-on, contrasts-with, same-question (asks the same as), part-of, related. It shows in every room holding both.${proposed}`,
+      parameters: object(
+        {
+          from: { type: 'integer', description: 'The label the link starts from.' },
+          to: { type: 'integer', description: 'The label it goes to.' },
+          kind: { type: 'string', enum: [...LINK_KINDS] },
+          words: str('Your own words for the link, if the kind does not say it.'),
+        },
+        ['from', 'to', 'kind'],
+      ),
+    },
+    {
       name: 'add_source',
       description: `Add a source to read: a web page or arXiv paper by its address, or text.${proposed}`,
       parameters: object({ url: str('The address.'), text: str('Text to add instead.'), title: str('A title, if you want one.') }, []),
@@ -359,7 +387,7 @@ export type AssistantAction = z.infer<typeof AssistantAction>;
 
 /** Where the learner is when they ask the Assistant: what is open, and what they selected there. */
 export const AssistantPlace = z.object({
-  kind: z.enum(['thread', 'source', 'note']),
+  kind: z.enum(['thread', 'source', 'note', 'room']),
   id: z.string(),
   versionId: z.string().optional(),
   selection: z.string().max(4000).optional(),

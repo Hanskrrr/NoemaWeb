@@ -15,3 +15,5 @@ export * from './pdf.ts';
 export * from './assistant.ts';
 export * from './files.ts';
 export * from './rooms.ts';
+export * from './links.ts';
+export * from './gists.ts';

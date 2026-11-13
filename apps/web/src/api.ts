@@ -19,6 +19,7 @@ import {
   FolderList,
   FolderTree,
   Health,
+  ItemLink,
   ImportResponse,
   type InsertBlockRequest,
   Merge,
@@ -40,7 +41,9 @@ import {
   PageImageResponse,
   Pin,
   RefetchResponse,
+  type LinkKind,
   Room,
+  RoomReading,
   type RoomItemRef,
   RoomList,
   RoomView,
@@ -296,6 +299,13 @@ export const api = {
   removeFromRoom: (id: string, item: RoomItemRef) => call(Room, 'POST', `/api/rooms/${id}/items/remove`, item),
   placeInRoom: (id: string, places: Array<RoomItemRef & { x: number; y: number }>) =>
     call(Ok, 'PUT', `/api/rooms/${id}/places`, { places }),
+  // Reading a room (ADR 0027): summaries, then suggested links; and links drawn by hand.
+  readRoom: (id: string) => call(z.object({ reading: RoomReading }), 'POST', `/api/rooms/${id}/read`, {}),
+  createLink: (notebookId: string, id: string, from: RoomItemRef, to: RoomItemRef, kind: LinkKind, label: string | null = null) =>
+    call(ItemLink, 'POST', `/api/notebooks/${notebookId}/links`, { id, from, to, kind, label }),
+  updateLink: (id: string, patch: { kind?: LinkKind; label?: string | null; status?: 'accepted' | 'dismissed'; flip?: boolean }) =>
+    call(ItemLink, 'PATCH', `/api/links/${id}`, patch),
+  deleteLink: (id: string) => call(Ok, 'DELETE', `/api/links/${id}`),
   // Folders on this computer (ADR 0025): read in place, written only when asked.
   folders: (notebookId: string) => call(FolderList, 'GET', `/api/notebooks/${notebookId}/folders`),
   linkFolder: (notebookId: string, id: string, path: string) =>

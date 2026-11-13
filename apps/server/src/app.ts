@@ -25,7 +25,9 @@ import {
   SaveFileRequest,
   SaveNoteToFolderRequest,
   AddRoomItemsRequest,
+  CreateLinkRequest,
   CreateRoomRequest,
+  UpdateLinkRequest,
   RenameRoomRequest,
   RoomItemRef,
   RoomPlacesRequest,
@@ -81,6 +83,7 @@ import { MAX_PDF_BYTES, PDF_EXTRACTOR, PdfProblem, rawToPdf, readPdf } from './i
 import { ProviderError } from './llm/provider.ts';
 import type { ModelSettings } from './llm/settings.ts';
 import type { Logger } from './log.ts';
+import { RoomReader } from './rooms/reader.ts';
 import { type AskPair, ConflictError, InvalidError, NotFoundError, type Repo } from './store/repo.ts';
 
 export const VERSION = '0.1.0-m4.1';
@@ -145,6 +148,7 @@ export function createApp(deps: AppDeps): App {
   const folders = new Folders({ repo, log });
   const titler = new Titler({ repo, models, log });
   const askedJudge = new AskedJudge({ repo, models, log });
+  const roomReader = new RoomReader({ repo, models, log });
   const headliner = new Headliner({ repo, models, log });
   const generations = new Generations({ repo, models, titler, headliner, config: deps.config, log, folders });
   const notes = new NoteWriter({ repo, models, maxOutputTokens: deps.config.maxOutputTokens, log });
@@ -278,7 +282,36 @@ export function createApp(deps: AppDeps): App {
   router.on('GET', '/api/rooms/:id', ({ res, params }) => {
     const view = repo.roomView(params.id as string);
     if (!view) throw notFound('room');
-    sendJson(res, 200, view);
+    sendJson(res, 200, { ...view, reading: roomReader.status(params.id as string) });
+  });
+  // Read a room (ADR 0027): summaries of what has none, then suggested links. Watched by asking for the room again.
+  router.on('POST', '/api/rooms/:id/read', ({ res, params }) => {
+    if (!repo.getRoom(params.id as string)) throw notFound('room');
+    sendJson(res, 202, { reading: roomReader.start(params.id as string) });
+  });
+  // Links between things: drawn by the learner (accepted at once), or suggested and then accepted, changed, dismissed.
+  router.on('POST', '/api/notebooks/:id/links', async (ctx) => {
+    const notebookId = ctx.params.id as string;
+    if (!repo.getNotebook(notebookId)) throw notFound('notebook');
+    const body = await ctx.body(CreateLinkRequest);
+    if (repo.getItemLink(body.id)) {
+      sendJson(ctx.res, 200, repo.getItemLink(body.id));
+      return;
+    }
+    const same = repo.linkBetween(notebookId, body.from, body.to);
+    if (same && same.status !== 'dismissed') throw new HttpError(409, 'conflict', 'Those two are linked already: change that link instead.');
+    if (same) repo.deleteItemLink(same.id);
+    sendJson(ctx.res, 201, repo.createItemLink(body.id, notebookId, body, 'you', 'accepted'));
+  });
+  router.on('PATCH', '/api/links/:id', async (ctx) => {
+    const body = await ctx.body(UpdateLinkRequest);
+    const link = repo.updateItemLink(ctx.params.id as string, body);
+    if (!link) throw notFound('link');
+    sendJson(ctx.res, 200, link);
+  });
+  router.on('DELETE', '/api/links/:id', ({ res, params }) => {
+    if (!repo.deleteItemLink(params.id as string)) throw notFound('link');
+    sendJson(res, 200, { ok: true });
   });
   router.on('PATCH', '/api/rooms/:id', async (ctx) => {
     const body = await ctx.body(RenameRoomRequest);

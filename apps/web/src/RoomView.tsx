@@ -6,6 +6,10 @@
 // places new ones, and you move them by dragging (or Alt+arrow keys).
 
 import {
+  type ItemLink,
+  LINK_KINDS,
+  LINK_WORDS,
+  type LinkKind,
   type NoteSummary,
   placeClusters,
   type RoomKind,
@@ -14,6 +18,8 @@ import {
   type Source,
   type Thread,
   threadOf,
+  ulid,
+  type VaultTarget,
 } from '@noema/core';
 import {
   type CSSProperties,
@@ -38,6 +44,7 @@ const EDGE = 24;
 const STEP = 24;
 
 type Spot = { x: number; y: number };
+type Box = { x: number; y: number; w: number; h: number };
 type Cluster = RoomViewData['clusters'][number];
 type RoomCard = Cluster['cards'][number];
 
@@ -67,9 +74,12 @@ export function RoomView({
   sources,
   notes,
   onOpen,
+  onOpenTarget,
   onDeleted,
 }: {
   roomId: string;
+  /** A key point's words, where they are in the original. */
+  onOpenTarget: (target: VaultTarget) => void;
   notebookId: string;
   threads: Thread[];
   sources: Source[];
@@ -89,6 +99,11 @@ export function RoomView({
   const [status, setStatus] = useState<string | null>(null);
   // Ticks in the picker show at once; the room catches up.
   const [pending, setPending] = useState<Map<string, boolean>>(new Map());
+  // Links between cards (ADR 0027): where each card is, the link being edited, a link being drawn.
+  const [cardBoxes, setCardBoxes] = useState<Map<string, Box>>(new Map());
+  const [editing, setEditing] = useState<string | null>(null);
+  const [linking, setLinking] = useState<{ key: string; title: string } | null>(null);
+  const [focusKey, setFocusKey] = useState<string | null>(null);
   const canvas = useRef<HTMLDivElement>(null);
   const drag = useRef<{ key: string; sx: number; sy: number; x0: number; y0: number; moved: boolean } | null>(null);
   const swallow = useRef(false);
@@ -98,9 +113,16 @@ export function RoomView({
       const v = await api.room(roomId);
       setView(v);
       setProblem(null);
-      setSpots(
-        new Map(v.clusters.flatMap((c) => (c.x !== null && c.y !== null ? [[c.key, { x: c.x, y: c.y }] as const] : []))),
-      );
+      // Where clusters are on screen wins over what the server last heard (a drag may be on its way).
+      setSpots((had) => {
+        const next = new Map<string, Spot>();
+        for (const c of v.clusters) {
+          const mine = had.get(c.key);
+          if (mine) next.set(c.key, mine);
+          else if (c.x !== null && c.y !== null) next.set(c.key, { x: c.x, y: c.y });
+        }
+        return next;
+      });
     } catch (err) {
       setProblem(err instanceof ApiFailure ? err.message : 'The room could not be opened.');
     }
@@ -110,6 +132,55 @@ export function RoomView({
   useEffect(() => {
     void load();
   }, [load, rooms.changed]);
+
+  // While the room is being read, it is drawn again as summaries come in.
+  const reading = view?.reading ?? null;
+  const busy = reading?.phase === 'summaries' || reading?.phase === 'links';
+  useEffect(() => {
+    if (!busy) return;
+    const t = window.setTimeout(() => void load(), 700);
+    return () => window.clearTimeout(t);
+  }, [busy, view, load]);
+  const startReading = async () => {
+    try {
+      const r = await api.readRoom(roomId);
+      setView((v) => (v ? { ...v, reading: r.reading } : v));
+    } catch (err) {
+      setStatus(err instanceof ApiFailure ? err.message : 'The room could not be read.');
+    }
+  };
+
+  // Drawing a link: pick the other card; Escape stops.
+  useEffect(() => {
+    if (!linking) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setLinking(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [linking]);
+  const linkTo = async (to: { kind: RoomKind; id: string }) => {
+    const from = linking;
+    setLinking(null);
+    if (!from) return;
+    const at = from.key.indexOf(':');
+    try {
+      const made = await api.createLink(notebookId, ulid(), { kind: from.key.slice(0, at) as RoomKind, id: from.key.slice(at + 1) }, to, 'related');
+      await load();
+      setEditing(made.id);
+    } catch (err) {
+      setStatus(err instanceof ApiFailure ? err.message : 'The link could not be made.');
+    }
+  };
+  const changeLink = async (id: string, patch: Parameters<typeof api.updateLink>[1] | 'delete') => {
+    try {
+      if (patch === 'delete') await api.deleteLink(id);
+      else await api.updateLink(id, patch);
+      await load();
+    } catch (err) {
+      setStatus(err instanceof ApiFailure ? err.message : 'The link could not be changed.');
+    }
+  };
 
   const headOf = (c: Cluster) => c.cards[0] as RoomCard;
   const save = (places: Array<{ cluster: Cluster; at: Spot }>) => {
@@ -132,6 +203,25 @@ export function RoomView({
     const same =
       measured.size === sizes.size && [...measured].every(([k, s]) => sizes.get(k)?.w === s.w && sizes.get(k)?.h === s.h);
     if (!same) setSizes(measured);
+    // Where each card is in the room, for the links.
+    const origin = canvas.current.getBoundingClientRect();
+    const boxes = new Map<string, Box>();
+    for (const el of canvas.current.querySelectorAll<HTMLElement>('[data-card-key]')) {
+      const r = el.getBoundingClientRect();
+      boxes.set(el.dataset.cardKey as string, {
+        x: Math.round(r.left - origin.left),
+        y: Math.round(r.top - origin.top),
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+      });
+    }
+    const moved =
+      boxes.size !== cardBoxes.size ||
+      [...boxes].some(([k, b]) => {
+        const o = cardBoxes.get(k);
+        return !o || o.x !== b.x || o.y !== b.y || o.w !== b.w || o.h !== b.h;
+      });
+    if (moved) setCardBoxes(boxes);
     const unplaced = view.clusters.filter((c) => !spots.has(c.key));
     if (unplaced.length === 0) return;
     const width = canvas.current.clientWidth;
@@ -271,19 +361,28 @@ export function RoomView({
   const cardButton = (c: RoomCard, head: boolean) => {
     const open = c.kind !== 'note' ? c.marks.open : 0;
     const marks = marksOf(c);
+    const key = `${c.kind}:${c.id}`;
+    const gist = view.gists[key];
+    const pickable = linking !== null && linking.key !== key;
     return (
-      <button
-        type="button"
-        className={`room-card${head ? ' is-head' : ''} kind-${c.kind}`}
+      // biome-ignore lint/a11y/noStaticElementInteractions: right-click is a shortcut; its button opens the thing, the menu key works on it
+      <div
+        className={`room-card${head ? ' is-head' : ''} kind-${c.kind}${pickable ? ' is-target' : ''}${linking?.key === key ? ' is-linking' : ''}`}
         style={{ '--heat': Math.min(1, c.marks.questions / 12) } as CSSProperties}
-        onClick={() => {
-          if (!swallow.current) onOpen(c.kind, c.id);
-        }}
+        onMouseEnter={() => setFocusKey(key)}
+        onMouseLeave={() => setFocusKey((k) => (k === key ? null : k))}
+        onFocus={() => setFocusKey(key)}
         onContextMenu={(e) =>
           openMenu(
             e,
             roomMenu(rooms, { kind: c.kind, id: c.id, title: c.title }, [
               { label: 'Open', onSelect: () => onOpen(c.kind, c.id) },
+              {
+                label: 'Link to…',
+                hint: 'Then pick the card it links to',
+                onSelect: () => setLinking({ key, title: c.title }),
+                testId: 'menu-link-to',
+              },
               {
                 label: 'Take out of this room',
                 onSelect: () => rooms.remove(roomId, { kind: c.kind, id: c.id }),
@@ -294,34 +393,79 @@ export function RoomView({
             c.title || 'Untitled',
           )
         }
-        title={c.quote ? `Asked about “${c.quote}”` : undefined}
+        data-card-key={key}
         data-testid="room-card"
         data-kind={c.kind}
         data-id={c.id}
       >
-        {head && (
-          <span className="room-card-kind">
-            <span aria-hidden>{GLYPH[c.kind]} </span>
-            {kindName(c)}
-            <span className="room-card-day">{day(c.marks.at)}</span>
+        <button
+          type="button"
+          className="room-card-open"
+          onClick={() => {
+            if (swallow.current) return;
+            if (pickable) void linkTo({ kind: c.kind, id: c.id });
+            else if (!linking) onOpen(c.kind, c.id);
+          }}
+          title={pickable ? `Link “${linking?.title}” to this` : c.quote ? `Asked about “${c.quote}”` : undefined}
+          data-testid="room-card-open"
+        >
+          {head && (
+            <span className="room-card-kind">
+              <span aria-hidden>{GLYPH[c.kind]} </span>
+              {kindName(c)}
+              <span className="room-card-day">{day(c.marks.at)}</span>
+            </span>
+          )}
+          <span className="room-card-title">
+            {!head && <span aria-hidden>{GLYPH[c.kind]} </span>}
+            {c.title || 'Untitled'}
           </span>
-        )}
-        <span className="room-card-title">
-          {!head && <span aria-hidden>{GLYPH[c.kind]} </span>}
-          {c.title || 'Untitled'}
-        </span>
-        {(marks || open > 0) && (
-          <span className="room-card-marks" data-testid="room-card-marks">
-            {marks}
-            {open > 0 && (
-              <span className="room-open" title="Side questions you did not come back from">
-                {marks ? ' · ' : ''}
-                {open} open
-              </span>
+          {(marks || open > 0) && (
+            <span className="room-card-marks" data-testid="room-card-marks">
+              {marks}
+              {open > 0 && (
+                <span className="room-open" title="Side questions you did not come back from">
+                  {marks ? ' · ' : ''}
+                  {open} open
+                </span>
+              )}
+            </span>
+          )}
+        </button>
+        {gist && (
+          <div className={`room-gist${gist.fresh ? '' : ' is-stale'}`} data-testid="room-gist">
+            <p title={gist.fresh ? `Written by ${gist.model}` : 'Written before it changed: read the room again'}>
+              <span className="room-gist-by">AI{gist.fresh ? '' : ', older'} · </span>
+              {gist.text}
+            </p>
+            {gist.points.length > 0 && (
+              <ul className="room-points">
+                {gist.points.map((p, i) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list
+                  <li key={i}>
+                    {p.target ? (
+                      <button
+                        type="button"
+                        className="room-point"
+                        onClick={() => p.target && onOpenTarget(p.target)}
+                        title={p.target.quote ? `“${p.target.quote}”` : 'Open where it is'}
+                        data-testid="room-point"
+                      >
+                        <span aria-hidden>↗ </span>
+                        {p.text}
+                      </button>
+                    ) : (
+                      <span className="room-point is-unfound" title="Its words were not found in the original">
+                        {p.text}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
             )}
-          </span>
+          </div>
         )}
-      </button>
+      </div>
     );
   };
 
@@ -360,6 +504,18 @@ export function RoomView({
           </p>
         </div>
         <div className="room-actions">
+          {view.clusters.length > 0 && (
+            <button
+              type="button"
+              className={view.unread > 0 && !busy ? 'primary' : 'quiet'}
+              onClick={() => void startReading()}
+              disabled={busy}
+              title="The AI writes each thing a short summary, its points linked to the words they come from, then suggests links between them for you to keep or dismiss. It uses your model."
+              data-testid="room-read"
+            >
+              {busy ? 'Reading…' : view.unread > 0 ? `Read with AI · ${view.unread} new` : 'Read again'}
+            </button>
+          )}
           <button
             type="button"
             className={picking ? 'active' : 'quiet'}
@@ -457,6 +613,25 @@ export function RoomView({
           {status}
         </p>
       )}
+      {reading && (
+        <p className={`hint room-status${reading.phase === 'failed' ? ' is-error' : ''}`} role="status" data-testid="room-reading">
+          {reading.phase === 'summaries'
+            ? `Summarizing ${Math.min(reading.done + 1, reading.total)} of ${reading.total}…`
+            : reading.phase === 'links'
+              ? 'Looking for links between them…'
+              : reading.phase === 'failed'
+                ? reading.error
+                : `Read. ${reading.total ? `${reading.total === 1 ? '1 summary' : `${reading.total} summaries`} written` : 'Nothing new to summarize'}; ${plural(reading.suggested, 'link')} suggested${reading.suggested ? ': dashed until you keep them' : ''}.${reading.error ? ` ${reading.error}` : ''}`}
+        </p>
+      )}
+      {linking && (
+        <p className="room-linking" role="status" data-testid="room-linking">
+          Pick the card “{linking.title || 'Untitled'}” links to. Escape stops.
+          <button type="button" className="quiet inline" onClick={() => setLinking(null)}>
+            Stop
+          </button>
+        </p>
+      )}
       <div
         ref={canvas}
         className={`room-canvas${dropOver ? ' drop-over' : ''}`}
@@ -504,13 +679,24 @@ export function RoomView({
             return (
               <g key={`${l.from}>${l.to}`} className="room-line" data-testid="room-line">
                 <path d={d} />
-                <text x={(p1.x + p2.x) / 2} y={(p1.y + p2.y) / 2 - 6} textAnchor="middle">
+                <text x={p1.x + (p2.x - p1.x) * 0.3} y={p1.y + (p2.y - p1.y) * 0.3 - 6} textAnchor="middle">
                   {words}
                 </text>
               </g>
             );
           })}
         </svg>
+        <ItemLinks
+          links={view.itemLinks}
+          boxes={cardBoxes}
+          titles={cards}
+          focus={focusKey}
+          editing={editing}
+          onEdit={setEditing}
+          onChange={(id, patch) => void changeLink(id, patch)}
+          width={maxX + 120}
+          height={Math.max(420, maxY + 160)}
+        />
         {view.clusters.length === 0 && (
           <div className="room-empty" data-testid="room-empty">
             <p className="empty-title">Nothing in this room yet</p>
@@ -563,6 +749,217 @@ export function RoomView({
             </div>
           );
         })}
+      </div>
+    </section>
+  );
+}
+
+/** How a link reads, from its first end: its own words, or its kind's. */
+const linkWords = (l: ItemLink) => l.label || LINK_WORDS[l.kind];
+
+/**
+ * Links between cards (ADR 0027): a line with an arrow from one end to the
+ * other, and its words on it; a suggested one dashed until it is kept. Its
+ * words open the editor: keep it, change its kind or words, turn it around,
+ * dismiss or delete it.
+ */
+function ItemLinks({
+  links,
+  boxes,
+  titles,
+  focus,
+  editing,
+  onEdit,
+  onChange,
+  width,
+  height,
+}: {
+  links: ItemLink[];
+  boxes: Map<string, Box>;
+  titles: Map<string, RoomCard>;
+  focus: string | null;
+  editing: string | null;
+  onEdit: (id: string | null) => void;
+  onChange: (id: string, patch: Parameters<typeof api.updateLink>[1] | 'delete') => void;
+  width: number;
+  height: number;
+}) {
+  const drawn = links.flatMap((l) => {
+    const from = `${l.from.kind}:${l.from.id}`;
+    const to = `${l.to.kind}:${l.to.id}`;
+    const a = boxes.get(from);
+    const b = boxes.get(to);
+    if (!a || !b) return [];
+    // Side by side: from the facing sides. One above the other: out of the right side and back in.
+    const right = b.x >= a.x + a.w - 4;
+    const left = b.x + b.w <= a.x + 4;
+    const ay = a.y + Math.min(a.h / 2, 28);
+    const by = b.y + Math.min(b.h / 2, 28);
+    let d: string;
+    let mid: { x: number; y: number };
+    if (right || left) {
+      const x1 = right ? a.x + a.w : a.x;
+      const x2 = right ? b.x : b.x + b.w;
+      const bend = Math.max(40, Math.abs(x2 - x1) / 2) * (right ? 1 : -1);
+      d = `M${x1},${ay} C${x1 + bend},${ay} ${x2 - bend},${by} ${x2},${by}`;
+      mid = { x: (x1 + x2) / 2, y: (ay + by) / 2 };
+    } else {
+      const x1 = a.x + a.w;
+      const x2 = b.x + b.w;
+      const out = Math.max(x1, x2) + 56;
+      d = `M${x1},${ay} C${out},${ay} ${out},${by} ${x2},${by}`;
+      mid = { x: out - 14, y: (ay + by) / 2 };
+    }
+    return [{ l, from, to, d, mid }];
+  });
+  // Words on lines that would cover each other move down, one line's height at a time.
+  const placed: Array<{ x: number; y: number }> = [];
+  for (const x of [...drawn].sort((a, b) => a.mid.y - b.mid.y || a.mid.x - b.mid.x)) {
+    let y = x.mid.y;
+    while (placed.some((p) => Math.abs(p.x - x.mid.x) < 120 && Math.abs(p.y - y) < 22)) y += 22;
+    x.mid = { x: x.mid.x, y };
+    placed.push(x.mid);
+  }
+  const lit = (x: { from: string; to: string; l: ItemLink }) => !focus || x.from === focus || x.to === focus || x.l.id === editing;
+  const open = drawn.find((x) => x.l.id === editing);
+  return (
+    <>
+      <svg className="item-lines" aria-hidden width={width} height={height}>
+        <defs>
+          <marker id="item-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M1 1L9 5L1 9" />
+          </marker>
+        </defs>
+        {drawn.map((x) => (
+          <path
+            key={x.l.id}
+            d={x.d}
+            className={`item-line is-${x.l.status}${lit(x) ? '' : ' is-faded'}`}
+            markerEnd="url(#item-arrow)"
+          />
+        ))}
+      </svg>
+      {drawn.map((x) => (
+        <button
+          key={x.l.id}
+          type="button"
+          className={`link-label is-${x.l.status}${lit(x) ? '' : ' is-faded'}${x.l.id === editing ? ' is-open' : ''}`}
+          style={{ left: x.mid.x, top: x.mid.y }}
+          onClick={() => onEdit(x.l.id === editing ? null : x.l.id)}
+          aria-expanded={x.l.id === editing}
+          title={`“${titles.get(x.from)?.title ?? ''}” ${linkWords(x.l)} “${titles.get(x.to)?.title ?? ''}”${x.l.why ? ` · ${x.l.why}` : ''}`}
+          data-testid="link-label"
+          data-status={x.l.status}
+          data-link-id={x.l.id}
+        >
+          {x.l.status === 'suggested' ? `${linkWords(x.l)}?` : linkWords(x.l)}
+        </button>
+      ))}
+      {open && (
+        <LinkEditor
+          key={`${open.l.id}:${open.l.updatedAt}`}
+          link={open.l}
+          from={titles.get(open.from)?.title ?? ''}
+          to={titles.get(open.to)?.title ?? ''}
+          at={{ x: Math.min(Math.max(open.mid.x, 172), width - 172), y: open.mid.y }}
+          onClose={() => onEdit(null)}
+          onChange={(patch) => {
+            if (patch === 'delete' || (typeof patch === 'object' && patch.status === 'dismissed')) onEdit(null);
+            onChange(open.l.id, patch);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function LinkEditor({
+  link,
+  from,
+  to,
+  at,
+  onClose,
+  onChange,
+}: {
+  link: ItemLink;
+  from: string;
+  to: string;
+  at: { x: number; y: number };
+  onClose: () => void;
+  onChange: (patch: Parameters<typeof api.updateLink>[1] | 'delete') => void;
+}) {
+  const [label, setLabel] = useState(link.label ?? '');
+  const by = link.by === 'ai' ? 'Suggested by the AI' : link.by === 'assistant' ? 'Made by the Assistant' : 'Drawn by you';
+  const saveLabel = () => {
+    if ((link.label ?? '') !== label.trim()) onChange({ label: label.trim() || null });
+  };
+  return (
+    <section
+      className="link-editor"
+      style={{ left: at.x, top: at.y + 18 }}
+      aria-label="This link"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') onClose();
+      }}
+      data-testid="link-editor"
+    >
+      <p className="link-editor-says">
+        “{from || 'Untitled'}” <strong>{link.label || LINK_WORDS[link.kind]}</strong> “{to || 'Untitled'}”
+      </p>
+      <p className="hint link-editor-by">
+        {by}
+        {link.status === 'suggested' ? ', not kept yet' : ''}
+        {link.why ? `: ${link.why}` : '.'}
+      </p>
+      <div className="link-editor-row">
+        <label>
+          <span className="sr-only">Kind</span>
+          <select
+            value={link.kind}
+            onChange={(e) => onChange({ kind: e.target.value as LinkKind })}
+            data-testid="link-kind"
+          >
+            {LINK_KINDS.map((k) => (
+              <option key={k} value={k}>
+                {LINK_WORDS[k]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          onBlur={saveLabel}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') saveLabel();
+          }}
+          placeholder="Or your own words"
+          aria-label="Your own words for this link"
+          maxLength={200}
+          data-testid="link-words"
+        />
+      </div>
+      <div className="link-editor-row">
+        {link.status === 'suggested' && (
+          <button type="button" onClick={() => onChange({ status: 'accepted' })} data-testid="link-keep">
+            Keep
+          </button>
+        )}
+        <button type="button" className="quiet" onClick={() => onChange({ flip: true })} data-testid="link-flip">
+          Turn around
+        </button>
+        {link.status === 'suggested' ? (
+          <button type="button" className="quiet" onClick={() => onChange({ status: 'dismissed' })} data-testid="link-dismiss">
+            Dismiss
+          </button>
+        ) : (
+          <button type="button" className="quiet" onClick={() => onChange('delete')} data-testid="link-delete">
+            Delete
+          </button>
+        )}
+        <button type="button" className="quiet" onClick={onClose}>
+          Close
+        </button>
       </div>
     </section>
   );

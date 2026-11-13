@@ -155,6 +155,8 @@ function NotebookView({
       setSources(src.sources);
       setTrash(tr);
       setRooms(rm.rooms);
+      // An open room is drawn again too: a change elsewhere (an answer, the Assistant) may show there.
+      setRoomsChanged((n) => n + 1);
     } catch {
       // keep the lists we have; the views report connection problems
     }
@@ -558,6 +560,7 @@ function NotebookView({
         sources={sources}
         notes={notes}
         onOpen={(kind, id) => (kind === 'thread' ? open(id) : kind === 'source' ? openSource(id) : openNote(id))}
+        onOpenTarget={openTarget}
         onDeleted={() => {
           void refreshRooms();
           go({ kind: 'new' });
@@ -654,6 +657,9 @@ function NotebookView({
     }
     if (route?.kind === 'note') {
       return { place: { kind: 'note', id: route.id }, title: notes.find((n) => n.id === route.id)?.title ?? '' };
+    }
+    if (route?.kind === 'room') {
+      return { place: { kind: 'room', id: route.id }, title: rooms.find((r) => r.id === route.id)?.title ?? '' };
     }
     return null;
   })();

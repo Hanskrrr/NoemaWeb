@@ -40,6 +40,10 @@ import {
   type Origin,
   type Pin,
   type ReadableNotebook,
+  type Gist,
+  type ItemLink,
+  type ItemText,
+  type LinkKind,
   type Room,
   type RoomGraph,
   type RoomItemRef,
@@ -72,6 +76,21 @@ import type { Db } from './db.ts';
 type Row = Record<string, unknown>;
 
 const now = () => new Date().toISOString();
+
+function toItemLink(r: Row): ItemLink {
+  return {
+    id: r.id as string,
+    from: { kind: r.from_kind as RoomKind, id: r.from_id as string },
+    to: { kind: r.to_kind as RoomKind, id: r.to_id as string },
+    kind: r.kind as LinkKind,
+    label: (r.label as string | null) ?? null,
+    why: (r.why as string | null) ?? null,
+    by: r.made_by as ItemLink['by'],
+    status: r.status as ItemLink['status'],
+    createdAt: r.created_at as string,
+    updatedAt: r.updated_at as string,
+  };
+}
 
 function toNotebook(r: Row): Notebook {
   return {
@@ -994,13 +1013,222 @@ export class Repo {
     return r ? this.toRoom(r, this.roomGraph(r.notebook_id as string)) : null;
   }
 
-  /** A room drawn: clusters of what belongs together, and the lines between them. */
-  roomView(id: string): RoomView | null {
+  /** A room drawn: clusters of what belongs together, the lines between them, summaries and links (ADR 0027). */
+  roomView(id: string): Omit<RoomView, 'reading'> | null {
     const r = this.db.sql.prepare('SELECT * FROM room WHERE id = ?').get(id) as Row | undefined;
     if (!r) return null;
-    const graph = this.roomGraph(r.notebook_id as string);
-    const { clusters, links } = roomMap(this.roomRows(id), graph);
-    return { room: this.toRoom(r, graph), clusters, links };
+    const notebookId = r.notebook_id as string;
+    const graph = this.roomGraph(notebookId);
+    const rows = this.roomRows(id);
+    const { clusters, links } = roomMap(rows, graph);
+    const members = [...roomMembers(rows, graph).keys()];
+    const bases = this.itemBases(notebookId);
+    const saved = this.gists(members);
+    const gists: Record<string, Gist> = {};
+    let unread = 0;
+    for (const key of members) {
+      const g = saved.get(key);
+      const fresh = g !== undefined && g.basis === bases.get(key);
+      if (!fresh) unread += 1;
+      if (g) gists[key] = { text: g.text, points: g.points, model: g.model, at: g.at, fresh };
+    }
+    const inRoom = new Set<string>(members);
+    const itemLinks = this.listItemLinks(notebookId).filter(
+      (l) => l.status !== 'dismissed' && inRoom.has(roomKey(l.from.kind, l.from.id)) && inRoom.has(roomKey(l.to.kind, l.to.id)),
+    );
+    return { room: this.toRoom(r, graph), clusters, links, gists, itemLinks, unread };
+  }
+
+  /** The things in a room, as "kind:id", and its notebook. */
+  roomMembersOf(id: string): { notebookId: string; title: string; members: RoomItemRef[] } | null {
+    const r = this.db.sql.prepare('SELECT * FROM room WHERE id = ?').get(id) as Row | undefined;
+    if (!r) return null;
+    const members = [...roomMembers(this.roomRows(id), this.roomGraph(r.notebook_id as string)).keys()].map((k) => {
+      const at = k.indexOf(':');
+      return { kind: k.slice(0, at) as RoomKind, id: k.slice(at + 1) };
+    });
+    return { notebookId: r.notebook_id as string, title: r.title as string, members };
+  }
+
+  // Summaries and links (ADR 0027) --------------------------------------------
+
+  /** What a summary of each thing would be written from now: a source's version, when a thread (with its side questions) or a note last changed. */
+  itemBases(notebookId: string): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const x of this.listSources(notebookId)) out.set(roomKey('source', x.id), x.latestVersionId);
+    const threads = this.listThreads(notebookId);
+    const byId = new Map(threads.map((t) => [t.id, t]));
+    for (const t of threads) {
+      const key = roomKey('thread', threadOf(t.id, byId));
+      if ((out.get(key) ?? '') < t.updatedAt) out.set(key, t.updatedAt);
+    }
+    for (const n of this.listNotes(notebookId)) out.set(roomKey('note', n.id), n.updatedAt);
+    return out;
+  }
+
+  gists(keys: string[]): Map<string, { basis: string; text: string; points: Gist['points']; model: string; at: string }> {
+    const out = new Map<string, { basis: string; text: string; points: Gist['points']; model: string; at: string }>();
+    const get = this.db.sql.prepare('SELECT * FROM gist WHERE kind = ? AND item_id = ?');
+    for (const key of keys) {
+      const at = key.indexOf(':');
+      const r = get.get(key.slice(0, at), key.slice(at + 1)) as Row | undefined;
+      if (!r) continue;
+      out.set(key, {
+        basis: r.basis as string,
+        text: r.text as string,
+        points: JSON.parse(r.points as string) as Gist['points'],
+        model: r.model as string,
+        at: r.created_at as string,
+      });
+    }
+    return out;
+  }
+
+  saveGist(item: RoomItemRef, basis: string, text: string, points: Gist['points'], model: string): void {
+    this.db.sql
+      .prepare(
+        `INSERT INTO gist (kind, item_id, basis, text, points, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (kind, item_id) DO UPDATE SET basis = excluded.basis, text = excluded.text, points = excluded.points,
+           model = excluded.model, created_at = excluded.created_at`,
+      )
+      .run(item.kind, item.id, basis, text, JSON.stringify(points), model, now());
+  }
+
+  /**
+   * The words of a thing, as the AI reads it for a summary, with where each
+   * stretch is: a source's latest version; a thread's questions and answers,
+   * its side questions after; a note's blocks. Null if it is gone.
+   */
+  itemText(item: RoomItemRef): ItemText | null {
+    if (item.kind === 'source') {
+      const d = this.sourceDetail(item.id);
+      if (!d || d.source.deletedAt) return null;
+      const text = d.version.content;
+      return {
+        kind: 'source',
+        title: d.source.title,
+        text,
+        segments: [
+          { start: 0, end: text.length, target: { kind: 'source', sourceId: d.source.id, versionId: d.version.id, at: 0, title: d.source.title } },
+        ],
+      };
+    }
+    if (item.kind === 'note') {
+      const n = this.getNote(item.id);
+      if (!n || n.deletedAt) return null;
+      let text = '';
+      const segments: ItemText['segments'] = [];
+      for (const b of n.blocks) {
+        if (!b.content.trim()) continue;
+        if (text) text += '\n\n';
+        segments.push({ start: text.length, end: text.length + b.content.length, target: { kind: 'note', noteId: n.id, blockId: b.id, title: n.title } });
+        text += b.content;
+      }
+      return { kind: 'note', title: n.title, text, segments };
+    }
+    const top = this.getThread(item.id);
+    if (!top || top.deletedAt) return null;
+    const threads = this.listThreads(top.notebookId);
+    const byId = new Map(threads.map((t) => [t.id, t]));
+    const family = threads
+      .filter((t) => t.id !== top.id && threadOf(t.id, byId) === top.id)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    let text = '';
+    const segments: ItemText['segments'] = [];
+    for (const t of [top, ...family]) {
+      const side = t.id !== top.id;
+      for (const m of this.listMessages(t.id)) {
+        const body = m.content.trim();
+        if (!body) continue;
+        const line = `${m.role === 'user' ? (side ? 'Side question' : 'Q') : 'A'}: ${body}`;
+        if (text) text += '\n\n';
+        segments.push({ start: text.length, end: text.length + line.length, target: { kind: 'thread', threadId: t.id, messageId: m.id, title: t.title } });
+        text += line;
+      }
+    }
+    return { kind: 'thread', title: top.title, text, segments };
+  }
+
+  listItemLinks(notebookId: string): ItemLink[] {
+    return (
+      this.db.sql.prepare('SELECT * FROM item_link WHERE notebook_id = ? ORDER BY created_at, rowid').all(notebookId) as Row[]
+    ).map(toItemLink);
+  }
+
+  getItemLink(id: string): (ItemLink & { notebookId: string }) | null {
+    const r = this.db.sql.prepare('SELECT * FROM item_link WHERE id = ?').get(id) as Row | undefined;
+    return r ? { ...toItemLink(r), notebookId: r.notebook_id as string } : null;
+  }
+
+  /** A link between two things, either way round, in any state. */
+  linkBetween(notebookId: string, a: RoomItemRef, b: RoomItemRef): ItemLink | null {
+    const r = this.db.sql
+      .prepare(
+        `SELECT * FROM item_link WHERE notebook_id = ? AND (
+           (from_kind = ? AND from_id = ? AND to_kind = ? AND to_id = ?) OR
+           (from_kind = ? AND from_id = ? AND to_kind = ? AND to_id = ?))`,
+      )
+      .get(notebookId, a.kind, a.id, b.kind, b.id, b.kind, b.id, a.kind, a.id) as Row | undefined;
+    return r ? toItemLink(r) : null;
+  }
+
+  /** A link (a side question's end goes to its thread). Idempotent on the id. */
+  createItemLink(
+    id: string,
+    notebookId: string,
+    link: { from: RoomItemRef; to: RoomItemRef; kind: LinkKind; label?: string | null; why?: string | null },
+    by: ItemLink['by'],
+    status: ItemLink['status'],
+  ): ItemLink {
+    return this.db.tx(() => {
+      const existing = this.getItemLink(id);
+      if (existing) return existing;
+      const from = this.roomItem(notebookId, link.from);
+      const to = this.roomItem(notebookId, link.to);
+      if (!from || !to) throw new InvalidError('both ends must be in this notebook');
+      if (from.kind === to.kind && from.id === to.id) throw new InvalidError('a thing cannot be linked to itself');
+      const t = now();
+      this.db.sql
+        .prepare(
+          `INSERT INTO item_link (id, notebook_id, from_kind, from_id, to_kind, to_id, kind, label, why, made_by, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(id, notebookId, from.kind, from.id, to.kind, to.id, link.kind, link.label?.trim() || null, link.why ?? null, by, status, t, t);
+      this.logEvent('link.created', id, { by, status, kind: link.kind });
+      return this.getItemLink(id) as ItemLink;
+    });
+  }
+
+  updateItemLink(id: string, patch: { kind?: LinkKind; label?: string | null; status?: 'accepted' | 'dismissed'; flip?: boolean }): ItemLink | null {
+    const l = this.getItemLink(id);
+    if (!l) return null;
+    const from = patch.flip ? l.to : l.from;
+    const to = patch.flip ? l.from : l.to;
+    // Changing a suggested link is accepting it.
+    const status = patch.status ?? (l.status === 'suggested' && (patch.kind || patch.label !== undefined || patch.flip) ? 'accepted' : l.status);
+    this.db.sql
+      .prepare(
+        `UPDATE item_link SET from_kind = ?, from_id = ?, to_kind = ?, to_id = ?, kind = ?, label = ?, status = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(
+        from.kind,
+        from.id,
+        to.kind,
+        to.id,
+        patch.kind ?? l.kind,
+        patch.label === undefined ? l.label : patch.label?.trim() || null,
+        status,
+        now(),
+        id,
+      );
+    this.logEvent('link.changed', id, { status });
+    return this.getItemLink(id);
+  }
+
+  deleteItemLink(id: string): boolean {
+    const r = this.db.sql.prepare('DELETE FROM item_link WHERE id = ?').run(id);
+    if (Number(r.changes) > 0) this.logEvent('link.deleted', id);
+    return Number(r.changes) > 0;
   }
 
   /** Make a room, with things in it at once. Idempotent on the id. */

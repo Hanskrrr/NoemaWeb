@@ -13,7 +13,7 @@ export interface StreamRequest {
   /** A short utility call (a title): skip the model's reasoning step where the provider allows it. */
   light?: boolean | undefined;
   /** What the call is for; the fake model answers titles differently. */
-  purpose?: 'answer' | 'assistant' | 'title' | 'headline' | 'note' | 'suggest' | 'merge' | 'asked' | undefined;
+  purpose?: 'answer' | 'assistant' | 'title' | 'headline' | 'note' | 'suggest' | 'merge' | 'asked' | 'gist' | 'links' | undefined;
   /** Lookups the model may ask for (the Assistant, ADR 0023). */
   tools?: ToolSpec[] | undefined;
   /** 'none': the tools are described, but this round must answer (the last round). */

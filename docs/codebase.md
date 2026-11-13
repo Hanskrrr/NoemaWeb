@@ -37,7 +37,8 @@ Imported by both the server and the web app. No I/O.
 | `src/search.ts` | Search text for FTS5 (Chinese and Japanese as characters and pairs), queries and snippets |
 | `src/html.ts` | A web page as Markdown: the article only, with math, footnotes, tables and code |
 | `src/sources.ts` | A source's blocks and headings, and the section around a passage |
-| `src/assistant.ts` | The Assistant's tools as the model is told about them (lookups, show, the fourteen changes), their arguments, a proposed change as shown (`AssistantAction`), where the learner is (`AssistantPlace`), quotes found near a label and checked (`quotesNear`, `quoteRange`), where a label points (`VaultTarget`), the lookups kept with an answer, labels in answers (`[3]`): found, put in one form, taken out of earlier answers |
+| `src/files.ts` | Files of a linked folder (ADR 0025): a file's text as a source shows it (Markdown as it is, other text as a code block), a path kept inside the folder, a note as a Markdown file |
+| `src/assistant.ts` | The Assistant's tools as the model is told about them (lookups, file lookups, show, the changes, file changes included), their arguments, a proposed change as shown (`AssistantAction`), where the learner is (`AssistantPlace`), quotes found near a label and checked (`quotesNear`, `quoteRange`), where a label points (`VaultTarget`), the lookups kept with an answer, labels in answers (`[3]`): found, put in one form, taken out of earlier answers |
 | `src/pdf.ts` | A PDF's text items, page by page, as Markdown: lines, paragraphs, headings, lists, page headings; running heads dropped; where each item landed (the map from pages to text) |
 | `src/state.ts` | The states of an answer (`pending`, `streaming`, `done`, `failed`, `stopped`, `interrupted`) |
 | `src/errors.ts` | Error kinds and the plain sentence the UI shows for each |
@@ -58,7 +59,8 @@ Imported by both the server and the web app. No I/O.
 | `src/chat/prompt.ts` | The system prompt |
 | `src/chat/titles.ts`, `headlines.ts` | Titles for new threads, and a one-line headline for each exchange, written by the model afterwards |
 | `src/chat/notes.ts` | Rewriting a thread as a note, and AI suggestions for a block |
-| `src/chat/assistant.ts` | The Assistant's instructions and its lookups over the store (`VaultLookup`): the overview sent with each question, where the learner is and what they selected, search, open, list, the labels numbered through one answer, quotes checked against the original, passages resolved for changes |
+| `src/files/folders.ts` | Folders on the learner's computer (ADR 0025): linking, listing, every path resolved inside the folder (links leading out refused), reading a file and opening it as a source (a new version when it changed on disk), writing with a backup, undo, finding lines in files |
+| `src/chat/assistant.ts` | The Assistant's instructions and its lookups over the store (`VaultLookup`): the overview sent with each question, where the learner is and what they selected, search, open, list, the files of linked folders, the labels numbered through one answer, quotes checked against the original, passages resolved for changes |
 | `src/chat/actions.ts` | The changes the Assistant proposes: checked and resolved when asked for (`planAction`), run on Do it through the store, cancelled, undone (`AssistantActions`) |
 | `src/chat/asked.ts` | "Asked before" by meaning: the chat model reads the earlier questions and says whether the new one was asked |
 | `src/chat/merges.ts` | Drafting what a thread merged into another carries |
@@ -81,7 +83,8 @@ React 19 and Vite, no router or state library. One stylesheet with light and dar
 | `src/route.ts` | Where the learner is, in the URL hash (`#/t/<thread>`, `#/note/<id>`, `#/s/<source>`, …), so reload and Back work |
 | `src/api.ts` | The only place that talks to the server; every response is checked against the contract |
 | `src/storage.ts` | `localStorage` for small conveniences: drafts, the last place, folded lists |
-| `src/Sidebar.tsx`, `icons.tsx` | The rail of icons and the lists of threads, sources, notes and the Trash |
+| `src/Sidebar.tsx`, `icons.tsx` | The rail of icons and the lists of threads, sources, notes, files and the Trash |
+| `src/Files.tsx` | Files: linked folders listed like a code editor's files; the editor for a text file; saving a note into a folder (ADR 0025) |
 | `src/ThreadView.tsx` | A thread: messages, the composer, select to ask a side question, Back, split-off, delete, drafts of new threads |
 | `src/Assistant.tsx` | The Assistant, beside what is open or on its own page: questions with where the learner is, answers with their lookups, cards for what they cite, the quote preview, the changes to confirm |
 | `src/LivingFrame.tsx`, `presence.ts` | The light around the window while the Assistant is open, and its orb; what it is doing (a small store the Assistant sets) |
@@ -90,7 +93,7 @@ React 19 and Vite, no router or state library. One stylesheet with light and dar
 | `src/PdfPages.tsx`, `pdf/pdfjs.ts`, `pdf/pageImage.ts` | A PDF as its pages (pdf.js from the server, with its text layer), selection on a page to a passage of the text; drawing a page as a picture for the model |
 | `src/AskedBefore.tsx`, `asked.ts` | The reminder above the box that a question was asked before; putting together what words and the model found |
 | `src/ExportImport.tsx` | Export (JSON and Markdown) and import |
-| `src/SourceView.tsx`, `AddSource.tsx`, `reading.ts` | The reading pane beside the thread, adding a source, and which threads belong to which source |
+| `src/SourceView.tsx`, `AddSource.tsx`, `reading.ts` | The reading pane beside the thread (for a file: where it is, Edit, Make a note, Read again), adding a source, and which threads belong to which source |
 | `src/NoteView.tsx`, `RefPane.tsx`, `citations.ts` | A note of blocks; a citation's exchange beside the note |
 | `src/Merges.tsx` | Merging threads: the picker, the draft, the card |
 | `src/MapView.tsx`, `Outline.tsx` | The map of a thread; the catalog on the right of long threads and notes |

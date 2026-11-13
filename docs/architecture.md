@@ -73,6 +73,8 @@ Merging one thread into another adds a card and a summary the learner accepted; 
 
 Since ADR 0024 it sits beside whatever is open (`Assistant.tsx`, ⌘J), and each question carries what is open and what is selected (`message.place`). Quotes it makes are checked against the original when the answer ends and kept with the text around them, for the cards and the preview. Besides lookups it can `show` the learner a place at once, and propose fourteen kinds of change (`chat/actions.ts`): each is checked and resolved to ids and offsets when the model asks, kept in `assistant_action` as a proposal, and run only when the learner taps Do it, through the same store calls as the app's buttons; what it made is kept for Open and Undo.
 
+**Folders on this computer** (ADR 0025). The server runs on the learner's own machine, so it can read a folder he links by its path (`apps/server/src/files/folders.ts`). Every path is resolved inside the folder's real path, so `..` and links that lead out are refused. Files, in the sidebar, lists a folder a level at a time. A file opened is a source linked to it (`source.folder_id`, `file_path`): Markdown as it is, other text as a code block, a PDF read as any PDF. Each version keeps the hash of the bytes it was read from, and opening the file again reads it again: a changed file is a new version, like a page fetched again. Text files are written only when asked (the editor in the reading pane, a note saved into the folder, or an Assistant proposal on Do it), against the hash of what was read, and each write keeps what it replaced (`file_backup`) for Undo. The Assistant has three file lookups (`list_files`, `find_in_files`, `open_file`) and four file changes, proposed like the others.
+
 **Search** (`packages/core/src/search.ts`, `store/repo.ts`). One SQLite FTS5 table over titles, messages, headlines, note blocks and source passages. Chinese and Japanese are indexed as single characters and overlapping pairs, so a two-character word matches inside a longer one. The index has a version; when it changes, it is rebuilt at start-up.
 
 ## The database
@@ -89,7 +91,8 @@ One SQLite file, `data/noema.db`, in WAL mode, with numbered migrations in `apps
 | `model_call` | Each call to the model: provider, model, timings, token counts, the manifest and the exact messages sent |
 | `note`, `note_block`, `note_revision` | Notes, their blocks, and every saved version |
 | `thread_merge` | Merges between threads: draft, accepted text, state |
-| `source`, `source_version`, `source_anchor` | What the learner reads, its immutable versions with the original HTML, and passages asked about |
+| `source`, `source_version`, `source_anchor` | What the learner reads (a file of a linked folder: its folder and path), its immutable versions with the original HTML (a file's: the hash of its bytes), and passages asked about |
+| `folder`, `file_backup` | Folders linked to the notebook by their path; what a file said before Noema wrote to it, to undo the write |
 | `search` | The FTS5 index |
 | `assistant_action` | Changes the Assistant proposed: what, resolved arguments, proposed / done / cancelled / undone, what it made |
 | `event` | An append-only log of what the learner did |

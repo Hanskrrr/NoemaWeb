@@ -22,7 +22,7 @@ Don't build these, even where older docs describe them:
 - Embeddings, semantic search, concept extraction, knowledge graphs, mastery states. (Exceptions the founder made: the chat model judges whether a question was asked before, ADR 0020; the Assistant looks things up across the notebook over keyword search, ADR 0023, and proposes changes the learner confirms one by one, ADR 0024. Its memory, background jobs and noticing things on its own are later steps he decides.)
 - Understanding-record forms, quizzes, return lines, checkout, task limits or timers.
 - Plugins, animation, the step language. (The Assistant's light around the window and its orb are the founder's decision, ADR 0023.)
-- Imports from Obsidian or ChatGPT.
+- Imports from Obsidian or ChatGPT. (Linking a folder on this computer, reading and editing its files as sources, making a note from a file and saving a note into the folder are the founder's decision, ADR 0025; that is not an Obsidian import.)
 - Collaboration.
 
 Anything outside the fence goes into `ideas.md`, not into code.

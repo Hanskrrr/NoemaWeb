@@ -3,6 +3,7 @@
 
 import {
   type AskedHit,
+  type AssistantPhase,
   type BranchSummary,
   type Continuation,
   type ContinuedFrom,
@@ -10,6 +11,7 @@ import {
   isLive,
   isTerminal,
   type Merge,
+  type LookupStep,
   type Message,
   type MessageError,
   type MessageRevision,
@@ -22,6 +24,7 @@ import {
   type SourceOrigin,
   type Thread,
   ulid,
+  type VaultTarget,
 } from '@noema/core';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ApiFailure, api, watchMessage } from './api.ts';
@@ -30,7 +33,9 @@ import { arrive, clearFound } from './found.ts';
 import { Composer } from './Composer.tsx';
 import { EditableTitle } from './EditableTitle.tsx';
 import { MergeCard, MergePicker, OPEN_MERGE_EVENT, OutgoingMerges } from './Merges.tsx';
+import { Orb } from './LivingFrame.tsx';
 import { MessageView } from './MessageView.tsx';
+import { getPresence, type Presence, presenceOf, pulse, setPresence } from './presence.ts';
 import { PINS_CHANGED_EVENT, PinnedList } from './Pinned.tsx';
 import { Outline, type OutlineItem, scrollRangeIntoView, shortLabel } from './Outline.tsx';
 import { highlight, selectionToSource, sourceToRange } from './markdown/selection.ts';
@@ -82,7 +87,9 @@ type Action =
   | { type: 'upsert'; message: Message }
   | { type: 'append'; id: string; text: string }
   | { type: 'status'; id: string; status: MessageStatus; error: MessageError | null }
-  | { type: 'headlines'; messages: Message[] };
+  | { type: 'headlines'; messages: Message[] }
+  /** The Assistant made a lookup for this answer. */
+  | { type: 'step'; id: string; step: LookupStep };
 
 function reducer(state: Message[], action: Action): Message[] {
   switch (action.type) {
@@ -96,6 +103,12 @@ function reducer(state: Message[], action: Action): Message[] {
       return state.map((m) => (m.id === action.id ? { ...m, content: m.content + action.text } : m));
     case 'status':
       return state.map((m) => (m.id === action.id ? { ...m, status: action.status, error: action.error } : m));
+    case 'step':
+      return state.map((m) =>
+        m.id === action.id
+          ? { ...m, lookups: { steps: [...(m.lookups?.steps ?? []), action.step], refs: m.lookups?.refs ?? {} } }
+          : m,
+      );
     case 'headlines': {
       const lines = new Map(action.messages.map((m) => [m.id, m.headline]));
       return state.map((m) => (lines.has(m.id) && lines.get(m.id) !== m.headline ? { ...m, headline: lines.get(m.id) ?? null } : m));
@@ -124,6 +137,7 @@ function optimisticUser(threadId: string, id: string, content: string, seq: numb
     error: null,
     model: null,
     headline: null,
+    lookups: null,
     createdAt: t,
     updatedAt: t,
   };
@@ -244,8 +258,11 @@ export function ThreadView({
   threads,
   notes = [],
   onShowContext,
+  onOpenTarget,
 }: {
   threadId: string;
+  /** In the Assistant (ADR 0023): open the place one of its labels points at. */
+  onOpenTarget?: (target: VaultTarget) => void;
   /** Show what the model was sent for an answer (for the revision shown, when it is not the one in use). */
   onShowContext?: (messageId: string, revisionId?: string) => void;
   /** Every note: those made from this thread are named under its title. */
@@ -285,6 +302,18 @@ export function ThreadView({
   const [cutting, setCutting] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const [messages, dispatch] = useReducer(reducer, []);
+  /** The Assistant: what each answer being written is doing. */
+  const [phases, setPhases] = useState<Record<string, AssistantPhase>>({});
+  /** The Assistant: a question is being typed. */
+  const [typing, setTyping] = useState(false);
+  /**
+   * The Assistant just looked something up. A lookup takes a few milliseconds,
+   * too quick to see; the frame shows it for a moment.
+   */
+  const [looked, setLooked] = useState(false);
+  const lookedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(lookedTimer.current), []);
+  const isAssistant = useRef(false);
   const [loaded, setLoaded] = useState(false);
   const [missing, setMissing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -308,18 +337,53 @@ export function ThreadView({
   const watch = useCallback(
     (id: string) => {
       if (watchers.current.has(id)) return;
+      const phaseOf = (phase: AssistantPhase | undefined) =>
+        setPhases((p) => {
+          if (!phase) {
+            const { [id]: _gone, ...rest } = p;
+            return rest;
+          }
+          return p[id] === phase ? p : { ...p, [id]: phase };
+        });
       const close = watchMessage(id, {
-        snapshot: (m) => dispatch({ type: 'upsert', message: m }),
-        delta: (text) => dispatch({ type: 'append', id, text }),
+        snapshot: (m, phase) => {
+          dispatch({ type: 'upsert', message: m });
+          if (phase) phaseOf(phase);
+          // Connected after a lookup was made (a reload, or a quick one): it still shows for its moment.
+          if (phase === 'looking' || (phase === 'thinking' && (m.lookups?.steps.length ?? 0) > 0)) {
+            setLooked(true);
+            clearTimeout(lookedTimer.current);
+            lookedTimer.current = setTimeout(() => setLooked(false), LOOKED_MS);
+          }
+        },
+        delta: (text) => {
+          dispatch({ type: 'append', id, text });
+          if (isAssistant.current) pulse(Math.min(0.5, 0.12 + text.length / 60));
+        },
         status: (status, error) => dispatch({ type: 'status', id, status, error }),
+        phase: (phase) => {
+          phaseOf(phase);
+          if (phase === 'looking') pulse(0.6);
+        },
+        step: (step) => {
+          dispatch({ type: 'step', id, step });
+          pulse(0.8);
+          setLooked(true);
+          clearTimeout(lookedTimer.current);
+          lookedTimer.current = setTimeout(() => setLooked(false), LOOKED_MS);
+        },
         end: () => {
           watchers.current.delete(id);
+          phaseOf(undefined);
           onChanged();
           // The first answer may have given the thread its AI title, and each answer its line for the catalog.
           api.thread(threadId).then(
             (d) => {
               setThread(d.thread);
               dispatch({ type: 'headlines', messages: d.messages });
+              // An Assistant answer, as kept: its citations in one form, and where each points.
+              const done = d.messages.find((m) => m.id === id);
+              if (done?.lookups) dispatch({ type: 'upsert', message: done });
             },
             () => {},
           );
@@ -394,6 +458,41 @@ export function ThreadView({
   const live = messages.find((m) => m.role === 'assistant' && isLive(m.status));
   const lastContentLength = messages.at(-1)?.content.length ?? 0;
   const lastStatus = messages.at(-1)?.status;
+
+  // The Assistant (ADR 0023): the living frame shows what it is doing.
+  const assistantMode = thread?.kind === 'assistant';
+  isAssistant.current = assistantMode;
+  const livePhase = live ? (phases[live.id] ?? null) : null;
+  const wasLive = useRef<string | null>(null);
+  useEffect(() => {
+    if (!assistantMode) return;
+    let next: Presence;
+    if (live) {
+      wasLive.current = live.id;
+      // A lookup just made shows for its moment, even if the answer has started.
+      next = looked ? 'looking' : presenceOf(live.status, livePhase);
+    } else if (wasLive.current) {
+      const ended = messages.find((m) => m.id === wasLive.current);
+      wasLive.current = null;
+      next = ended?.status === 'done' ? 'done' : 'idle';
+    } else {
+      // Just finished: let the bloom play out (it turns to idle by itself), unless a question is being typed.
+      if (getPresence() === 'done' && !typing) return;
+      next = typing ? 'listening' : 'idle';
+    }
+    setPresence(next);
+  }, [assistantMode, live, livePhase, looked, typing, messages]);
+  useEffect(() => {
+    if (!assistantMode) return;
+    return () => setPresence('off');
+  }, [assistantMode]);
+  /** A question being typed to the Assistant: the frame listens, and stirs a little with each key. */
+  const drafted = useRef('');
+  const onAssistantDraft = useCallback((text: string) => {
+    if (text !== drafted.current && text.length > drafted.current.length) pulse(0.08);
+    drafted.current = text;
+    setTyping(text.trim() !== '');
+  }, []);
 
   // Follow the answer as it grows, unless the learner has scrolled up to read.
   const stick = useRef(!returningFrom && !focus && !focusMessage);
@@ -797,7 +896,8 @@ export function ThreadView({
   return (
     <>
       <main className="thread" aria-busy={!loaded}>
-        {thread && (
+        {thread && assistantMode && <AssistantHead />}
+        {thread && !assistantMode && (
           <ThreadHeader
             title={thread.title}
             canRewrite={messages.some((m) => m.role === 'assistant' && m.status === 'done')}
@@ -876,11 +976,12 @@ export function ThreadView({
           onOpenTarget={(id) => onNavigate(id)}
           onCite={onCite}
         />
-        {loaded && messages.length === 0 && !origin && !sourceOrigin && (
+        {loaded && messages.length === 0 && !origin && !sourceOrigin && !assistantMode && (
           <div className="empty">
             <p className="empty-title">Ask anything you are studying.</p>
           </div>
         )}
+        {loaded && messages.length === 0 && assistantMode && <AssistantHello onAsk={(q) => send(q)} />}
         {merges
           .filter((x) => !x.afterMessageId || !byId.has(x.afterMessageId))
           .map((x) => (
@@ -946,6 +1047,14 @@ export function ThreadView({
                     : undefined
                 }
                 {...(inline.length > 0 ? { slots: inline } : {})}
+                onOpenTarget={assistantMode ? onOpenTarget : undefined}
+                phase={
+                  assistantMode && m.role === 'assistant' && isLive(m.status)
+                    ? looked && m.status === 'pending'
+                      ? 'looking'
+                      : (phases[m.id] ?? null)
+                    : undefined
+                }
               />
               {after.map(card)}
             </div>
@@ -987,8 +1096,10 @@ export function ThreadView({
           key={threadId}
           draftKey={keys.draft(threadId)}
           busy={Boolean(live)}
+          placeholder={assistantMode ? 'Ask about anything in your notebook…' : undefined}
           onSend={send}
           onStop={() => live && void stop(live.id)}
+          {...(assistantMode ? { onDraft: onAssistantDraft } : {})}
         />
       )}
 
@@ -1025,6 +1136,50 @@ export function ThreadView({
 }
 
 // ---------------------------------------------------------------------------
+
+/** The Assistant's own header: its orb and what it is. */
+function AssistantHead() {
+  return (
+    <header className="assistant-head" data-testid="assistant-head">
+      <Orb />
+      <div>
+        <h1>Assistant</h1>
+        <p>One assistant for your whole notebook. It looks things up, and shows you where it found them.</p>
+      </div>
+    </header>
+  );
+}
+
+/** How long the frame shows a lookup that has just been made. */
+const LOOKED_MS = 1100;
+
+const FIRST_ASKS = [
+  'Where did I leave off?',
+  'What have I asked about the most?',
+  'Which side questions did I never come back to?',
+  'What did my sources say that my threads never asked about?',
+];
+
+/** Before the first question: what it can do, and a few ways to start. */
+function AssistantHello({ onAsk }: { onAsk: (question: string) => void }) {
+  return (
+    <section className="assistant-hello" data-testid="assistant-hello">
+      <Orb size="large" />
+      <h2>Ask about anything you have read, asked or written.</h2>
+      <p>
+        It searches your threads, sources and notes before it answers, and every claim links to where it found it.
+        It reads; it does not change anything.
+      </p>
+      <div className="assistant-asks">
+        {FIRST_ASKS.map((q) => (
+          <button key={q} type="button" onClick={() => onAsk(q)} data-testid="assistant-ask">
+            {q}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 function ThreadHeader({
   title,

@@ -1,38 +1,12 @@
 // What was sent for an answer, word for word: the instructions, what the AI
 // knows about you, what you are reading, the passages you pinned, the
 // conversation it was given, and the question as it went out. Read from the record kept with every answer.
+// For the Assistant, also each lookup it made and what came back (ADR 0023).
 
 import { describeSent, type MessageContext, type SentPart } from '@noema/core';
 import { useEffect, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
-
-const KIND_LABELS: Record<SentPart['kind'], string> = {
-  instructions: 'Instructions to the AI',
-  about_me: 'About you',
-  source: 'What you are reading',
-  pinned: 'Passages you pinned',
-  inherited: 'From the thread this came from',
-  history: 'Earlier in this thread',
-  question: 'Your question',
-};
-
-/** What a part is, in a few words. */
-export function partLabel(p: SentPart): string {
-  if (p.kind === 'inherited' || p.kind === 'history') {
-    const turn = p.role === 'user' ? 'your question' : 'the answer';
-    return `${KIND_LABELS[p.kind]} · ${turn}${p.merged > 0 ? ', with a merged thread' : ''}`;
-  }
-  if (p.kind === 'question') {
-    const pictures = p.images?.length ?? 0;
-    const extras = [
-      p.withPassage ? 'the passage it is about' : '',
-      pictures === 1 ? 'a picture of its page' : pictures > 1 ? `pictures of its ${pictures} pages` : '',
-      p.merged > 0 ? 'a merged thread' : '',
-    ].filter(Boolean);
-    return extras.length > 0 ? `${KIND_LABELS.question}, with ${extras.join(' and ')}` : KIND_LABELS.question;
-  }
-  return KIND_LABELS[p.kind];
-}
+import { partLabel } from './sent.ts';
 
 const tokens = (n: number) => `about ${n.toLocaleString()} tokens`;
 const OPEN_BY_DEFAULT = new Set<SentPart['kind']>(['about_me', 'source', 'pinned', 'question']);
@@ -151,6 +125,13 @@ export function ContextDialog({
                             );
                           })}
                         </div>
+                      )}
+                      {p.said && <p className="context-note">It wrote first: “{p.said}”</p>}
+                      {p.thinking && (
+                        <details className="context-thinking">
+                          <summary>Its reasoning before this lookup (sent back, as DeepSeek requires)</summary>
+                          <pre className="context-text">{p.thinking}</pre>
+                        </details>
                       )}
                       <pre className="context-text">{p.text.replace(/^\n+/, '')}</pre>
                       {p.kind === 'about_me' && (

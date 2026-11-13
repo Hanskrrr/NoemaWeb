@@ -10,6 +10,7 @@
 //                                   a note with the exchange it cites as [E2] open beside it
 //                                   (the block it was cited in, to come back to)
 //   #/new                           a new thread, before its first question
+//   #/assistant                     the notebook's Assistant (ADR 0023)
 //   #/s/<sourceId>                  a source in the reading pane (its latest version)
 //   #/s/<sourceId>/v/<versionId>    one version of it
 //     …/at/<offset>                 scrolled to the block that holds this offset (from search)
@@ -31,12 +32,14 @@ export type Route =
       at?: number | undefined;
       from?: string | undefined;
     }
-  | { kind: 'new' };
+  | { kind: 'new' }
+  | { kind: 'assistant' };
 
 export function parseHash(hash: string): Route | null {
   const parts = hash.replace(/^#\/?/, '').split('/');
   const [head, id, sub, subId] = parts;
   if (head === 'new') return { kind: 'new' };
+  if (head === 'assistant') return { kind: 'assistant' };
   if (!isUlid(id)) return null;
   if (head === 'map') return { kind: 'map', id };
   if (head === 'source' || head === 's') return parseSource(id, parts.slice(2));
@@ -79,6 +82,8 @@ export function toHash(route: Route): string {
     }
     case 'new':
       return '#/new';
+    case 'assistant':
+      return '#/assistant';
     case 'map':
       return `#/map/${route.id}`;
     case 'note':

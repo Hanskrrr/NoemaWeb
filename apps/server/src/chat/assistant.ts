@@ -139,7 +139,7 @@ export class VaultLookup {
     }
     const top = threads.filter((t) => t.parentThreadId === null || t.splitAt !== null);
     if (top.length > 0) {
-      out.push(`Threads (${threads.length} with side questions; the latest):`);
+      out.push(`Threads (${threads.length}, side questions included; the latest):`);
       for (const t of top.slice(0, OVERVIEW_THREADS)) {
         const l = this.label({ kind: 'thread', threadId: t.id, messageId: null, title: t.title });
         const about = t.sourceId ? ` · about a passage of ${quoted(sources.find((s) => s.id === t.sourceId)?.title ?? '')}` : '';

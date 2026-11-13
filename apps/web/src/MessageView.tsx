@@ -1,5 +1,6 @@
-import { type BranchSummary, type Message, readableQuote } from '@noema/core';
-import { Markdown, type Slot } from './markdown/Markdown.tsx';
+import { type AssistantPhase, type BranchSummary, type LookupStep, type Message, readableQuote, type VaultTarget } from '@noema/core';
+import { Orb } from './LivingFrame.tsx';
+import { CiteContext, Markdown, type Slot } from './markdown/Markdown.tsx';
 
 const SETTINGS_ERRORS = new Set(['auth', 'quota', 'not_configured']);
 
@@ -15,6 +16,10 @@ export interface MessageActions {
   onAskAgain?: (() => void) | undefined;
   /** On an answer asked more than once: which one is shown, and how to see the others. */
   versions?: Versions | undefined;
+  /** An Assistant answer (ADR 0023): open the place one of its labels points at. */
+  onOpenTarget?: ((target: VaultTarget) => void) | undefined;
+  /** An Assistant answer still being written: what it is doing. */
+  phase?: AssistantPhase | null | undefined;
 }
 
 export interface Versions {
@@ -38,8 +43,15 @@ export function MessageView({
   onAskAgain,
   versions,
   slots,
+  onOpenTarget,
+  phase,
 }: { message: Message; branches: BranchSummary[]; slots?: Slot[] } & MessageActions) {
   const { role, status } = message;
+  const refs = message.lookups?.refs;
+  const numbered =
+    onOpenTarget && refs && Object.keys(refs).length > 0 ? { refs: refs as Record<string, VaultTarget>, open: onOpenTarget } : null;
+  const body =
+    role === 'assistant' ? <Markdown source={message.content} {...(slots ? { slots } : {})} /> : null;
   const sent = role === 'assistant' && status !== 'pending' && onShowContext;
   const earlier = versions && versions.n !== versions.inUse ? versions : null;
   return (
@@ -61,9 +73,16 @@ export function MessageView({
           )}
         </div>
       )}
+      {role === 'assistant' && message.lookups && message.lookups.steps.length > 0 && (
+        <LookupTrail steps={message.lookups.steps} live={status === 'pending' || status === 'streaming'} />
+      )}
       <div className="message-body" data-message-id={message.id}>
         {role === 'assistant' ? (
-          <Markdown source={message.content} {...(slots ? { slots } : {})} />
+          numbered ? (
+            <CiteContext.Provider value={{ refs: {}, go: () => {}, numbered }}>{body}</CiteContext.Provider>
+          ) : (
+            body
+          )
         ) : (
           <p className="user-text">
             <span data-s={0} data-e={message.content.length}>
@@ -71,7 +90,13 @@ export function MessageView({
             </span>
           </p>
         )}
-        {role === 'assistant' && status === 'pending' && <span className="thinking">Thinking…</span>}
+        {role === 'assistant' && status === 'pending' && phase !== undefined && (
+          <span className="thinking assistant-doing" data-testid="assistant-doing">
+            <Orb size="small" />
+            {phase === 'looking' ? 'Looking through your notebook…' : 'Thinking…'}
+          </span>
+        )}
+        {role === 'assistant' && status === 'pending' && phase === undefined && <span className="thinking">Thinking…</span>}
         {role === 'assistant' && status === 'streaming' && <span className="caret" aria-hidden />}
       </div>
       <StatusLine message={message} onStop={onStop} onOpenSettings={onOpenSettings} />
@@ -133,6 +158,30 @@ export function MessageView({
         </ul>
       )}
     </article>
+  );
+}
+
+const GLYPH: Record<LookupStep['tool'], string> = { search: '⌕', open: '❐', list: '≡' };
+
+/** What the Assistant looked up for an answer, in order; the newest arrives with a small motion while it works. */
+function LookupTrail({ steps, live }: { steps: LookupStep[]; live: boolean }) {
+  return (
+    <div className="lookup-trail" data-testid="lookup-trail" aria-label="What the Assistant looked up">
+      <span>Looked up</span>
+      {steps.map((step, i) => (
+        <span
+          // biome-ignore lint/suspicious/noArrayIndexKey: steps only grow, in order
+          key={i}
+          className={`lookup-step${live && i === steps.length - 1 ? ' lookup-step-new' : ''}`}
+          title={step.label}
+          data-testid="lookup-step"
+        >
+          <span aria-hidden>{GLYPH[step.tool]}</span>
+          {step.label}
+          {step.tool !== 'open' && <span className="lookup-count">· {step.found}</span>}
+        </span>
+      ))}
+    </div>
   );
 }
 

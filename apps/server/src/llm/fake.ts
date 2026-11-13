@@ -246,6 +246,8 @@ export class FakeProvider implements ModelProvider {
     }
     const slow = question.includes('[[slow]]');
     const delay = slow ? Math.max(this.delayMs, 25) : this.delayMs;
+    // [[slow]]: each round thinks for a moment, as a real model does, so a watcher sees every phase.
+    const think = slow ? Math.max(this.delayMs, 250) : delay;
     const after = req.messages.slice(at + 1);
     const rounds = after.filter((m) => m.role === 'assistant' && m.toolCalls).length;
     const lookups = [...question.matchAll(/\[\[(search|open|list):([^\]]*)\]\]/g)].map((m) => {
@@ -257,11 +259,11 @@ export class FakeProvider implements ModelProvider {
     });
     const together = question.includes('[[together]]');
     const pending = together ? (rounds === 0 ? lookups : []) : lookups.slice(rounds, rounds + 1);
-    await sleep(delay, req.signal);
+    await sleep(think, req.signal);
     yield { type: 'reasoning', text: pending.length > 0 ? 'I should look this up.' : 'I can answer now.' };
     if (req.tools && req.toolChoice !== 'none' && pending.length > 0) {
       if (rounds === 0 && question.includes('[[say-first]]')) yield { type: 'text', text: 'Let me look.' };
-      await sleep(delay, req.signal);
+      await sleep(think, req.signal);
       yield { type: 'tool_calls', calls: pending.map((c, i) => ({ id: `fake_${rounds}_${i}`, ...c })) };
       yield { type: 'finish', reason: 'tool_calls' };
       return;

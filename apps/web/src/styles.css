@@ -3650,3 +3650,385 @@ label.button.disabled {
   color: var(--ink-soft);
   margin-top: 0.2rem;
 }
+
+/* ------------------------------------------------------------------------ */
+/* The Assistant (ADR 0023): the living frame around the window, its orb,   */
+/* and what it shows under an answer.                                        */
+
+@property --lf-a {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #7aa2ff;
+}
+@property --lf-b {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #a08cff;
+}
+@property --lf-c {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #6fd3e0;
+}
+@property --lf-d {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #c3b5ff;
+}
+
+/* The colours of each state: calm blue when waiting, violet while thinking,
+   teal while looking things up, warm while writing, green when done. */
+[data-presence] {
+  --lf-a: #7aa2ff;
+  --lf-b: #a08cff;
+  --lf-c: #6fd3e0;
+  --lf-d: #c3b5ff;
+  transition:
+    --lf-a 0.9s ease,
+    --lf-b 0.9s ease,
+    --lf-c 0.9s ease,
+    --lf-d 0.9s ease;
+}
+[data-presence="listening"] {
+  --lf-a: #6f9cff;
+  --lf-b: #8f7dff;
+  --lf-c: #5ccfe6;
+  --lf-d: #b3a6ff;
+}
+[data-presence="thinking"] {
+  --lf-a: #7c6cff;
+  --lf-b: #4fb3ff;
+  --lf-c: #c27bff;
+  --lf-d: #5ee0d0;
+}
+[data-presence="looking"] {
+  --lf-a: #2fcfc4;
+  --lf-b: #79eeb0;
+  --lf-c: #3f9dff;
+  --lf-d: #c7f36b;
+}
+[data-presence="writing"] {
+  --lf-a: #ff9a6b;
+  --lf-b: #ff6fa8;
+  --lf-c: #ffd16b;
+  --lf-d: #9a7bff;
+}
+[data-presence="done"] {
+  --lf-a: #6fe0a8;
+  --lf-b: #8fd8ff;
+  --lf-c: #b8f08a;
+  --lf-d: #7aa2ff;
+}
+
+.living-frame {
+  --energy: 0;
+  --band: 3px;
+  --glow-band: 14px;
+  --glow: 0.5;
+  --edge: 0.65;
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.7s ease;
+}
+.living-frame[data-presence="off"] {
+  opacity: 0;
+  transition-duration: 0.45s;
+}
+.living-frame[data-presence="idle"] {
+  --glow: 0.32;
+  --edge: 0.45;
+}
+.living-frame[data-presence="listening"] {
+  --glow: 0.5;
+  --edge: 0.6;
+}
+.living-frame[data-presence="thinking"] {
+  --glow: 0.7;
+  --edge: 0.8;
+  --band: 3px;
+}
+.living-frame[data-presence="looking"] {
+  --glow: 0.85;
+  --edge: 0.95;
+  --band: 4px;
+  --glow-band: 18px;
+}
+.living-frame[data-presence="writing"] {
+  --glow: 0.5;
+  --edge: 0.75;
+}
+.living-frame[data-presence="done"] {
+  --glow: 0.9;
+  --edge: 0.9;
+}
+
+.lf-layer {
+  position: absolute;
+  inset: 0;
+}
+.lf-ring {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  padding: var(--band);
+  /* Only the band along the edge shows: the box less its content. */
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+}
+.lf-spin {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 160vmax;
+  height: 160vmax;
+  transform: translate(-50%, -50%);
+  background: conic-gradient(
+    from 0deg,
+    var(--lf-a),
+    var(--lf-b) 22%,
+    var(--lf-c) 45%,
+    var(--lf-d) 68%,
+    var(--lf-b) 84%,
+    var(--lf-a)
+  );
+}
+.lf-edge {
+  opacity: calc(var(--edge) + var(--energy) * 0.25);
+  transition: opacity 0.6s ease;
+}
+.lf-glow {
+  filter: blur(22px) saturate(1.3);
+  opacity: calc(var(--glow) + var(--energy) * 0.5);
+  transition: opacity 0.6s ease;
+}
+.lf-glow .lf-ring {
+  padding: var(--glow-band);
+}
+/* Waiting: the glow breathes. */
+.living-frame[data-presence="idle"] .lf-glow,
+.living-frame[data-presence="listening"] .lf-glow {
+  animation: lf-breathe 5.5s ease-in-out infinite;
+}
+.living-frame[data-presence="done"] .lf-glow {
+  animation: lf-bloom 1.6s ease-out;
+}
+@keyframes lf-breathe {
+  0%,
+  100% {
+    filter: blur(20px) saturate(1.2);
+  }
+  50% {
+    filter: blur(30px) saturate(1.45);
+  }
+}
+@keyframes lf-bloom {
+  0% {
+    filter: blur(22px) saturate(1.3);
+  }
+  30% {
+    filter: blur(40px) saturate(1.8);
+  }
+  100% {
+    filter: blur(22px) saturate(1.3);
+  }
+}
+@media (prefers-color-scheme: dark) {
+  .living-frame {
+    --glow-band: 18px;
+  }
+  .lf-glow {
+    mix-blend-mode: screen;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .living-frame .lf-glow {
+    animation: none !important;
+  }
+}
+
+/* The orb: the same light, small. */
+.orb {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, var(--lf-a), var(--lf-b), var(--lf-c), var(--lf-d), var(--lf-a));
+  box-shadow:
+    0 0 0.6rem color-mix(in srgb, var(--lf-b) 55%, transparent),
+    inset 0 0 0.3rem rgba(255, 255, 255, 0.5);
+  animation:
+    orb-turn 9s linear infinite,
+    orb-breathe 4.5s ease-in-out infinite;
+}
+.orb-small {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+.orb-large {
+  width: 3.4rem;
+  height: 3.4rem;
+}
+.orb-core {
+  position: absolute;
+  inset: 22%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 34%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.15) 60%, transparent 72%);
+}
+.orb[data-presence="thinking"] {
+  animation-duration: 2.6s, 2.2s;
+}
+.orb[data-presence="looking"] {
+  animation-duration: 1.1s, 1.4s;
+}
+.orb[data-presence="writing"] {
+  animation-duration: 4s, 1.6s;
+}
+@keyframes orb-turn {
+  to {
+    rotate: 1turn;
+  }
+}
+@keyframes orb-breathe {
+  0%,
+  100% {
+    scale: 1;
+  }
+  50% {
+    scale: 1.08;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .orb {
+    animation: none;
+  }
+}
+
+/* The Assistant's place at the top of the rail. */
+.rail-button.assistant-button .orb {
+  margin: 0.05rem 0 0.1rem;
+}
+.rail-button.assistant-button.current .rail-label {
+  color: var(--ink);
+}
+
+/* Its page. */
+.assistant-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.4rem 0 1.2rem;
+}
+.assistant-head h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.assistant-head p {
+  margin: 0.1rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+.assistant-hello {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.9rem;
+  margin: 3.5rem auto 1.5rem;
+  max-width: 34rem;
+}
+.assistant-hello .orb {
+  margin-bottom: 0.4rem;
+}
+.assistant-hello h2 {
+  margin: 0;
+  font: 600 1.5rem / 1.25 var(--serif);
+  text-wrap: balance;
+}
+.assistant-hello p {
+  margin: 0;
+  color: var(--ink-soft);
+  text-wrap: pretty;
+}
+.assistant-asks {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.assistant-asks button {
+  background: var(--sheet);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.9rem;
+}
+.assistant-asks button:hover,
+.assistant-asks button:focus-visible {
+  border-color: color-mix(in srgb, var(--lf-b, var(--accent)) 60%, var(--rule));
+  background: color-mix(in srgb, var(--lf-a, var(--accent)) 8%, var(--sheet));
+}
+
+/* What it looked up, under (or while writing) an answer. */
+.lookup-trail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.4rem;
+  margin: 0 0 0.6rem;
+  font-size: 0.82rem;
+  color: var(--ink-faint);
+}
+.lookup-trail .lookup-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.12rem 0.55rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  color: var(--ink-soft);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lookup-step-new {
+  animation: step-in 0.4s ease-out;
+}
+@keyframes step-in {
+  from {
+    opacity: 0;
+    translate: 0 0.3rem;
+  }
+}
+.lookup-trail .lookup-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+.assistant-doing {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink-soft);
+}
+button.cite.cite-n {
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lookup-step-new {
+    animation: none;
+  }
+}

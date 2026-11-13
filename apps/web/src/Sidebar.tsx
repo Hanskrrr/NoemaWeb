@@ -18,6 +18,7 @@
 // where it came from.
 
 import { type NoteSummary, readableQuote, type Source, type Thread, type Trash } from '@noema/core';
+import { Orb } from './LivingFrame.tsx';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { NotesIcon, SourcesIcon, ThreadsIcon, TrashIcon } from './icons.tsx';
 import { sourceFamily } from './reading.ts';
@@ -122,6 +123,8 @@ export function Sidebar({
   sources,
   notes,
   activeId,
+  assistantActive = false,
+  onOpenAssistant,
   open,
   onOpen,
   onJump,
@@ -140,6 +143,9 @@ export function Sidebar({
   sources: Source[];
   notes: NoteSummary[];
   activeId: string | null;
+  /** The Assistant is open (ADR 0023). */
+  assistantActive?: boolean;
+  onOpenAssistant?: () => void;
   open: boolean;
   onOpen: (threadId: string) => void;
   /** Go to the spot in the parent where this branch started. */
@@ -574,6 +580,19 @@ export function Sidebar({
       data-section={section}
     >
       <div className="rail" aria-label="Lists">
+        {onOpenAssistant && (
+          <button
+            type="button"
+            className={`rail-button assistant-button${assistantActive ? ' current' : ''}`}
+            onClick={onOpenAssistant}
+            aria-current={assistantActive ? 'page' : undefined}
+            title="The Assistant: ask about anything in your notebook"
+            data-testid="rail-assistant"
+          >
+            <Orb size="small" />
+            <span className="rail-label">Assistant</span>
+          </button>
+        )}
         {railButton('threads')}
         {railButton('sources')}
         {railButton('notes')}

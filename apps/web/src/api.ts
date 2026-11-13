@@ -42,9 +42,13 @@ import {
   SourceDetail,
   SourceList,
   StopResponse,
+  type AssistantPhase,
+  type LookupStep,
   StreamDelta,
+  StreamPhase,
   StreamSnapshot,
   StreamStatus,
+  StreamStep,
   Thread,
   ThreadDetail,
   ThreadList,
@@ -133,6 +137,8 @@ export const api = {
   createThread: (notebookId: string, id: string, title = '') =>
     call(Thread, 'POST', `/api/notebooks/${notebookId}/threads`, { id, title }),
   thread: (id: string) => call(ThreadDetail, 'GET', `/api/threads/${id}`),
+  /** The notebook's Assistant: made the first time, with this id. */
+  assistant: (notebookId: string, id: string) => call(Thread, 'POST', `/api/notebooks/${notebookId}/assistant`, { id }),
   ask: (threadId: string, id: string, content: string) =>
     call(AskResponse, 'POST', `/api/threads/${threadId}/messages`, { id, content }),
   stop: (messageId: string) => call(StopResponse, 'POST', `/api/messages/${messageId}/stop`, {}),
@@ -263,9 +269,14 @@ export const api = {
 };
 
 export interface StreamHandlers {
-  snapshot(message: Message): void;
+  /** With what the Assistant is doing when the watcher connects, if it is the Assistant. */
+  snapshot(message: Message, phase?: AssistantPhase): void;
   delta(text: string): void;
   status(status: MessageStatus, error: MessageError | null): void;
+  /** The Assistant: what it is doing now. */
+  phase?(phase: AssistantPhase): void;
+  /** The Assistant: a lookup it just made. */
+  step?(step: LookupStep): void;
   end(): void;
 }
 
@@ -281,9 +292,11 @@ export function watchMessage(messageId: string, h: StreamHandlers): () => void {
       if (parsed.success) fn(parsed.data);
     });
   };
-  on('snapshot', StreamSnapshot, (d) => h.snapshot(d.message));
+  on('snapshot', StreamSnapshot, (d) => h.snapshot(d.message, d.phase));
   on('delta', StreamDelta, (d) => h.delta(d.text));
   on('status', StreamStatus, (d) => h.status(d.status, d.error));
+  on('phase', StreamPhase, (d) => h.phase?.(d.phase));
+  on('step', StreamStep, (d) => h.step?.(d.step));
   es.addEventListener('end', () => {
     es.close();
     h.end();

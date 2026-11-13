@@ -6,7 +6,7 @@
 // http(s) and mailto, images are not loaded. KaTeX is the only HTML we
 // inject, and it runs with trust: false.
 
-import { type CiteRefs, splitCitations } from '@noema/core';
+import { type CiteRefs, splitCitations, splitNumbered, type VaultTarget } from '@noema/core';
 import katex from 'katex';
 import type { Nodes, Parents } from 'mdast';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
@@ -25,8 +25,58 @@ export interface Cites {
   open?: (label: string, button: HTMLElement) => void;
   /** The citation open beside the text, if any. */
   current?: string | undefined;
+  /**
+   * An Assistant answer (ADR 0023): its labels are numbers, [3], each pointing
+   * at a place in the notebook (a message, a passage, a note).
+   */
+  numbered?: { refs: Record<string, VaultTarget>; open: (target: VaultTarget) => void } | undefined;
 }
 export const CiteContext = createContext<Cites | null>(null);
+
+/**
+ * An Assistant answer's text with its labels as buttons. The text around them
+ * keeps its offsets, so passages can still be selected and asked about.
+ */
+function withNumbered(
+  key: string | number,
+  text: string,
+  range: { start: number; end: number },
+  numbered: NonNullable<Cites['numbered']>,
+): ReactNode {
+  const parts = splitNumbered(text, (label) => label in numbered.refs);
+  if (parts.length === 1 && typeof parts[0] === 'string') return leafSpan(key, range.start, range.end, text);
+  let at = range.start;
+  return (
+    <span key={key}>
+      {parts.map((part, i) => {
+        if (typeof part === 'string') {
+          const leaf = leafSpan(i, at, at + part.length, part);
+          at += part.length;
+          return leaf;
+        }
+        at += part.label.length + 2;
+        const target = numbered.refs[part.label] as VaultTarget;
+        const what = target.kind === 'thread' ? 'thread' : target.kind === 'note' ? 'note' : 'source';
+        return (
+          <button
+            // biome-ignore lint/suspicious/noArrayIndexKey: parts of one fixed string
+            key={i}
+            type="button"
+            className="cite cite-n"
+            data-foreign=""
+            onClick={() => numbered.open(target)}
+            title={`Open the ${what} “${target.title || 'Untitled'}”`}
+            data-testid="cite"
+            data-label={part.label}
+            data-kind={target.kind}
+          >
+            {part.label}
+          </button>
+        );
+      })}
+    </span>
+  );
+}
 
 function withCites(key: string | number, text: string, cites: Cites): ReactNode {
   const parts = splitCitations(text, (label) => label in cites.refs);
@@ -131,7 +181,10 @@ function render(node: Nodes, source: string, index: number, cites: Cites | null)
       return <Tag key={key}>{children(node, source, cites)}</Tag>;
     }
     case 'text':
-      if (cites && node.value.includes('[E')) return withCites(key, node.value, cites);
+      if (cites?.numbered && r && node.value.includes('[') && source.slice(r.start, r.end) === node.value) {
+        return withNumbered(key, node.value, r, cites.numbered);
+      }
+      if (cites && !cites.numbered && node.value.includes('[E')) return withCites(key, node.value, cites);
       return r ? leafSpan(key, r.start, r.end, node.value) : node.value;
     case 'html':
       // Shown, never executed.

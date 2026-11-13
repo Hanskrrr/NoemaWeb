@@ -14,6 +14,7 @@ import {
   type Thread,
   type Trash,
   ulid,
+  type VaultTarget,
 } from '@noema/core';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { AboutYouDialog } from './AboutYou.tsx';
@@ -21,6 +22,7 @@ import { AddSourceDialog } from './AddSource.tsx';
 import { api } from './api.ts';
 import { ContextDialog } from './ContextView.tsx';
 import { ExportDialog } from './ExportImport.tsx';
+import { LivingFrame } from './LivingFrame.tsx';
 import { expectFound } from './found.ts';
 import { MapView } from './MapView.tsx';
 import { ConnectScreen, ModelDialog } from './ModelSettings.tsx';
@@ -108,6 +110,9 @@ function NotebookView({
   /** Opened fresh (nothing in the URL): the side questions left open, until hidden or one is opened. */
   const [comeBack, setComeBack] = useState<OpenBranch[] | null>(null);
   const [freshStart] = useState(() => route === null);
+  /** The notebook's Assistant thread, once it is opened (made the first time). */
+  const [assistantId, setAssistantId] = useState<string | null>(null);
+  const [assistantError, setAssistantError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -147,11 +152,12 @@ function NotebookView({
     const exists =
       place !== null &&
       place.kind !== 'new' &&
-      (place.kind === 'note'
-        ? notes.some((n) => n.id === place.id)
-        : place.kind === 'source'
-          ? sources.some((x) => x.id === place.id)
-          : threads.some((t) => t.id === place.id));
+      (place.kind === 'assistant' ||
+        (place.kind === 'note'
+          ? notes.some((n) => n.id === place.id)
+          : place.kind === 'source'
+            ? sources.some((x) => x.id === place.id)
+            : threads.some((t) => t.id === place.id)));
     if (place && exists && (!recent || (last?.at ?? '') >= recent.updatedAt)) {
       navigate(place, { replace: true });
       return;
@@ -276,6 +282,38 @@ function NotebookView({
     return () => clearTimeout(t);
   }, [toast]);
 
+  // The Assistant's thread: asked for when it is first opened.
+  useEffect(() => {
+    if (route?.kind !== 'assistant' || assistantId) return;
+    let cancelled = false;
+    api.assistant(notebook.id, ulid()).then(
+      (t) => !cancelled && setAssistantId(t.id),
+      (err: unknown) => !cancelled && setAssistantError(err instanceof Error ? err.message : String(err)),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [route, assistantId, notebook.id]);
+
+  /** Where one of the Assistant's labels points: the message, the passage or the note itself. */
+  const openTarget = useCallback(
+    (t: VaultTarget) => {
+      setJump((n) => n + 1);
+      if (t.kind === 'thread') go({ kind: 'thread', id: t.threadId, message: t.messageId ?? undefined });
+      else if (t.kind === 'note') go({ kind: 'note', id: t.noteId, block: t.blockId ?? undefined });
+      else {
+        const latest = sources.find((x) => x.id === t.sourceId)?.latestVersionId;
+        go({
+          kind: 'source',
+          id: t.sourceId,
+          version: latest && latest !== t.versionId ? t.versionId : undefined,
+          at: t.at > 0 ? t.at : undefined,
+        });
+      }
+    },
+    [go, sources],
+  );
+
   const startNew = () => go({ kind: 'new' });
   const newNote = async () => {
     const id = ulid();
@@ -363,6 +401,34 @@ function NotebookView({
         threads={threads ?? []}
       />
     );
+  } else if (route?.kind === 'assistant') {
+    main = assistantId ? (
+      <ThreadView
+        key={`assistant:${assistantId}`}
+        threadId={assistantId}
+        onNavigate={open}
+        onBranch={setDraft}
+        onChanged={onRefresh}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenMap={(id) => go({ kind: 'map', id })}
+        onOpenNote={openNote}
+        onCite={toMessage}
+        onBackToSource={backToSource}
+        notes={notes}
+        onShowContext={(messageId: string, revisionId?: string) => setContextFor({ messageId, revisionId })}
+        onDeleted={() => go({ kind: 'new' })}
+        threads={threads ?? []}
+        onOpenTarget={openTarget}
+      />
+    ) : (
+      <main className="thread" aria-busy={!assistantError}>
+        {assistantError && (
+          <div className="empty" role="alert">
+            <p className="empty-title">The Assistant could not be opened: {assistantError}</p>
+          </div>
+        )}
+      </main>
+    );
   } else if (route?.kind === 'map') {
     main = (
       <MapView
@@ -439,12 +505,13 @@ function NotebookView({
     main = thread;
   }
 
-  const activeId = showDraft || !route || route.kind === 'new' ? null : route.id;
+  const activeId = showDraft || !route || route.kind === 'new' || route.kind === 'assistant' ? null : route.id;
   // Not the one already open (Noema may have reopened in it).
   const leftOpen = comeBack?.filter((b) => b.threadId !== activeId) ?? [];
 
   return (
     <div className="shell">
+      <LivingFrame />
       <header className="top">
         <div className="brand">
           <button
@@ -556,6 +623,8 @@ function NotebookView({
           sources={sources}
           notes={notes}
           activeId={activeId}
+          assistantActive={route?.kind === 'assistant'}
+          onOpenAssistant={() => go({ kind: 'assistant' })}
           open={sidebarOpen}
           onOpen={(id) => open(id)}
           onJump={(t) => {
@@ -608,5 +677,7 @@ function placeOf(route: Route | null): Route | null {
       return { kind: 'source', id: route.id, version: route.version };
     case 'new':
       return null;
+    case 'assistant':
+      return route;
   }
 }

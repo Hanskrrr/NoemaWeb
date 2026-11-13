@@ -20,9 +20,10 @@ import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { AboutYouDialog } from './AboutYou.tsx';
 import { AddSourceDialog } from './AddSource.tsx';
 import { api } from './api.ts';
+import { type AssistantWhere, AssistantChat } from './Assistant.tsx';
 import { ContextDialog } from './ContextView.tsx';
 import { ExportDialog } from './ExportImport.tsx';
-import { LivingFrame } from './LivingFrame.tsx';
+import { LivingFrame, Orb } from './LivingFrame.tsx';
 import { expectFound } from './found.ts';
 import { MapView } from './MapView.tsx';
 import { ConnectScreen, ModelDialog } from './ModelSettings.tsx';
@@ -113,6 +114,14 @@ function NotebookView({
   /** The notebook's Assistant thread, once it is opened (made the first time). */
   const [assistantId, setAssistantId] = useState<string | null>(null);
   const [assistantError, setAssistantError] = useState<string | null>(null);
+  /** The Assistant beside whatever is open (ADR 0024); kept open across reloads. */
+  const [docked, setDocked] = useState(() => storage.get(keys.assistantDock) === '1');
+  const dock = useCallback((open: boolean) => {
+    setDocked(open);
+    storage.set(keys.assistantDock, open ? '1' : '0');
+  }, []);
+  /** Text the learner selected in what is open: what "this" means to the Assistant. */
+  const [selection, setSelection] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -224,6 +233,12 @@ function NotebookView({
 
   const openHit = (hit: SearchHit, terms: string[], rank: number, queryChars: number) => {
     void api.searchOpened({ kind: hit.kind, rank, queryChars }).catch(() => {});
+    // Something said to or by the Assistant: it opens beside what is open.
+    if (hit.threadId && hit.threadId === assistantId) {
+      setSearching(false);
+      dock(true);
+      return;
+    }
     const target =
       hit.kind === 'passage' && hit.versionId && hit.offset !== null
         ? `${hit.versionId}:${hit.offset}`
@@ -282,9 +297,9 @@ function NotebookView({
     return () => clearTimeout(t);
   }, [toast]);
 
-  // The Assistant's thread: asked for when it is first opened.
+  // The Assistant's thread: made the first time Noema opens.
   useEffect(() => {
-    if (route?.kind !== 'assistant' || assistantId) return;
+    if (assistantId) return;
     let cancelled = false;
     api.assistant(notebook.id, ulid()).then(
       (t) => !cancelled && setAssistantId(t.id),
@@ -293,13 +308,51 @@ function NotebookView({
     return () => {
       cancelled = true;
     };
-  }, [route, assistantId, notebook.id]);
+  }, [assistantId, notebook.id]);
+
+  // ⌘J (Ctrl+J) opens or closes the Assistant beside what is open.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'j') {
+        e.preventDefault();
+        dock(!docked);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [docked, dock]);
+
+  // What the learner selects in the page (not in the Assistant) is kept until they ask, or leave.
+  useEffect(() => {
+    const onChange = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+      const node = sel.getRangeAt(0).commonAncestorContainer;
+      const el = node instanceof Element ? node : node.parentElement;
+      if (!el?.closest('.main') || el.closest('.assistant')) return;
+      const text = sel.toString().trim();
+      if (text) setSelection(text.slice(0, 4000));
+    };
+    document.addEventListener('selectionchange', onChange);
+    return () => document.removeEventListener('selectionchange', onChange);
+  }, []);
+  const placeKey = route && route.kind !== 'assistant' && route.kind !== 'new' ? `${route.kind}:${route.id}` : '';
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new place drops the selection made in the last one
+  useEffect(() => setSelection(null), [placeKey]);
 
   /** Where one of the Assistant's labels points: the message, the passage or the note itself. */
   const openTarget = useCallback(
     (t: VaultTarget) => {
       setJump((n) => n + 1);
-      if (t.kind === 'thread') go({ kind: 'thread', id: t.threadId, message: t.messageId ?? undefined });
+      // Arriving there, the words it quoted are marked.
+      const words = t.quote ? [t.quote.length > 48 ? t.quote.slice(0, t.quote.lastIndexOf(' ', 48) > 20 ? t.quote.lastIndexOf(' ', 48) : 48) : t.quote] : [];
+      if (t.kind === 'thread' && t.messageId) expectFound(t.messageId, words);
+      else if (t.kind === 'source') expectFound(`${t.versionId}:${t.at}`, words);
+      else if (t.kind === 'note' && t.blockId) expectFound(t.blockId, words);
+      // From the Assistant's own page, it moves beside what it opens.
+      if (route?.kind === 'assistant' || (t.kind === 'thread' && t.threadId === assistantId)) dock(true);
+      if (t.kind === 'thread' && t.threadId === assistantId) return;
+      else if (t.kind === 'thread') go({ kind: 'thread', id: t.threadId, message: t.messageId ?? undefined });
       else if (t.kind === 'note') go({ kind: 'note', id: t.noteId, block: t.blockId ?? undefined });
       else {
         const latest = sources.find((x) => x.id === t.sourceId)?.latestVersionId;
@@ -311,7 +364,7 @@ function NotebookView({
         });
       }
     },
-    [go, sources],
+    [go, sources, assistantId, dock, route],
   );
 
   const startNew = () => go({ kind: 'new' });
@@ -402,25 +455,7 @@ function NotebookView({
       />
     );
   } else if (route?.kind === 'assistant') {
-    main = assistantId ? (
-      <ThreadView
-        key={`assistant:${assistantId}`}
-        threadId={assistantId}
-        onNavigate={open}
-        onBranch={setDraft}
-        onChanged={onRefresh}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onOpenMap={(id) => go({ kind: 'map', id })}
-        onOpenNote={openNote}
-        onCite={toMessage}
-        onBackToSource={backToSource}
-        notes={notes}
-        onShowContext={(messageId: string, revisionId?: string) => setContextFor({ messageId, revisionId })}
-        onDeleted={() => go({ kind: 'new' })}
-        threads={threads ?? []}
-        onOpenTarget={openTarget}
-      />
-    ) : (
+    main = assistantId ? null : (
       <main className="thread" aria-busy={!assistantError}>
         {assistantError && (
           <div className="empty" role="alert">
@@ -505,6 +540,44 @@ function NotebookView({
     main = thread;
   }
 
+  // What is open, as the Assistant is told: the thread, the source (or the thread beside it), the note.
+  const where: AssistantWhere | null = (() => {
+    if (route?.kind === 'thread') {
+      const t = threads?.find((x) => x.id === route.id);
+      return { place: { kind: 'thread', id: route.id }, title: t?.title ?? '' };
+    }
+    if (route?.kind === 'source') {
+      const x = sources.find((y) => y.id === route.id);
+      return { place: { kind: 'source', id: route.id, ...(route.version ? { versionId: route.version } : {}) }, title: x?.title ?? '' };
+    }
+    if (route?.kind === 'note') {
+      return { place: { kind: 'note', id: route.id }, title: notes.find((n) => n.id === route.id)?.title ?? '' };
+    }
+    return null;
+  })();
+  const assistantChat = (mode: 'panel' | 'page') => (
+    <AssistantChat
+      key={`${mode}:${assistantId}`}
+      threadId={assistantId as string}
+      mode={mode}
+      where={mode === 'panel' ? where : null}
+      selection={mode === 'panel' ? selection : null}
+      onClearSelection={() => setSelection(null)}
+      onOpenTarget={openTarget}
+      onShowContext={(messageId) => setContextFor({ messageId })}
+      onChanged={onRefresh}
+      onActed={() => {
+        // What is open is drawn again, to show the change (a pin, a title, the Trash).
+        void refresh();
+        setJump((n) => n + 1);
+      }}
+      onOpenSettings={() => setSettingsOpen(true)}
+      {...(mode === 'panel'
+        ? { onExpand: () => go({ kind: 'assistant' }), onClose: () => dock(false) }
+        : { onClose: () => window.history.back() })}
+    />
+  );
+
   const activeId = showDraft || !route || route.kind === 'new' || route.kind === 'assistant' ? null : route.id;
   // Not the one already open (Noema may have reopened in it).
   const leftOpen = comeBack?.filter((b) => b.threadId !== activeId) ?? [];
@@ -539,6 +612,19 @@ function NotebookView({
           </span>
           <span className="search-open-label">Search</span>
           <kbd>{searchShortcut()}</kbd>
+        </button>
+        <button
+          type="button"
+          className={`assistant-open${docked || route?.kind === 'assistant' ? ' on' : ''}`}
+          onClick={() => (route?.kind === 'assistant' ? undefined : dock(!docked))}
+          aria-pressed={docked || route?.kind === 'assistant'}
+          aria-keyshortcuts="Meta+J Control+J"
+          title="The Assistant, beside whatever is open"
+          data-testid="assistant-open"
+        >
+          <Orb size="small" />
+          <span>Assistant</span>
+          <kbd>{searchShortcut().replace(/K$/, 'J')}</kbd>
         </button>
         <button
           type="button"
@@ -623,8 +709,8 @@ function NotebookView({
           sources={sources}
           notes={notes}
           activeId={activeId}
-          assistantActive={route?.kind === 'assistant'}
-          onOpenAssistant={() => go({ kind: 'assistant' })}
+          assistantActive={route?.kind === 'assistant' || docked}
+          onOpenAssistant={() => (route?.kind === 'assistant' ? undefined : dock(!docked))}
           open={sidebarOpen}
           onOpen={(id) => open(id)}
           onJump={(t) => {
@@ -656,8 +742,13 @@ function NotebookView({
               onSearch={() => setSearching(true)}
             />
           )}
-          {main}
+          {route?.kind === 'assistant' && assistantId ? assistantChat('page') : main}
         </div>
+        {docked && route?.kind !== 'assistant' && assistantId && (
+          <aside className="assistant-dock" data-testid="assistant-dock">
+            {assistantChat('panel')}
+          </aside>
+        )}
       </div>
     </div>
   );

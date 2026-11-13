@@ -49,4 +49,6 @@ export const keys = {
   sidebarFolded: 'noema:sidebar-folded',
   sidebarSection: 'noema:sidebar-section',
   sidebarCollapsed: 'noema:sidebar-collapsed',
+  /** The Assistant open beside what is open. */
+  assistantDock: 'noema:assistant-dock',
 };

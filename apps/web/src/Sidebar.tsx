@@ -586,7 +586,7 @@ export function Sidebar({
             className={`rail-button assistant-button${assistantActive ? ' current' : ''}`}
             onClick={onOpenAssistant}
             aria-current={assistantActive ? 'page' : undefined}
-            title="The Assistant: ask about anything in your notebook"
+            title="The Assistant, beside whatever is open (⌘J)"
             data-testid="rail-assistant"
           >
             <Orb size="small" />

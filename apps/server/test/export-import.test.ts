@@ -99,8 +99,9 @@ test('acceptance (M5): export and import round-trip, table by table', async () =
   assert.equal('search' in out.tables, false, 'the search index is rebuilt, not exported');
   assert.equal('meta' in out.tables, false);
 
-  // Into an empty Noema (which has made its default notebook).
-  await api(b, 'GET', '/api/notebooks');
+  // Into an empty Noema (which has made its default notebook, and its Assistant, as the app does when it opens).
+  const fresh = (await api<{ notebooks: Array<{ id: string }> }>(b, 'GET', '/api/notebooks')).json.notebooks[0]?.id;
+  await api(b, 'POST', `/api/notebooks/${fresh}/assistant`, { id: ulid() });
   const r = await api<ImportResponse>(b, 'POST', '/api/import', out);
   assert.equal(r.status, 201, JSON.stringify(r.json));
   assert.equal(r.json.counts.notebooks, 1);

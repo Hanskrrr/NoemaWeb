@@ -3206,7 +3206,10 @@ export class Repo {
   isEmpty(): boolean {
     const r = this.db.sql
       .prepare(
-        `SELECT (SELECT count(*) FROM thread) + (SELECT count(*) FROM note) + (SELECT count(*) FROM source)
+        // The Assistant's thread is made when Noema opens: with nothing asked in it, it is not content.
+        `SELECT (SELECT count(*) FROM thread t
+                  WHERE t.kind = 'chat' OR EXISTS (SELECT 1 FROM message m WHERE m.thread_id = t.id))
+              + (SELECT count(*) FROM note) + (SELECT count(*) FROM source)
               + (SELECT count(*) FROM notebook WHERE about_me <> '') AS n,
                 (SELECT count(*) FROM notebook) AS notebooks`,
       )

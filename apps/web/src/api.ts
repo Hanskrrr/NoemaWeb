@@ -42,8 +42,12 @@ import {
   SourceDetail,
   SourceList,
   StopResponse,
+  type AssistantAction,
+  AssistantActionList,
   type AssistantPhase,
+  type AssistantPlace,
   type LookupStep,
+  StreamAction,
   StreamDelta,
   StreamPhase,
   StreamSnapshot,
@@ -139,8 +143,12 @@ export const api = {
   thread: (id: string) => call(ThreadDetail, 'GET', `/api/threads/${id}`),
   /** The notebook's Assistant: made the first time, with this id. */
   assistant: (notebookId: string, id: string) => call(Thread, 'POST', `/api/notebooks/${notebookId}/assistant`, { id }),
-  ask: (threadId: string, id: string, content: string) =>
-    call(AskResponse, 'POST', `/api/threads/${threadId}/messages`, { id, content }),
+  ask: (threadId: string, id: string, content: string, place?: AssistantPlace) =>
+    call(AskResponse, 'POST', `/api/threads/${threadId}/messages`, { id, content, ...(place ? { place } : {}) }),
+  /** The Assistant's proposed changes in its thread; doing, cancelling or undoing one (ADR 0024). */
+  assistantActions: (threadId: string) => call(AssistantActionList, 'GET', `/api/threads/${threadId}/actions`),
+  actOn: (actionId: string, what: 'run' | 'cancel' | 'undo') =>
+    call(StreamAction, 'POST', `/api/assistant/actions/${actionId}/${what}`, {}),
   stop: (messageId: string) => call(StopResponse, 'POST', `/api/messages/${messageId}/stop`, {}),
   createBranch: (parentThreadId: string, body: CreateBranchRequest) =>
     call(CreateBranchResponse, 'POST', `/api/threads/${parentThreadId}/branches`, body),
@@ -277,6 +285,8 @@ export interface StreamHandlers {
   phase?(phase: AssistantPhase): void;
   /** The Assistant: a lookup it just made. */
   step?(step: LookupStep): void;
+  /** The Assistant: a change it proposed, or a place it took the learner to. */
+  action?(action: AssistantAction): void;
   end(): void;
 }
 
@@ -297,6 +307,7 @@ export function watchMessage(messageId: string, h: StreamHandlers): () => void {
   on('status', StreamStatus, (d) => h.status(d.status, d.error));
   on('phase', StreamPhase, (d) => h.phase?.(d.phase));
   on('step', StreamStep, (d) => h.step?.(d.step));
+  on('action', StreamAction, (d) => h.action?.(d.action));
   es.addEventListener('end', () => {
     es.close();
     h.end();

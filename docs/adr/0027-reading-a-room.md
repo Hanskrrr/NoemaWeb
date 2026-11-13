@@ -84,4 +84,6 @@ What changed:
 - **Key points wrap** inside their card.
 - **The right-click menu closes when you scroll** (the wheel or a finger), no longer on any scroll event: a scroll made just before a right-click could close the menu it opened.
 
+- **With the Assistant open beside a room, the map stays in its own space** and scrolls sideways there. Its clusters and words are layered among themselves (`isolation: isolate`), and the Assistant sits above what is open beside it (z-index 9, under the selection buttons, menus and toasts). Before, cards and link words were drawn over the Assistant, and a map wider than the room ran under it. Arrange places the clusters again for the narrower width.
+
 To reverse: set the gaps back in `RoomView.tsx`, drop the calls to `settleClusters` and `placeLabels`; migration 021 only moved positions, which Arrange places again.

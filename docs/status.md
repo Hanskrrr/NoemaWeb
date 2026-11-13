@@ -18,7 +18,7 @@ Also built along the way: **the Assistant** (ADR 0023), one assistant for the wh
 
 ## How it is checked
 
-- 320 unit and integration tests (`pnpm test`) and 76 end-to-end tests (`pnpm e2e`), all with the fake model.
+- 320 unit and integration tests (`pnpm test`) and 77 end-to-end tests (`pnpm e2e`), all with the fake model.
 - The brief's acceptance tests are in the suite (see [codebase.md](codebase.md#e2e-the-app-end-to-end)).
 - Tried by the founder with DeepSeek on his Mac: connecting a key, streaming answers, prompt caching, titles and headlines, and reading a real arXiv paper (over 1,600 formulas, all rendered).
 

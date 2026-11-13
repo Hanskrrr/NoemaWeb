@@ -28,10 +28,17 @@ A room built the same way with made-up text (`shot-dense.mjs` in the session scr
   - the read-with-AI test checks that no link words are on a card, no point is past its card, no clusters overlap;
   - the files test waits for the first thread to open before switching to Sources (a click right after load could be undone; it failed once in about 13 runs).
 
+## Then: the Assistant beside a room
+
+He opened the Assistant on the room page and it overlapped: the room's cards and link words were drawn on top of it (they had z-indexes 2 and 3 with nothing to keep them inside the room), and the map, wider than the space left beside the Assistant, ran under it.
+- `RoomView.tsx`: the canvas sits in a `room-map` that scrolls sideways.
+- `styles.css`: the canvas is its own layer (`isolation: isolate`); `.assistant-dock` has z-index 9 (under the selection buttons at 10, the outline, menus and toasts).
+- `e2e/rooms.spec.ts`: with three clusters at 1440×900 and the Assistant open, every point of the Assistant shows the Assistant; the map scrolls sideways; the last cluster, scrolled to, ends left of the Assistant. The test failed before the fix (32 points showed the room).
+
 ## Verified
 
 - 320 unit and integration tests; tsc for core, server, web and the root.
-- 76 e2e tests in the sandbox. The rooms spec passed 8 runs in a row after the fixes.
+- 77 e2e tests in the sandbox (76 before the Assistant fix). The rooms spec passed 8 runs in a row after the first fixes.
 - Screenshots of the made-up room at 1440, 1280 and 1024 wide:
   - no labels on cards, no points out, no clusters overlapping, the page not wider than the window;
   - read live from the page, a cluster placed before reading is pushed down as the one above grows.

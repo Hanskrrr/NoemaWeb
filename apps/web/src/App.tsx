@@ -8,6 +8,7 @@ import {
   type Notebook,
   type NoteSummary,
   type OpenBranch,
+  type Room,
   type SearchHit,
   type Source,
   type SourceOrigin,
@@ -16,11 +17,12 @@ import {
   ulid,
   type VaultTarget,
 } from '@noema/core';
-import { type ReactNode, useCallback, useEffect, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { AboutYouDialog } from './AboutYou.tsx';
 import { AddSourceDialog } from './AddSource.tsx';
 import { api } from './api.ts';
 import { type AssistantWhere, AssistantChat } from './Assistant.tsx';
+import { ContextMenuHost } from './ContextMenu.tsx';
 import { ContextDialog } from './ContextView.tsx';
 import { ExportDialog } from './ExportImport.tsx';
 import { LivingFrame, Orb } from './LivingFrame.tsx';
@@ -29,6 +31,8 @@ import { MapView } from './MapView.tsx';
 import { ConnectScreen, ModelDialog } from './ModelSettings.tsx';
 import { NoteView } from './NoteView.tsx';
 import { sourceFamily } from './reading.ts';
+import { RoomView } from './RoomView.tsx';
+import { type RoomsApi, RoomsContext, unitOf } from './Rooms.tsx';
 import { parseHash, type Route, toHash, useRoute } from './route.ts';
 import { ComeBack, isTyping, SearchDialog, searchShortcut } from './Search.tsx';
 import { Sidebar } from './Sidebar.tsx';
@@ -94,6 +98,9 @@ function NotebookView({
   const [threads, setThreads] = useState<Thread[] | null>(null);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [roomsChanged, setRoomsChanged] = useState(0);
+  const [roomNotice, setRoomNotice] = useState<string | null>(null);
   const [trash, setTrash] = useState<Trash>({ threads: [], notes: [], sources: [] });
   const [adding, setAdding] = useState(false);
   const [contextFor, setContextFor] = useState<{ messageId: string; revisionId?: string | undefined } | null>(null);
@@ -136,16 +143,18 @@ function NotebookView({
 
   const refresh = useCallback(async () => {
     try {
-      const [t, n, src, tr] = await Promise.all([
+      const [t, n, src, tr, rm] = await Promise.all([
         api.threads(notebook.id),
         api.notes(notebook.id),
         api.sources(notebook.id),
         api.trash(notebook.id),
+        api.rooms(notebook.id),
       ]);
       setThreads(t.threads);
       setNotes(n.notes);
       setSources(src.sources);
       setTrash(tr);
+      setRooms(rm.rooms);
     } catch {
       // keep the lists we have; the views report connection problems
     }
@@ -173,6 +182,7 @@ function NotebookView({
       place !== null &&
       place.kind !== 'new' &&
       (place.kind === 'assistant' ||
+        place.kind === 'room' ||
         (place.kind === 'note'
           ? notes.some((n) => n.id === place.id)
           : place.kind === 'source'
@@ -223,6 +233,60 @@ function NotebookView({
   const toMessage = useCallback((id: string, message: string) => go({ kind: 'thread', id, message }), [go]);
   const openNote = useCallback((id: string) => go({ kind: 'note', id }), [go]);
   const openSource = useCallback((id: string) => go({ kind: 'source', id }), [go]);
+  // Rooms (ADR 0026): one set of actions for the sidebar, menus and the room itself.
+  const say = useCallback((text: string) => {
+    setRoomNotice(text);
+    window.setTimeout(() => setRoomNotice((n) => (n === text ? null : n)), 2600);
+  }, []);
+  const refreshRooms = useCallback(async () => {
+    try {
+      setRooms((await api.rooms(notebook.id)).rooms);
+    } catch {
+      // keep the list we have
+    }
+    setRoomsChanged((n) => n + 1);
+  }, [notebook.id]);
+  const roomsApi = useMemo<RoomsApi>(() => {
+    const nameOf = (id: string) => rooms.find((r) => r.id === id)?.title || 'the room';
+    const failed = (err: unknown) => say(err instanceof Error ? err.message : 'That did not work. Try again.');
+    return {
+      rooms,
+      changed: roomsChanged,
+      refresh: refreshRooms,
+      unit: (item) => unitOf(threads ?? [], item),
+      openRoom: (id) => go({ kind: 'room', id }),
+      add: async (roomId, items) => {
+        try {
+          await api.addToRoom(roomId, items);
+          await refreshRooms();
+          say(`Put in ${nameOf(roomId)}`);
+        } catch (err) {
+          failed(err);
+        }
+      },
+      remove: async (roomId, item) => {
+        try {
+          await api.removeFromRoom(roomId, item);
+          await refreshRooms();
+          say(`Taken out of ${nameOf(roomId)}`);
+        } catch (err) {
+          failed(err);
+        }
+      },
+      create: async (title, items = []) => {
+        try {
+          const room = await api.createRoom(notebook.id, ulid(), title, items);
+          await refreshRooms();
+          say(items.length ? `Put in the new room ${room.title}` : `Made the room ${room.title}`);
+          return room;
+        } catch (err) {
+          failed(err);
+          return null;
+        }
+      },
+    };
+  }, [rooms, roomsChanged, refreshRooms, threads, go, notebook.id, say]);
+
   /** A file of a linked folder, opened as a source (read again if it changed): the lists first, then it. */
   const openFile = useCallback(
     (source: Source) => {
@@ -484,6 +548,22 @@ function NotebookView({
         )}
       </main>
     );
+  } else if (route?.kind === 'room') {
+    main = (
+      <RoomView
+        key={route.id}
+        roomId={route.id}
+        notebookId={notebook.id}
+        threads={threads ?? []}
+        sources={sources}
+        notes={notes}
+        onOpen={(kind, id) => (kind === 'thread' ? open(id) : kind === 'source' ? openSource(id) : openNote(id))}
+        onDeleted={() => {
+          void refreshRooms();
+          go({ kind: 'new' });
+        }}
+      />
+    );
   } else if (route?.kind === 'map') {
     main = (
       <MapView
@@ -600,13 +680,21 @@ function NotebookView({
     />
   );
 
-  const activeId = showDraft || !route || route.kind === 'new' || route.kind === 'assistant' ? null : route.id;
+  const activeId =
+    showDraft || !route || route.kind === 'new' || route.kind === 'assistant' || route.kind === 'room' ? null : route.id;
   // Not the one already open (Noema may have reopened in it).
   const leftOpen = comeBack?.filter((b) => b.threadId !== activeId) ?? [];
 
   return (
+    <RoomsContext.Provider value={roomsApi}>
     <div className="shell">
       <LivingFrame />
+      <ContextMenuHost />
+      {roomNotice && (
+        <div className="room-notice" role="status" data-testid="room-notice">
+          {roomNotice}
+        </div>
+      )}
       <header className="top">
         <div className="brand">
           <button
@@ -756,6 +844,11 @@ function NotebookView({
           onRestoreSource={(id) => void restoreSource(id)}
           notebookId={notebook.id}
           onOpenFile={openFile}
+          activeRoomId={route?.kind === 'room' ? route.id : null}
+          onSourcesAdded={(added) => {
+            void refresh();
+            if (added[0]) openSource(added[0].id);
+          }}
         />
         <div className="main">
           {leftOpen.length > 0 && (
@@ -776,6 +869,7 @@ function NotebookView({
         )}
       </div>
     </div>
+    </RoomsContext.Provider>
   );
 }
 
@@ -843,6 +937,7 @@ function placeOf(route: Route | null): Route | null {
     case 'new':
       return null;
     case 'assistant':
+    case 'room':
       return route;
   }
 }

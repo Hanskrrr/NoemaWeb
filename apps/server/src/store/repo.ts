@@ -40,6 +40,16 @@ import {
   type Origin,
   type Pin,
   type ReadableNotebook,
+  type Room,
+  type RoomGraph,
+  type RoomItemRef,
+  type RoomKind,
+  type RoomRow,
+  type RoomView,
+  roomKey,
+  roomMap,
+  roomMembers,
+  threadOf,
   type Source,
   type SourceDetail,
   type SourceOrigin,
@@ -878,6 +888,252 @@ export class Repo {
         v.fileHash ?? null,
         t,
       );
+  }
+
+  // Rooms (ADR 0026) --------------------------------------------------------
+
+  /** What a room needs to know about the notebook: threads, sources, notes and pins, with counts. */
+  roomGraph(notebookId: string): RoomGraph {
+    const asked = new Map(
+      (
+        this.db.sql
+          .prepare(
+            `SELECT m.thread_id, count(*) AS n FROM message m JOIN thread t ON t.id = m.thread_id
+             WHERE t.notebook_id = ? AND m.role = 'user' GROUP BY m.thread_id`,
+          )
+          .all(notebookId) as Row[]
+      ).map((r) => [r.thread_id as string, Number(r.n)]),
+    );
+    const open = new Set(this.openBranches(notebookId, 10_000).map((b) => b.threadId));
+    const blocks = new Map(
+      (
+        this.db.sql
+          .prepare(
+            `SELECT b.note_id, count(*) AS n FROM note_block b JOIN note n ON n.id = b.note_id
+             WHERE n.notebook_id = ? AND b.deleted_at IS NULL GROUP BY b.note_id`,
+          )
+          .all(notebookId) as Row[]
+      ).map((r) => [r.note_id as string, Number(r.n)]),
+    );
+    const pins = (
+      this.db.sql
+        .prepare(
+          `SELECT DISTINCT p.thread_id, v.source_id FROM pin p
+           JOIN source_anchor a ON a.id = p.source_anchor_id
+           JOIN source_version v ON v.id = a.version_id
+           JOIN thread t ON t.id = p.thread_id
+           WHERE t.notebook_id = ?`,
+        )
+        .all(notebookId) as Row[]
+    ).map((r) => ({ threadId: r.thread_id as string, sourceId: r.source_id as string }));
+    return {
+      threads: this.listThreads(notebookId).map((t) => ({
+        id: t.id,
+        title: t.title,
+        parentThreadId: t.parentThreadId,
+        splitAt: t.splitAt,
+        continuedFromId: t.continuedFromId,
+        mergedIntoId: t.mergedIntoId,
+        sourceId: t.sourceId,
+        sourceQuote: t.sourceQuote,
+        updatedAt: t.updatedAt,
+        questions: asked.get(t.id) ?? 0,
+        open: open.has(t.id),
+      })),
+      sources: this.listSources(notebookId).map((x) => ({ id: x.id, title: x.title, updatedAt: x.updatedAt, linked: x.linked !== null })),
+      notes: this.listNotes(notebookId).map((n) => ({
+        id: n.id,
+        title: n.title,
+        threadId: n.threadId,
+        cites: [...new Set(Object.values(n.refs).map((r) => r.threadId))],
+        blocks: blocks.get(n.id) ?? 0,
+        updatedAt: n.updatedAt,
+      })),
+      pins,
+    };
+  }
+
+  private roomRows(roomId: string): RoomRow[] {
+    return (
+      this.db.sql.prepare('SELECT * FROM room_item WHERE room_id = ? ORDER BY created_at, rowid').all(roomId) as Row[]
+    ).map((r) => ({
+      kind: r.kind as RoomKind,
+      id: r.item_id as string,
+      state: r.state as RoomRow['state'],
+      x: (r.x as number | null) ?? null,
+      y: (r.y as number | null) ?? null,
+      at: r.created_at as string,
+    }));
+  }
+
+  private toRoom(r: Row, graph: RoomGraph): Room {
+    const members = [...roomMembers(this.roomRows(r.id as string), graph).keys()];
+    const counts = { sources: 0, threads: 0, notes: 0 };
+    for (const k of members) counts[k.startsWith('source:') ? 'sources' : k.startsWith('thread:') ? 'threads' : 'notes'] += 1;
+    return {
+      id: r.id as string,
+      notebookId: r.notebook_id as string,
+      title: r.title as string,
+      createdAt: r.created_at as string,
+      updatedAt: r.updated_at as string,
+      members,
+      counts,
+    };
+  }
+
+  /** The notebook's rooms, in the order they were made: places stay put. */
+  listRooms(notebookId: string): Room[] {
+    const graph = this.roomGraph(notebookId);
+    return (
+      this.db.sql.prepare('SELECT * FROM room WHERE notebook_id = ? ORDER BY created_at, rowid').all(notebookId) as Row[]
+    ).map((r) => this.toRoom(r, graph));
+  }
+
+  getRoom(id: string): Room | null {
+    const r = this.db.sql.prepare('SELECT * FROM room WHERE id = ?').get(id) as Row | undefined;
+    return r ? this.toRoom(r, this.roomGraph(r.notebook_id as string)) : null;
+  }
+
+  /** A room drawn: clusters of what belongs together, and the lines between them. */
+  roomView(id: string): RoomView | null {
+    const r = this.db.sql.prepare('SELECT * FROM room WHERE id = ?').get(id) as Row | undefined;
+    if (!r) return null;
+    const graph = this.roomGraph(r.notebook_id as string);
+    const { clusters, links } = roomMap(this.roomRows(id), graph);
+    return { room: this.toRoom(r, graph), clusters, links };
+  }
+
+  /** Make a room, with things in it at once. Idempotent on the id. */
+  createRoom(id: string, notebookId: string, title: string, items: RoomItemRef[] = [], by: 'you' | 'assistant' = 'you'): { room: Room; created: boolean } {
+    return this.db.tx(() => {
+      const existing = this.db.sql.prepare('SELECT notebook_id FROM room WHERE id = ?').get(id) as Row | undefined;
+      if (existing) {
+        if (existing.notebook_id !== notebookId) throw new ConflictError('room id already used');
+        return { room: this.getRoom(id) as Room, created: false };
+      }
+      const t = now();
+      this.db.sql
+        .prepare('INSERT INTO room (id, notebook_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+        .run(id, notebookId, title.trim(), t, t);
+      this.logEvent('room.created', id, { items: items.length });
+      if (items.length > 0) this.addRoomItems(id, items, by);
+      return { room: this.getRoom(id) as Room, created: true };
+    });
+  }
+
+  renameRoom(id: string, title: string): Room | null {
+    const r = this.db.sql.prepare('UPDATE room SET title = ?, updated_at = ? WHERE id = ?').run(title.trim(), now(), id);
+    return Number(r.changes) > 0 ? this.getRoom(id) : null;
+  }
+
+  /** A room is taken down; what was in it stays where it is. */
+  deleteRoom(id: string): boolean {
+    const r = this.db.sql.prepare('DELETE FROM room WHERE id = ?').run(id);
+    if (Number(r.changes) > 0) this.logEvent('room.deleted', id);
+    return Number(r.changes) > 0;
+  }
+
+  /** The thread a side question is part of; anything else as it is. Null if it is not in this notebook. */
+  private roomItem(notebookId: string, item: RoomItemRef): RoomItemRef | null {
+    const table = item.kind === 'thread' ? 'thread' : item.kind === 'source' ? 'source' : 'note';
+    const r = this.db.sql.prepare(`SELECT notebook_id FROM ${table} WHERE id = ?`).get(item.id) as Row | undefined;
+    if (!r || r.notebook_id !== notebookId) return null;
+    if (item.kind !== 'thread') return item;
+    const threads = new Map(this.roomGraph(notebookId).threads.map((t) => [t.id, t]));
+    return { kind: 'thread', id: threadOf(item.id, threads) };
+  }
+
+  /** Put things in a room (a side question goes in as its thread), at a place on its map if given. */
+  addRoomItems(roomId: string, items: Array<RoomItemRef & { x?: number; y?: number }>, by: 'you' | 'assistant' = 'you'): Room {
+    return this.db.tx(() => {
+      const room = this.db.sql.prepare('SELECT notebook_id FROM room WHERE id = ?').get(roomId) as Row | undefined;
+      if (!room) throw new NotFoundError('room');
+      const t = now();
+      for (const item of items) {
+        const at = this.roomItem(room.notebook_id as string, item);
+        if (!at) throw new InvalidError(`that ${item.kind} is not in this notebook`);
+        const place = item.x !== undefined && item.y !== undefined ? [item.x, item.y] : [null, null];
+        this.db.sql
+          .prepare(
+            `INSERT INTO room_item (room_id, kind, item_id, state, x, y, added_by, created_at, updated_at)
+             VALUES (?, ?, ?, 'in', ?, ?, ?, ?, ?)
+             ON CONFLICT (room_id, kind, item_id) DO UPDATE SET
+               state = 'in', x = coalesce(excluded.x, room_item.x), y = coalesce(excluded.y, room_item.y),
+               added_by = excluded.added_by, updated_at = excluded.updated_at`,
+          )
+          .run(roomId, at.kind, at.id, place[0] ?? null, place[1] ?? null, by, t, t);
+      }
+      this.db.sql.prepare('UPDATE room SET updated_at = ? WHERE id = ?').run(t, roomId);
+      this.logEvent('room.items_added', roomId, { n: items.length, by });
+      return this.getRoom(roomId) as Room;
+    });
+  }
+
+  /**
+   * Take something out of a room. If it came with something still in the room
+   * (a thread with its source), it is marked as taken out, so it does not come
+   * back with it.
+   */
+  removeRoomItem(roomId: string, item: RoomItemRef): Room {
+    return this.db.tx(() => {
+      const room = this.db.sql.prepare('SELECT notebook_id FROM room WHERE id = ?').get(roomId) as Row | undefined;
+      if (!room) throw new NotFoundError('room');
+      const at = this.roomItem(room.notebook_id as string, item);
+      if (!at) throw new InvalidError(`that ${item.kind} is not in this notebook`);
+      const t = now();
+      this.db.sql.prepare('DELETE FROM room_item WHERE room_id = ? AND kind = ? AND item_id = ?').run(roomId, at.kind, at.id);
+      const still = roomMembers(this.roomRows(roomId), this.roomGraph(room.notebook_id as string)).has(roomKey(at.kind, at.id));
+      if (still) {
+        this.db.sql
+          .prepare(
+            `INSERT INTO room_item (room_id, kind, item_id, state, created_at, updated_at) VALUES (?, ?, ?, 'out', ?, ?)`,
+          )
+          .run(roomId, at.kind, at.id, t, t);
+      }
+      this.db.sql.prepare('UPDATE room SET updated_at = ? WHERE id = ?').run(t, roomId);
+      this.logEvent('room.item_removed', roomId);
+      return this.getRoom(roomId) as Room;
+    });
+  }
+
+  /** How a thing is in a room by hand: put in, taken out, only placed, or not at all. */
+  roomItemState(roomId: string, item: RoomItemRef): 'in' | 'out' | 'placed' | null {
+    const r = this.db.sql
+      .prepare('SELECT state FROM room_item WHERE room_id = ? AND kind = ? AND item_id = ?')
+      .get(roomId, item.kind, item.id) as Row | undefined;
+    return (r?.state as 'in' | 'out' | 'placed' | undefined) ?? null;
+  }
+
+  /** Put back how a thing was in a room (to undo). */
+  setRoomItemState(roomId: string, item: RoomItemRef, state: 'in' | 'out' | 'placed' | null): void {
+    if (state === null) {
+      this.db.sql.prepare('DELETE FROM room_item WHERE room_id = ? AND kind = ? AND item_id = ?').run(roomId, item.kind, item.id);
+      return;
+    }
+    const t = now();
+    this.db.sql
+      .prepare(
+        `INSERT INTO room_item (room_id, kind, item_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (room_id, kind, item_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`,
+      )
+      .run(roomId, item.kind, item.id, state, t, t);
+  }
+
+  /** Where things sit on a room's map. */
+  placeRoomItems(roomId: string, places: Array<RoomItemRef & { x: number; y: number }>): void {
+    this.db.tx(() => {
+      if (!this.db.sql.prepare('SELECT 1 FROM room WHERE id = ?').get(roomId)) throw new NotFoundError('room');
+      const t = now();
+      for (const p of places) {
+        this.db.sql
+          .prepare(
+            `INSERT INTO room_item (room_id, kind, item_id, state, x, y, created_at, updated_at)
+             VALUES (?, ?, ?, 'placed', ?, ?, ?, ?)
+             ON CONFLICT (room_id, kind, item_id) DO UPDATE SET x = excluded.x, y = excluded.y, updated_at = excluded.updated_at`,
+          )
+          .run(roomId, p.kind, p.id, Math.round(p.x), Math.round(p.y), t, t);
+      }
+    });
   }
 
   // Folders on the learner's computer (ADR 0025) ----------------------------
@@ -3314,7 +3570,7 @@ export class Repo {
         // The Assistant's thread is made when Noema opens: with nothing asked in it, it is not content.
         `SELECT (SELECT count(*) FROM thread t
                   WHERE t.kind = 'chat' OR EXISTS (SELECT 1 FROM message m WHERE m.thread_id = t.id))
-              + (SELECT count(*) FROM note) + (SELECT count(*) FROM source)
+              + (SELECT count(*) FROM note) + (SELECT count(*) FROM source) + (SELECT count(*) FROM room)
               + (SELECT count(*) FROM notebook WHERE about_me <> '') AS n,
                 (SELECT count(*) FROM notebook) AS notebooks`,
       )

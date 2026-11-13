@@ -16,12 +16,20 @@
 // everything asked about it stay together. A note made from a thread (▤)
 // sits under that thread too; the Notes list has every note, each saying
 // where it came from.
+//
+// Rooms (ADR 0026) set things together by subject instead of by kind: any
+// thread, source or note can be dragged onto a room (held over the Rooms
+// icon, the list of rooms shows) or put in one with right-click. Files and
+// links dropped on Sources are read as sources.
 
 import { type NoteSummary, readableQuote, type Source, type Thread, type Trash } from '@noema/core';
 import { Orb } from './LivingFrame.tsx';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { type DragEvent, type MouseEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import { openMenu } from './ContextMenu.tsx';
+import { addDropped, type DragItem, draggableItem, isItemDrag, isOutsideDrag, takeOutsideDrop } from './drag.ts';
 import { FilesPanel } from './Files.tsx';
-import { FilesIcon, NotesIcon, SourcesIcon, ThreadsIcon, TrashIcon } from './icons.tsx';
+import { FilesIcon, NotesIcon, RoomsIcon, SourcesIcon, ThreadsIcon, TrashIcon } from './icons.tsx';
+import { RoomsPanel, roomMenu, useRooms } from './Rooms.tsx';
 import { sourceFamily } from './reading.ts';
 import { keys, storage } from './storage.ts';
 
@@ -115,12 +123,13 @@ function markOf(t: Thread, depth: number, byId: Map<string, Thread>): { glyph: s
   return null;
 }
 
-export type SidebarSection = 'threads' | 'sources' | 'notes' | 'files' | 'trash';
-const SECTIONS: SidebarSection[] = ['threads', 'sources', 'notes', 'files', 'trash'];
+export type SidebarSection = 'threads' | 'sources' | 'notes' | 'rooms' | 'files' | 'trash';
+const SECTIONS: SidebarSection[] = ['threads', 'sources', 'notes', 'rooms', 'files', 'trash'];
 const NAMES: Record<SidebarSection, string> = {
   threads: 'Threads',
   sources: 'Sources',
   notes: 'Notes',
+  rooms: 'Rooms',
   files: 'Files',
   trash: 'Trash',
 };
@@ -147,8 +156,14 @@ export function Sidebar({
   onRestoreSource,
   notebookId,
   onOpenFile,
+  activeRoomId = null,
+  onSourcesAdded,
 }: {
   notebookId: string;
+  /** The room open, if any (ADR 0026). */
+  activeRoomId?: string | null;
+  /** Files or links dropped on Sources were added. */
+  onSourcesAdded: (added: Source[]) => void;
   /** A file of a linked folder was opened as a source (ADR 0025). */
   onOpenFile: (source: Source) => void;
   threads: Thread[];
@@ -221,14 +236,62 @@ export function Sidebar({
   };
   // Opening something elsewhere (search, a link, the text) shows the list it is in;
   // opening it from a list here keeps that list.
-  const wanted = sectionOf(activeId);
+  const wanted = activeRoomId ? 'rooms' : sectionOf(activeId);
+  const rooms = useRooms();
   const picked = useRef<string | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: only when what is open changes, not when the learner picks a list
   useEffect(() => {
     if (activeId && activeId === picked.current) return;
     picked.current = null;
     if (wanted) show(wanted);
-  }, [activeId, wanted]);
+  }, [activeId, activeRoomId, wanted]);
+
+  // Right-click and drag, on any thread, source or note in the lists (ADR 0026).
+  const handles = (item: DragItem, open: () => void) => ({
+    ...draggableItem(item),
+    onContextMenu: (e: MouseEvent) =>
+      openMenu(e, roomMenu(rooms, item, [{ label: 'Open', onSelect: open }]), item.title || 'Untitled'),
+  });
+
+  // Files and links dropped on Sources (or on its icon) are read as sources.
+  const [dropping, setDropping] = useState<string | null>(null);
+  const [dropOver, setDropOver] = useState(false);
+  const dropSources = (e: DragEvent) => {
+    setDropOver(false);
+    if (!isOutsideDrag(e)) return;
+    e.preventDefault();
+    const drop = takeOutsideDrop(e);
+    if (drop.files.length + drop.links.length === 0) return;
+    show('sources');
+    hide(false);
+    setDropping('Reading what you dropped…');
+    void addDropped(notebookId, drop, (done, total) => setDropping(`Reading what you dropped: ${done} of ${total}…`)).then(
+      ({ added, problems }) => {
+        setDropping(problems.length ? problems.join(' ') : null);
+        if (added.length) onSourcesAdded(added);
+      },
+    );
+  };
+  // Dragging over an icon of the rail shows its list, to drop in it.
+  const hover = useRef<{ x: SidebarSection; timer: number } | null>(null);
+  const dragOverRail = (e: DragEvent, x: SidebarSection) => {
+    const fits = (x === 'rooms' && isItemDrag(e)) || (x === 'sources' && isOutsideDrag(e));
+    if (!fits) return;
+    e.preventDefault();
+    if (hover.current?.x === x) return;
+    if (hover.current) window.clearTimeout(hover.current.timer);
+    hover.current = {
+      x,
+      timer: window.setTimeout(() => {
+        show(x);
+        hide(false);
+      }, 450),
+    };
+  };
+  const leaveRail = () => {
+    if (hover.current) window.clearTimeout(hover.current.timer);
+    hover.current = null;
+  };
   const pick = (next: SidebarSection) => {
     if (next === section && !collapsed && !open) hide(true);
     else {
@@ -293,6 +356,7 @@ export function Sidebar({
             aria-current={active ? 'page' : undefined}
             onClick={() => onOpen(t.id)}
             title={mark?.label}
+            {...handles({ kind: 'thread', id: t.id, title: t.title }, () => onOpen(t.id))}
             data-testid="thread-link"
             data-thread-id={t.id}
           >
@@ -333,6 +397,7 @@ export function Sidebar({
                   aria-current={n.id === activeId ? 'page' : undefined}
                   onClick={() => onOpenNote(n.id)}
                   title="A note made from this thread"
+                  {...handles({ kind: 'note', id: n.id, title: n.title }, () => onOpenNote(n.id))}
                   data-testid="thread-note"
                   data-note-id={n.id}
                 >
@@ -380,6 +445,7 @@ export function Sidebar({
             aria-current={x.id === activeId ? 'page' : undefined}
             onClick={() => onOpenSource(x.id)}
             title={x.linked ? `A file in a linked folder: ${x.linked.path}` : (x.url ?? 'Pasted text')}
+            {...handles({ kind: 'source', id: x.id, title: x.title }, () => onOpenSource(x.id))}
             data-testid="source-link"
             data-source-id={x.id}
           >
@@ -401,6 +467,7 @@ export function Sidebar({
     threads: roots.length,
     sources: sources.length,
     notes: notes.length,
+    rooms: rooms.rooms.length,
     // Files lists its own folders.
     files: 0,
     trash: inTrash,
@@ -409,6 +476,7 @@ export function Sidebar({
     threads: <ThreadsIcon />,
     sources: <SourcesIcon />,
     notes: <NotesIcon />,
+    rooms: <RoomsIcon />,
     files: <FilesIcon />,
     trash: <TrashIcon />,
   };
@@ -422,6 +490,15 @@ export function Sidebar({
         type="button"
         className={`rail-button${current ? ' current' : ''}${x === 'trash' && inTrash === 0 ? ' empty' : ''}`}
         onClick={() => pick(x)}
+        onDragEnter={(e) => dragOverRail(e, x)}
+        onDragOver={(e) => dragOverRail(e, x)}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) leaveRail();
+        }}
+        onDrop={(e) => {
+          leaveRail();
+          if (x === 'sources') dropSources(e);
+        }}
         aria-pressed={current}
         aria-controls="sidebar-panel"
         title={
@@ -429,7 +506,9 @@ export function Sidebar({
             ? `Hide the list of ${NAMES[x].toLowerCase()}`
             : x === 'files'
               ? 'Files: folders on this computer'
-              : `${NAMES[x]} · ${counts[x]}`
+              : x === 'rooms'
+                ? `Rooms: what you learn, by subject · ${counts[x]}`
+                : `${NAMES[x]} · ${counts[x]}`
         }
         data-testid={`rail-${x}`}
       >
@@ -473,16 +552,50 @@ export function Sidebar({
     );
   } else if (section === 'sources') {
     panel = (
-      <>
+      // biome-ignore lint/a11y/noStaticElementInteractions: a place to drop files; + Add source does the same from the keyboard
+      <div
+        className={`drop-zone${dropOver ? ' drop-over' : ''}`}
+        onDragOver={(e) => {
+          if (!isOutsideDrag(e)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+          setDropOver(true);
+        }}
+        onDragLeave={(e) => {
+          if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setDropOver(false);
+        }}
+        onDrop={dropSources}
+        data-testid="sources-drop"
+      >
         {head('Sources', { label: '+ Add source', onClick: onAddSource, testId: 'add-source' })}
+        {dropOver && <p className="drop-hint">Drop to read them as sources: PDFs, Markdown, code, any text; or links.</p>}
+        {dropping && (
+          <p className="hint drop-status" role="status" data-testid="sources-drop-status">
+            {dropping}
+          </p>
+        )}
         {sources.length === 0 ? (
           <p className="sidebar-empty">
-            Nothing to read yet. Add a web page, an arXiv paper or a PDF, or paste text, and ask about any passage.
+            Nothing to read yet. Add a web page, an arXiv paper or a PDF, or paste text, and ask about any passage. Or drop
+            files and links here.
           </p>
         ) : (
           <ul className="sidebar-list">{sources.map(sourceItem)}</ul>
         )}
-      </>
+      </div>
+    );
+  } else if (section === 'rooms') {
+    panel = (
+      <RoomsPanel
+        threads={threads}
+        sources={sources}
+        notes={notes}
+        activeRoomId={activeRoomId}
+        activeId={activeId}
+        onOpenThread={onOpen}
+        onOpenSource={onOpenSource}
+        onOpenNote={onOpenNote}
+      />
     );
   } else if (section === 'notes') {
     panel = (
@@ -505,6 +618,7 @@ export function Sidebar({
                       picked.current = n.id;
                       onOpenNote(n.id);
                     }}
+                    {...handles({ kind: 'note', id: n.id, title: n.title }, () => onOpenNote(n.id))}
                     data-testid="note-link"
                     data-note-id={n.id}
                   >
@@ -629,6 +743,7 @@ export function Sidebar({
         {railButton('threads')}
         {railButton('sources')}
         {railButton('notes')}
+        {railButton('rooms')}
         {railButton('files')}
         <span className="rail-space" />
         {railButton('trash')}

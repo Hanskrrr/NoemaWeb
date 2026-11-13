@@ -68,7 +68,7 @@ export const OpenArgs = z.object({
   ref: z.coerce.number().int().positive().max(999),
   page: z.coerce.number().int().positive().max(100_000).optional(),
 });
-export const ListArgs = z.object({ what: z.enum(['threads', 'sources', 'notes', 'trash']) });
+export const ListArgs = z.object({ what: z.enum(['threads', 'sources', 'notes', 'trash', 'rooms']) });
 export const ShowArgs = OpenArgs;
 // Files of linked folders (ADR 0025): paths start with the folder's name ("Slides/week4.pdf").
 const FilePath = z.string().trim().min(1).max(4096);
@@ -103,6 +103,8 @@ export const ActionArgs = {
   edit_file: z.object({ path: FilePath, old: z.string().min(1).max(200_000), new: z.string().max(200_000) }),
   save_note_to_file: z.object({ ref: Ref, path: FilePath }),
   note_from_file: z.object({ path: FilePath }),
+  // Rooms (ADR 0026): things of one subject set together.
+  put_in_room: z.object({ refs: z.array(Ref).min(1).max(30), room: Title }),
 } as const;
 export type ActionKind = keyof typeof ActionArgs;
 export const ACTION_KINDS = Object.keys(ActionArgs) as ActionKind[];
@@ -143,10 +145,11 @@ export const ASSISTANT_TOOLS: ToolSpec[] = [
   },
   {
     name: 'list',
-    description: 'List every thread, source or note in the notebook, newest first, labelled; or what is in the Trash.',
+    description:
+      'List every thread, source or note in the notebook, newest first, labelled; or what is in the Trash; or the rooms (subjects the learner keeps things of together in) and what is in each.',
     parameters: {
       type: 'object',
-      properties: { what: { type: 'string', enum: ['threads', 'sources', 'notes', 'trash'] } },
+      properties: { what: { type: 'string', enum: ['threads', 'sources', 'notes', 'trash', 'rooms'] } },
       required: ['what'],
       additionalProperties: false,
     },
@@ -315,6 +318,17 @@ function actionTools(): ToolSpec[] {
       name: 'note_from_file',
       description: `Make a note from a text or Markdown file of a linked folder; its paragraphs and headings become blocks.${proposed}`,
       parameters: object({ path: str('The folder\'s name, then the path.') }, ['path']),
+    },
+    {
+      name: 'put_in_room',
+      description: `Put threads, sources or notes (their labels) in a room: a subject the learner keeps things of together. A source brings the threads asked about it. Name a room that exists (list rooms), or a new name to make one.${proposed}`,
+      parameters: object(
+        {
+          refs: { type: 'array', items: { type: 'integer' }, description: 'Labels of the threads, sources or notes.' },
+          room: str('The room\'s name.'),
+        },
+        ['refs', 'room'],
+      ),
     },
     {
       name: 'add_source',

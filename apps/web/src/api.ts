@@ -40,6 +40,10 @@ import {
   PageImageResponse,
   Pin,
   RefetchResponse,
+  Room,
+  type RoomItemRef,
+  RoomList,
+  RoomView,
   SavedFile,
   type SearchOpenedRequest,
   SearchResponse,
@@ -280,6 +284,18 @@ export const api = {
   discardMerge: (id: string) => call(Merge, 'POST', `/api/merges/${id}/discard`, {}),
   moveOut: (noteId: string, newId: string, blockIds: string[]) =>
     call(Note, 'POST', `/api/notes/${noteId}/move-out`, { id: newId, blockIds }),
+  // Rooms (ADR 0026): what is learnt about one subject, set together.
+  rooms: (notebookId: string) => call(RoomList, 'GET', `/api/notebooks/${notebookId}/rooms`),
+  createRoom: (notebookId: string, id: string, title: string, items: RoomItemRef[] = []) =>
+    call(Room, 'POST', `/api/notebooks/${notebookId}/rooms`, { id, title, ...(items.length ? { items } : {}) }),
+  room: (id: string) => call(RoomView, 'GET', `/api/rooms/${id}`),
+  renameRoom: (id: string, title: string) => call(Room, 'PATCH', `/api/rooms/${id}`, { title }),
+  deleteRoom: (id: string) => call(Ok, 'DELETE', `/api/rooms/${id}`),
+  addToRoom: (id: string, items: Array<RoomItemRef & { x?: number; y?: number }>) =>
+    call(Room, 'POST', `/api/rooms/${id}/items`, { items }),
+  removeFromRoom: (id: string, item: RoomItemRef) => call(Room, 'POST', `/api/rooms/${id}/items/remove`, item),
+  placeInRoom: (id: string, places: Array<RoomItemRef & { x: number; y: number }>) =>
+    call(Ok, 'PUT', `/api/rooms/${id}/places`, { places }),
   // Folders on this computer (ADR 0025): read in place, written only when asked.
   folders: (notebookId: string) => call(FolderList, 'GET', `/api/notebooks/${notebookId}/folders`),
   linkFolder: (notebookId: string, id: string, path: string) =>

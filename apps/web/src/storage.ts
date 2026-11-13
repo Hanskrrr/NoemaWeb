@@ -54,4 +54,6 @@ export const keys = {
   assistantDockWidth: 'noema:assistant-dock-width',
   /** Folders of linked folders shown open in Files. */
   filesOpen: 'noema:files-open',
+  /** Whether "In no room yet" is open in Rooms. */
+  roomsLooseOpen: 'noema:rooms-loose-open',
 };

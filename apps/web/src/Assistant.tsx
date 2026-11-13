@@ -501,6 +501,7 @@ const ACTION_GLYPH: Record<AssistantAction['kind'], string> = {
   move_to_trash: '🗑',
   restore: '↺',
   add_source: '❡',
+  put_in_room: '⌂',
   write_file: '⌸',
   edit_file: '✎',
   save_note_to_file: '⇣',

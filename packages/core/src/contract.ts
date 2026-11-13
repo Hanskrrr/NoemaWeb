@@ -948,3 +948,72 @@ export const ImportResponse = z.object({
   }),
 });
 export type ImportResponse = z.infer<typeof ImportResponse>;
+
+// Rooms (ADR 0026) ----------------------------------------------------------
+
+export const RoomKindSchema = z.enum(['thread', 'source', 'note']);
+export const RoomItemRef = z.object({ kind: RoomKindSchema, id: Id });
+export type RoomItemRef = z.infer<typeof RoomItemRef>;
+const RoomKeySchema = z.string().regex(/^(thread|source|note):[0-9A-HJKMNP-TV-Z]{26}$/);
+
+export const Room = z.object({
+  id: Id,
+  notebookId: Id,
+  title: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  /** Everything in it, as "kind:id": what was put in and what came with it. */
+  members: z.array(RoomKeySchema),
+  counts: z.object({ sources: z.number().int(), threads: z.number().int(), notes: z.number().int() }),
+});
+export type Room = z.infer<typeof Room>;
+export const RoomList = z.object({ rooms: z.array(Room) });
+export const CreateRoomRequest = z.object({
+  id: Id,
+  title: z.string().trim().min(1).max(200),
+  /** Put in it at once. */
+  items: z.array(RoomItemRef).max(500).optional(),
+});
+export const RenameRoomRequest = z.object({ title: z.string().trim().min(1).max(200) });
+export const AddRoomItemsRequest = z.object({
+  items: z
+    .array(RoomItemRef.extend({ x: z.number().finite().optional(), y: z.number().finite().optional() }))
+    .min(1)
+    .max(500),
+});
+export const RoomPlacesRequest = z.object({
+  places: z.array(RoomItemRef.extend({ x: z.number().finite(), y: z.number().finite() })).min(1).max(500),
+});
+
+const RoomMarksSchema = z.object({
+  questions: z.number().int(),
+  sides: z.number().int(),
+  open: z.number().int(),
+  threads: z.number().int(),
+  blocks: z.number().int(),
+  at: z.string(),
+});
+export const RoomCardSchema = z.object({
+  kind: RoomKindSchema,
+  id: Id,
+  title: z.string(),
+  explicit: z.boolean(),
+  via: RoomKeySchema.nullable(),
+  marks: RoomMarksSchema,
+  quote: z.string().nullable(),
+  file: z.boolean(),
+});
+export const RoomView = z.object({
+  room: Room,
+  clusters: z.array(
+    z.object({ key: RoomKeySchema, x: z.number().nullable(), y: z.number().nullable(), cards: z.array(RoomCardSchema) }),
+  ),
+  links: z.array(
+    z.object({
+      from: RoomKeySchema,
+      to: RoomKeySchema,
+      kinds: z.array(z.enum(['came-from', 'merged-into', 'keeps-in-view', 'cites'])),
+    }),
+  ),
+});
+export type RoomView = z.infer<typeof RoomView>;

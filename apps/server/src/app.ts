@@ -24,6 +24,11 @@ import {
   noteFile,
   SaveFileRequest,
   SaveNoteToFolderRequest,
+  AddRoomItemsRequest,
+  CreateRoomRequest,
+  RenameRoomRequest,
+  RoomItemRef,
+  RoomPlacesRequest,
   ulid,
   CreateThreadRequest,
   describeError,
@@ -256,6 +261,47 @@ export function createApp(deps: AppDeps): App {
     const body = await ctx.body(CreateAssistantRequest);
     const { thread, created } = repo.assistantThread(notebookId, body.id);
     sendJson(ctx.res, created ? 201 : 200, thread);
+  });
+
+  // Rooms (ADR 0026): what is learnt about one subject, set together.
+  router.on('GET', '/api/notebooks/:id/rooms', ({ res, params }) => {
+    if (!repo.getNotebook(params.id as string)) throw notFound('notebook');
+    sendJson(res, 200, { rooms: repo.listRooms(params.id as string) });
+  });
+  router.on('POST', '/api/notebooks/:id/rooms', async (ctx) => {
+    const notebookId = ctx.params.id as string;
+    if (!repo.getNotebook(notebookId)) throw notFound('notebook');
+    const body = await ctx.body(CreateRoomRequest);
+    const { room, created } = repo.createRoom(body.id, notebookId, body.title, body.items ?? []);
+    sendJson(ctx.res, created ? 201 : 200, room);
+  });
+  router.on('GET', '/api/rooms/:id', ({ res, params }) => {
+    const view = repo.roomView(params.id as string);
+    if (!view) throw notFound('room');
+    sendJson(res, 200, view);
+  });
+  router.on('PATCH', '/api/rooms/:id', async (ctx) => {
+    const body = await ctx.body(RenameRoomRequest);
+    const room = repo.renameRoom(ctx.params.id as string, body.title);
+    if (!room) throw notFound('room');
+    sendJson(ctx.res, 200, room);
+  });
+  router.on('DELETE', '/api/rooms/:id', ({ res, params }) => {
+    if (!repo.deleteRoom(params.id as string)) throw notFound('room');
+    sendJson(res, 200, { ok: true });
+  });
+  router.on('POST', '/api/rooms/:id/items', async (ctx) => {
+    const body = await ctx.body(AddRoomItemsRequest);
+    sendJson(ctx.res, 200, repo.addRoomItems(ctx.params.id as string, body.items));
+  });
+  router.on('POST', '/api/rooms/:id/items/remove', async (ctx) => {
+    const body = await ctx.body(RoomItemRef);
+    sendJson(ctx.res, 200, repo.removeRoomItem(ctx.params.id as string, body));
+  });
+  router.on('PUT', '/api/rooms/:id/places', async (ctx) => {
+    const body = await ctx.body(RoomPlacesRequest);
+    repo.placeRoomItems(ctx.params.id as string, body.places);
+    sendJson(ctx.res, 200, { ok: true });
   });
 
   // Folders on the learner's computer (ADR 0025): linked, listed, read in place, written when asked.

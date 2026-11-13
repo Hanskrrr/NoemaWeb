@@ -11,6 +11,7 @@
 //                                   (the block it was cited in, to come back to)
 //   #/new                           a new thread, before its first question
 //   #/assistant                     the notebook's Assistant (ADR 0023)
+//   #/room/<roomId>                 a room: what is learnt about one subject, as a map (ADR 0026)
 //   #/s/<sourceId>                  a source in the reading pane (its latest version)
 //   #/s/<sourceId>/v/<versionId>    one version of it
 //     …/at/<offset>                 scrolled to the block that holds this offset (from search)
@@ -33,7 +34,8 @@ export type Route =
       from?: string | undefined;
     }
   | { kind: 'new' }
-  | { kind: 'assistant' };
+  | { kind: 'assistant' }
+  | { kind: 'room'; id: string };
 
 export function parseHash(hash: string): Route | null {
   const parts = hash.replace(/^#\/?/, '').split('/');
@@ -42,6 +44,7 @@ export function parseHash(hash: string): Route | null {
   if (head === 'assistant') return { kind: 'assistant' };
   if (!isUlid(id)) return null;
   if (head === 'map') return { kind: 'map', id };
+  if (head === 'room') return { kind: 'room', id };
   if (head === 'source' || head === 's') return parseSource(id, parts.slice(2));
   if (head === 'note') {
     if (sub === 'b' && isUlid(subId)) return { kind: 'note', id, block: subId };
@@ -86,6 +89,8 @@ export function toHash(route: Route): string {
       return '#/assistant';
     case 'map':
       return `#/map/${route.id}`;
+    case 'room':
+      return `#/room/${route.id}`;
     case 'note':
       if (route.block) return `#/note/${route.id}/b/${route.block}`;
       if (route.ref) return `#/note/${route.id}/e/${route.ref}${route.refIn ? `/in/${route.refIn}` : ''}`;

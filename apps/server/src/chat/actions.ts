@@ -149,6 +149,30 @@ export async function planAction(
       if (typeof t === 'string') return { refused: t };
       return { kind, summary: `Turn ${q(t.title)} into a note`, payload: { threadId: t.threadId, title: t.title }, open: null };
     }
+    case 'put_in_room': {
+      const items: Array<{ kind: 'thread' | 'source' | 'note'; id: string; title: string }> = [];
+      for (const ref of args.refs as number[]) {
+        const t = target(ref);
+        if (typeof t === 'string') return { refused: t };
+        const item =
+          t.kind === 'thread'
+            ? { kind: 'thread' as const, id: t.threadId, title: t.title }
+            : t.kind === 'note'
+              ? { kind: 'note' as const, id: t.noteId, title: t.title }
+              : { kind: 'source' as const, id: t.sourceId, title: t.title };
+        if (!items.some((x) => x.kind === item.kind && x.id === item.id)) items.push(item);
+      }
+      const title = (args.room as string).trim();
+      const notebookId = vault.notebook;
+      const room = repo.listRooms(notebookId).find((r) => r.title.trim().toLowerCase() === title.toLowerCase()) ?? null;
+      const names = items.map((x) => q(x.title)).join(', ');
+      return {
+        kind,
+        summary: room ? `Put ${names} in the room ${q(room.title)}` : `Make the room ${q(title)} with ${names}`,
+        payload: { roomId: room?.id ?? null, title: room?.title ?? title, items: items.map(({ kind: k, id }) => ({ kind: k, id })) },
+        open: null,
+      };
+    }
     case 'rename': {
       const t = target(args.ref as number);
       if (typeof t === 'string') return { refused: t };
@@ -358,7 +382,8 @@ type Undo =
   | { unpin: { pinId: string } }
   | { repin: { threadId: string; at: Record<string, unknown> } }
   | { merge: { mergeId: string } }
-  | { file: { backupId: string } };
+  | { file: { backupId: string } }
+  | { room: { roomId: string; made: boolean; before: Array<{ kind: 'thread' | 'source' | 'note'; id: string; state: 'in' | 'out' | 'placed' | null }> } };
 
 /** Runs, cancels and undoes what the Assistant proposed. */
 export class AssistantActions {
@@ -499,6 +524,18 @@ export class AssistantActions {
         if (created) this.deps.writeNote(note.id, threadId);
         return { open: { kind: 'note', noteId: note.id, blockId: null, title: note.title }, undo: { trash: { what: 'note', id: note.id } } };
       }
+      case 'put_in_room': {
+        const items = p.items as Array<{ kind: 'thread' | 'source' | 'note'; id: string }>;
+        const existing = p.roomId ? repo.getRoom(p.roomId as string) : null;
+        if (!existing) {
+          const id = ulid();
+          repo.createRoom(id, this.notebookOf(a), p.title as string, items, 'assistant');
+          return { open: null, undo: { room: { roomId: id, made: true, before: [] } } };
+        }
+        const before = items.map((x) => ({ ...x, state: repo.roomItemState(existing.id, x) }));
+        repo.addRoomItems(existing.id, items, 'assistant');
+        return { open: null, undo: { room: { roomId: existing.id, made: false, before } } };
+      }
       case 'rename': {
         const what = p.what as 'thread' | 'note' | 'source';
         rename(repo, what, p.id as string, p.to as string);
@@ -589,6 +626,10 @@ export class AssistantActions {
     else if ('block' in undo) repo.deleteBlock(undo.block.noteId, undo.block.blockId);
     else if ('proposal' in undo) repo.discardProposal(undo.proposal.noteId, undo.proposal.blockId);
     else if ('rename' in undo) rename(repo, undo.rename.what, undo.rename.id, undo.rename.title);
+    else if ('room' in undo) {
+      if (undo.room.made) repo.deleteRoom(undo.room.roomId);
+      else for (const x of undo.room.before) repo.setRoomItemState(undo.room.roomId, x, x.state);
+    }
     else if ('unpin' in undo) repo.deletePin(undo.unpin.pinId);
     else if ('repin' in undo) repo.createPin(undo.repin.threadId, ulid(), undo.repin.at as Parameters<Repo['createPin']>[2]);
     else if ('merge' in undo) {

@@ -43,6 +43,15 @@ export const NotesIcon = () => (
   </Svg>
 );
 
+/** Rooms: a house, a place where things of one subject are kept together. */
+export const RoomsIcon = () => (
+  <Svg>
+    <path d="M3.5 10.5 12 4l8.5 6.5" />
+    <path d="M5.5 9v10.5h13V9" />
+    <path d="M10 19.5v-5h4v5" />
+  </Svg>
+);
+
 /** Files: a folder. */
 export const FilesIcon = () => (
   <Svg>

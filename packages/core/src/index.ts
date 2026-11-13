@@ -14,3 +14,4 @@ export * from './asked.ts';
 export * from './pdf.ts';
 export * from './assistant.ts';
 export * from './files.ts';
+export * from './rooms.ts';

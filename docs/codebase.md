@@ -37,6 +37,7 @@ Imported by both the server and the web app. No I/O.
 | `src/search.ts` | Search text for FTS5 (Chinese and Japanese as characters and pairs), queries and snippets |
 | `src/html.ts` | A web page as Markdown: the article only, with math, footnotes, tables and code |
 | `src/sources.ts` | A source's blocks and headings, and the section around a passage |
+| `src/assistant.ts` | The Assistant's tools as the model is told about them, their arguments, where a label points (`VaultTarget`), the lookups kept with an answer, labels in answers (`[3]`): found, put in one form, taken out of earlier answers |
 | `src/pdf.ts` | A PDF's text items, page by page, as Markdown: lines, paragraphs, headings, lists, page headings; running heads dropped; where each item landed (the map from pages to text) |
 | `src/state.ts` | The states of an answer (`pending`, `streaming`, `done`, `failed`, `stopped`, `interrupted`) |
 | `src/errors.ts` | Error kinds and the plain sentence the UI shows for each |
@@ -53,13 +54,14 @@ Imported by both the server and the web app. No I/O.
 | `src/store/db.ts` | `node:sqlite` with WAL, foreign keys and migrations |
 | `src/store/migrations/NNN_*.sql` | The schema, one numbered file per change; each starts with a comment saying why |
 | `src/store/repo.ts` | **All SQL.** Threads, messages and their revisions, anchors, pins, notes, merges, sources, search, the Trash, export and import |
-| `src/chat/generation.ts` | Answering a question: context, the model call, streaming to watchers, saving as it goes |
+| `src/chat/generation.ts` | Answering a question: context, the model call, streaming to watchers, saving as it goes. For the Assistant: rounds of lookups, then the answer, and the labels it cited |
 | `src/chat/prompt.ts` | The system prompt |
 | `src/chat/titles.ts`, `headlines.ts` | Titles for new threads, and a one-line headline for each exchange, written by the model afterwards |
 | `src/chat/notes.ts` | Rewriting a thread as a note, and AI suggestions for a block |
+| `src/chat/assistant.ts` | The Assistant's instructions and its lookups over the store (`VaultLookup`): the overview sent with each question, search, open, list, and the labels numbered through one answer |
 | `src/chat/asked.ts` | "Asked before" by meaning: the chat model reads the earlier questions and says whether the new one was asked |
 | `src/chat/merges.ts` | Drafting what a thread merged into another carries |
-| `src/llm/provider.ts` | What the server needs from a model: a stream of text, usage, a finish reason, named errors |
+| `src/llm/provider.ts` | What the server needs from a model: a stream of text (and reasoning, and the lookups it asks for), usage, a finish reason, named errors |
 | `src/llm/openai-compatible.ts` | The streaming client for DeepSeek and other OpenAI-compatible providers (retries only before the first token) |
 | `src/llm/settings.ts` | Which model and key; the key saved in `data/settings.json`, checked with the provider before saving |
 | `src/llm/fake.ts` | The fake model used by every test |
@@ -79,7 +81,8 @@ React 19 and Vite, no router or state library. One stylesheet with light and dar
 | `src/api.ts` | The only place that talks to the server; every response is checked against the contract |
 | `src/storage.ts` | `localStorage` for small conveniences: drafts, the last place, folded lists |
 | `src/Sidebar.tsx`, `icons.tsx` | The rail of icons and the lists of threads, sources, notes and the Trash |
-| `src/ThreadView.tsx` | A thread: messages, the composer, select to ask a side question, Back, split-off, delete, drafts of new threads |
+| `src/ThreadView.tsx` | A thread: messages, the composer, select to ask a side question, Back, split-off, delete, drafts of new threads. The Assistant is a thread too: its head, its hello, what it is doing |
+| `src/LivingFrame.tsx`, `presence.ts` | The light around the window while the Assistant is open, and its orb; what it is doing (a small store the thread view sets) |
 | `src/MessageView.tsx`, `Composer.tsx` | One question or answer (Ask again, and the ‹ 1 / 2 › switch between answers); the box to ask in |
 | `src/Pinned.tsx` | The pinned passages at the top of a thread |
 | `src/PdfPages.tsx`, `pdf/pdfjs.ts`, `pdf/pageImage.ts` | A PDF as its pages (pdf.js from the server, with its text layer), selection on a page to a passage of the text; drawing a page as a picture for the model |
@@ -90,7 +93,7 @@ React 19 and Vite, no router or state library. One stylesheet with light and dar
 | `src/Merges.tsx` | Merging threads: the picker, the draft, the card |
 | `src/MapView.tsx`, `Outline.tsx` | The map of a thread; the catalog on the right of long threads and notes |
 | `src/Search.tsx`, `found.ts`, `hits.ts` | ⌘K search, arriving at a hit with its words marked, how a hit reads |
-| `src/ContextView.tsx`, `AboutYou.tsx` | What was sent for an answer; About you |
+| `src/ContextView.tsx`, `sent.ts`, `AboutYou.tsx` | What was sent for an answer (each part named in `sent.ts`, the Assistant's lookups too); About you |
 | `src/ModelSettings.tsx` | Connecting a model |
 | `src/EditableTitle.tsx` | Renaming in place |
 | `src/markdown/` | Rendering Markdown with offsets on every character (`parse.ts`, `Markdown.tsx`) and turning a selection into offsets and back (`selection.ts`) |

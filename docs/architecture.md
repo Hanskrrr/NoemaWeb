@@ -69,6 +69,8 @@ Merging one thread into another adds a card and a summary the learner accepted; 
 
 **Sources** (ADR 0013). A page is fetched by the server (a browser could not, because of CORS), turned into Markdown by our own converter (`packages/core/src/html.ts`, which keeps math, footnotes and tables), and stored with the original HTML. arXiv links are read from arXiv's HTML version. A PDF (a file, or at an address) is read by pdf.js in a worker thread on the server; core's `pdf.ts` turns each page's text items into Markdown with a `## Page N` heading per page, and the file is kept with the version so it can be opened at a page in the browser's own viewer (ADR 0021). The reading pane shows a PDF as its pages: pdf.js, loaded from the server's copy, draws them in the browser with its text layer; the browser reads the same text items and maps a selection on a page to the stored text through core's item map. A question about a PDF passage goes with a picture of its page, drawn by the browser and kept on the server, and referred to in the stored request (ADR 0022).
 
+**The Assistant** (ADR 0023). One thread per notebook of its own kind (`thread.kind = 'assistant'`), at the top of the sidebar, that answers from the whole notebook. It is not sent everything: each question carries a short labelled overview of the notebook, and the model looks the rest up with three read-only tools (`search`, `open`, `list`; `apps/server/src/chat/assistant.ts`). An answer goes in rounds (at most six, four lookups a round); each round is a model call of its own, and the last one's request, kept for What was sent, holds every lookup and what came back. Everything it is shown carries a label (`[3]`), numbered through the answer; the labels it cites are kept with the revision (`message_revision.lookups`) and become buttons that open the message, passage or note. While it works, the stream also says what it is doing (`phase`) and each lookup (`step`); the browser shows them under the answer and as a light around the window (`LivingFrame.tsx`). DeepSeek's reasoning before a lookup is sent back in the next round, as DeepSeek requires; a model that refuses lookups while thinking is asked without thinking, and one that refuses lookups answers from the overview.
+
 **Search** (`packages/core/src/search.ts`, `store/repo.ts`). One SQLite FTS5 table over titles, messages, headlines, note blocks and source passages. Chinese and Japanese are indexed as single characters and overlapping pairs, so a two-character word matches inside a longer one. The index has a version; when it changes, it is rebuilt at start-up.
 
 ## The database
@@ -78,8 +80,8 @@ One SQLite file, `data/noema.db`, in WAL mode, with numbered migrations in `apps
 | Table | What it holds |
 | --- | --- |
 | `notebook` | The notebook: title and About you |
-| `thread` | Threads, with how each came to be (branch, own thread, split-off, source passage), title and where it came from, Trash |
-| `message`, `message_revision` | Questions and answers; each answer's text, status, model and headline, per revision |
+| `thread` | Threads, with how each came to be (branch, own thread, split-off, source passage), title and where it came from, Trash; `kind` is `assistant` for the notebook's one Assistant |
+| `message`, `message_revision` | Questions and answers; each answer's text, status, model and headline, per revision; an Assistant answer's lookups and where its labels point |
 | `anchor` | A passage of a message revision that a side question was asked about, or that was pinned |
 | `pin` | A passage pinned to a thread: of a message (through `anchor`) or of a source (through `source_anchor`) |
 | `model_call` | Each call to the model: provider, model, timings, token counts, the manifest and the exact messages sent |

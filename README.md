@@ -4,7 +4,7 @@ A learning notebook for studying hard material with an AI, on your own computer.
 
 - Ask in a normal chat. Ask a side question about any passage, and come back to exactly where you were.
 - Read a web page, an arXiv paper, a PDF or pasted text beside the conversation, and ask about any passage of it.
-- Find any question, answer, note or passage again with ⌘K.
+- Find any question, answer, note or passage again with ⌘K, or ask the Assistant: one assistant for the whole notebook that looks things up before it answers and shows where it found them.
 - Turn a thread into a study note you edit block by block; its citations open the exchange they came from.
 - See exactly what the AI was sent for any answer, tell it about yourself once, pin the passages it should keep in view, and ask again for another answer without losing the first.
 - Everything stays in one file on your computer, and nothing is lost when a tab closes or the server restarts.

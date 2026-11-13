@@ -19,9 +19,9 @@ Don't build these, even where older docs describe them:
 
 - Accounts, sync, multiple devices, a mobile layout.
 - OCR of scanned PDFs, or formulas read as LaTeX. Reading a PDF's text, showing its pages and sending a picture of the page with a question are built: the founder asked for them for M6 (ADRs 0021, 0022).
-- Embeddings, semantic search, concept extraction, knowledge graphs, mastery states. (One exception the founder made: the chat model judges whether a question was asked before, ADR 0020.)
+- Embeddings, semantic search, concept extraction, knowledge graphs, mastery states. (Exceptions the founder made: the chat model judges whether a question was asked before, ADR 0020; the Assistant looks things up across the notebook with read-only tools over keyword search, ADR 0023. Its memory, jobs and anything it would change in the notebook are later steps he decides.)
 - Understanding-record forms, quizzes, return lines, checkout, task limits or timers.
-- Plugins, animation, the step language.
+- Plugins, animation, the step language. (The Assistant's light around the window and its orb are the founder's decision, ADR 0023.)
 - Imports from Obsidian or ChatGPT.
 - Collaboration.
 

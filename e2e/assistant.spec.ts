@@ -168,3 +168,44 @@ test('its own page, and back beside what it opens; never a thread in the list, n
   await page.getByTestId('rail-threads').click();
   await expect(page.getByTestId('thread-link').filter({ hasText: 'Assistant' })).toHaveCount(0);
 });
+
+test('the panel can be made wider or narrower, and the catalog stays clear of it', async ({ page, request }) => {
+  const id = await freshThread(request);
+  for (const q of ['What is a warp?', 'And a block?', 'And a grid?']) {
+    const r = await request.post(`/api/threads/${id}/messages`, { data: { id: ulidish(), content: q }, headers: H });
+    const { assistant } = await r.json();
+    await expect.poll(async () => (await (await request.get(`/api/threads/${id}`)).json()).messages.find((m: { id: string }) => m.id === assistant.id)?.status).toBe('done');
+  }
+  await page.goto(`/#/t/${id}`);
+  const catalog = page.locator('nav.outline');
+  await expect(catalog).toBeVisible();
+  await openDock(page);
+  const clear = async () => {
+    const c = await catalog.boundingBox();
+    const d = await dock(page).boundingBox();
+    return c && d ? c.x + c.width <= d.x : false;
+  };
+  await expect.poll(clear).toBe(true);
+
+  // Drag its left edge 150 px to the left: 150 px wider, and still clear; kept after a reload.
+  const before = (await dock(page).boundingBox())?.width ?? 0;
+  const handle = page.getByTestId('dock-resize');
+  const box = await handle.boundingBox();
+  if (!box) throw new Error('no handle');
+  await page.mouse.move(box.x + box.width / 2, box.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 - 150, box.y + 200, { steps: 6 });
+  await page.mouse.up();
+  const width = async () => Math.round((await dock(page).boundingBox())?.width ?? 0);
+  // Within a pixel or two: where in the handle the pointer is.
+  await expect.poll(async () => Math.abs((await width()) - (before + 150))).toBeLessThanOrEqual(3);
+  await expect.poll(clear).toBe(true);
+  const dragged = await width();
+  await page.reload();
+  await expect(dock(page)).toBeVisible();
+  await expect.poll(width).toBe(dragged);
+  // The keyboard works too.
+  await handle.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(width).toBe(dragged - 24);
+});

@@ -1917,7 +1917,8 @@ button.quiet.inline.faint:hover {
 
 .outline {
   position: fixed;
-  right: 0.6rem;
+  /* Clear of the Assistant when it is open beside (--dock-width, set by the app). */
+  right: calc(var(--dock-width, 0px) + 0.6rem);
   top: 50%;
   transform: translateY(-50%);
   z-index: 15;
@@ -4018,7 +4019,7 @@ button.cite.cite-n {
 /* The Assistant beside what is open (the dock), or on its own page (ADR 0024). */
 .assistant-dock {
   flex-shrink: 0;
-  width: min(27rem, 42vw);
+  width: var(--dock-width, 27rem);
   position: sticky;
   top: 3.1rem;
   align-self: flex-start;
@@ -4369,4 +4370,48 @@ button.cite.cite-n {
 .assistant-open kbd {
   font: 0.72rem var(--mono);
   color: var(--ink-faint);
+}
+
+/* The panel's left edge, to drag. */
+.assistant-dock {
+  position: sticky;
+}
+.dock-resize {
+  position: absolute;
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 5;
+  touch-action: none;
+}
+.dock-resize::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+.dock-resize:hover::after,
+.dock-resize:focus-visible::after,
+body.resizing .dock-resize::after {
+  background: color-mix(in srgb, var(--lf-b, var(--accent)) 70%, transparent);
+}
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* With the Assistant beside, what is open keeps a strip on its right for the catalog. */
+.layout.with-dock .main {
+  padding-right: 2.4rem;
+}
+@media (max-width: 760px) {
+  .layout.with-dock .main {
+    padding-right: 0;
+  }
 }

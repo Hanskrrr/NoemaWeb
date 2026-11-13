@@ -120,6 +120,17 @@ function NotebookView({
     setDocked(open);
     storage.set(keys.assistantDock, open ? '1' : '0');
   }, []);
+  const [dockWidth, setDockWidth] = useState(() => clampDock(Number(storage.get(keys.assistantDockWidth)) || DOCK_WIDTH));
+  const resizeDock = useCallback((width: number) => {
+    const w = clampDock(width);
+    setDockWidth(w);
+    storage.set(keys.assistantDockWidth, String(w));
+  }, []);
+  // The room the panel takes on the right: what is fixed there (the catalog) moves over by it.
+  const dockShown = docked && route?.kind !== 'assistant';
+  useEffect(() => {
+    document.documentElement.style.setProperty('--dock-width', dockShown ? `${dockWidth}px` : '0px');
+  }, [dockShown, dockWidth]);
   /** Text the learner selected in what is open: what "this" means to the Assistant. */
   const [selection, setSelection] = useState<string | null>(null);
 
@@ -703,7 +714,7 @@ function NotebookView({
           }}
         />
       )}
-      <div className="layout">
+      <div className={`layout${dockShown ? ' with-dock' : ''}`}>
         <Sidebar
           threads={threads ?? []}
           sources={sources}
@@ -744,13 +755,63 @@ function NotebookView({
           )}
           {route?.kind === 'assistant' && assistantId ? assistantChat('page') : main}
         </div>
-        {docked && route?.kind !== 'assistant' && assistantId && (
+        {dockShown && assistantId && (
           <aside className="assistant-dock" data-testid="assistant-dock">
+            <DockResizer width={dockWidth} onResize={resizeDock} />
             {assistantChat('panel')}
           </aside>
         )}
       </div>
     </div>
+  );
+}
+
+/** The Assistant panel's width: as it opens, and the narrowest and widest it can be dragged to. */
+const DOCK_WIDTH = 432;
+const DOCK_MIN = 300;
+function clampDock(width: number): number {
+  const max = typeof window === 'undefined' ? 900 : Math.max(DOCK_MIN, Math.min(900, window.innerWidth * 0.6));
+  return Math.round(Math.min(max, Math.max(DOCK_MIN, width)));
+}
+
+/** The panel's left edge: drag it (or use the arrow keys) to make the Assistant wider or narrower; double-click for the usual width. */
+function DockResizer({ width, onResize }: { width: number; onResize: (width: number) => void }) {
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: a vertical splitter has no element of its own; role separator with a value is the pattern
+    <div
+      className="dock-resize"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Width of the Assistant"
+      aria-valuenow={width}
+      aria-valuemin={DOCK_MIN}
+      tabIndex={0}
+      title="Drag to resize; double-click for the usual width"
+      data-testid="dock-resize"
+      onPointerDown={(e) => {
+        e.preventDefault();
+        const handle = e.currentTarget;
+        handle.setPointerCapture(e.pointerId);
+        document.body.classList.add('resizing');
+        const move = (ev: PointerEvent) => onResize(window.innerWidth - ev.clientX);
+        const up = () => {
+          handle.removeEventListener('pointermove', move);
+          handle.removeEventListener('pointerup', up);
+          handle.removeEventListener('pointercancel', up);
+          document.body.classList.remove('resizing');
+        };
+        handle.addEventListener('pointermove', move);
+        handle.addEventListener('pointerup', up);
+        handle.addEventListener('pointercancel', up);
+      }}
+      onDoubleClick={() => onResize(DOCK_WIDTH)}
+      onKeyDown={(e) => {
+        if (e.key === 'ArrowLeft') onResize(width + 24);
+        else if (e.key === 'ArrowRight') onResize(width - 24);
+        else return;
+        e.preventDefault();
+      }}
+    />
   );
 }
 

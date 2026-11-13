@@ -42,6 +42,13 @@ The founder asked whether the Assistant can operate the whole of Noema. He also 
 - **His screen.** On a narrow window the panel takes room from the reading pane and the thread beside it; under 760 px it lies over them.
 - **The fake's markers.** In the recording the questions show the fake model's `[[…]]` markers. With DeepSeek you just ask in words.
 
+## Follow-up the same day: the catalog and the panel's width
+
+- The founder found that the catalog (the ticks on the right of a long thread or note) lay under the panel, and that the panel's width could not be changed.
+  - The catalog is fixed to the window's right edge. It now moves over by the panel's width (`--dock-width`, set by the app). What is open keeps a strip on its right for it while the panel is open.
+  - The panel's left edge can be dragged, from 300 px up to 60% of the window. The arrow keys also work when it has focus, and a double-click gives the usual 432 px. The width is kept across reloads.
+- Checked: 285 unit tests; 68 end-to-end tests, the new one dragging the edge, checking the catalog stays clear, reloading and using the keyboard; a screenshot of a thread with its catalog beside the panel.
+
 ## What's next
 
 1. On the Mac: pull (`pnpm dev` restarts and adds migration 017), open a deck, select a sentence, press ⌘J, and ask "Explain this" and "Make a note of this". Then ask "Start a thread about what I didn't understand in Week 4" and try Do it and Undo. Tell me which proposals were wrong.

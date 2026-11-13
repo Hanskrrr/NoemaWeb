@@ -153,7 +153,7 @@ test('a page of a PDF, a note, a list; labels it was never given, and wrong argu
     'It is not a PDF: it has no pages. Open it without a page.',
     'Notes: 0.\nNone yet.',
     'There is no label [77] in this answer. Use a label you were given.',
-    'Say what to list: threads, sources or notes.',
+    'Say what to list: threads, sources, notes or trash.',
   ]);
   const answer = await answerOf(me.id, id);
   assert.deepEqual(

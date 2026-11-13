@@ -6,6 +6,7 @@ import type { SQLInputValue, StatementSync } from 'node:sqlite';
 import {
   type AnchorRef,
   type AskedCandidate,
+  AssistantPlace,
   type BranchSummary,
   type ChatMessage,
   type ContextManifest,
@@ -176,6 +177,35 @@ function toMessage(r: Row): Message {
   };
 }
 
+/** A proposed change as stored: what the learner is shown, and what it needs to run. */
+export interface StoredAction {
+  id: string;
+  messageId: string;
+  revisionId: string;
+  kind: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  status: 'proposed' | 'running' | 'done' | 'cancelled' | 'failed' | 'undone';
+  result: Record<string, unknown> | null;
+  error: string | null;
+  createdAt: string;
+}
+
+function toAction(r: Row): StoredAction {
+  return {
+    id: r.id as string,
+    messageId: r.message_id as string,
+    revisionId: r.revision_id as string,
+    kind: r.kind as string,
+    summary: r.summary as string,
+    payload: JSON.parse(r.payload as string) as Record<string, unknown>,
+    status: r.status as StoredAction['status'],
+    result: r.result ? (JSON.parse(r.result as string) as Record<string, unknown>) : null,
+    error: (r.error as string | null) ?? null,
+    createdAt: r.created_at as string,
+  };
+}
+
 /** An Assistant answer's lookups as stored, or null (none, or unreadable). */
 function lookupsOf(value: unknown): Lookups | null {
   if (typeof value !== 'string' || value === '') return null;
@@ -321,6 +351,89 @@ export class Repo {
       this.logEvent('assistant.created', id, { notebookId });
       return { thread: this.getThread(id) as Thread, created: true };
     });
+  }
+
+  /** Where the learner was when they asked the Assistant this question. */
+  setPlace(messageId: string, place: AssistantPlace): void {
+    this.db.sql.prepare('UPDATE message SET place = ? WHERE id = ?').run(JSON.stringify(place), messageId);
+  }
+
+  placeOf(messageId: string): AssistantPlace | null {
+    const row = this.db.sql.prepare('SELECT place FROM message WHERE id = ?').get(messageId) as Row | undefined;
+    if (!row?.place) return null;
+    const parsed = AssistantPlace.safeParse(JSON.parse(row.place as string));
+    return parsed.success ? parsed.data : null;
+  }
+
+  // The Assistant's proposed changes (ADR 0024) ----------------------------
+
+  addAction(a: {
+    id: string;
+    messageId: string;
+    revisionId: string;
+    kind: string;
+    summary: string;
+    payload: unknown;
+    status: 'proposed' | 'done';
+    result?: unknown;
+  }): StoredAction {
+    const t = now();
+    const seq = (
+      this.db.sql.prepare('SELECT count(*) AS n FROM assistant_action WHERE message_id = ?').get(a.messageId) as { n: number }
+    ).n;
+    this.db.sql
+      .prepare(
+        `INSERT INTO assistant_action (id, message_id, revision_id, seq, kind, summary, payload, status, result, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(a.id, a.messageId, a.revisionId, seq, a.kind, a.summary, JSON.stringify(a.payload), a.status, a.result ? JSON.stringify(a.result) : null, t, t);
+    this.logEvent('assistant.action', a.id, { kind: a.kind, status: a.status });
+    return this.getAction(a.id) as StoredAction;
+  }
+
+  getAction(id: string): StoredAction | null {
+    const r = this.db.sql.prepare('SELECT * FROM assistant_action WHERE id = ?').get(id) as Row | undefined;
+    return r ? toAction(r) : null;
+  }
+
+  /** Move an action on: only from the state it is expected to be in (so a double tap does it once). */
+  setAction(
+    id: string,
+    from: StoredAction['status'][],
+    to: StoredAction['status'],
+    patch: { result?: unknown; error?: string | null } = {},
+  ): StoredAction | null {
+    const marks = from.map(() => '?').join(', ');
+    const r = this.db.sql
+      .prepare(
+        `UPDATE assistant_action SET status = ?, updated_at = ?,
+           result = CASE WHEN ? THEN ? ELSE result END, error = CASE WHEN ? THEN ? ELSE error END
+         WHERE id = ? AND status IN (${marks})`,
+      )
+      .run(
+        to,
+        now(),
+        patch.result !== undefined ? 1 : 0,
+        patch.result !== undefined ? JSON.stringify(patch.result) : null,
+        patch.error !== undefined ? 1 : 0,
+        patch.error ?? null,
+        id,
+        ...from,
+      );
+    if (Number(r.changes) === 0) return null;
+    this.logEvent('assistant.action', id, { status: to });
+    return this.getAction(id);
+  }
+
+  actionsOfThread(threadId: string): StoredAction[] {
+    return (
+      this.db.sql
+        .prepare(
+          `SELECT a.* FROM assistant_action a JOIN message m ON m.id = a.message_id
+           WHERE m.thread_id = ? ORDER BY m.seq, a.seq`,
+        )
+        .all(threadId) as Row[]
+    ).map(toAction);
   }
 
   /** Keep an Assistant answer's lookups with its revision. */

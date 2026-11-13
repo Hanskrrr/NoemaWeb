@@ -14,6 +14,8 @@
 //   [[no-tools]]       refuse a request with tools (a model without them)
 //   [[no-thinking-tools]]  refuse tools unless thinking is off
 //   [[say-first]]      write a sentence before the first lookup
+//   [[call:NAME:JSON]] any other tool (a change, show), with these arguments
+//   [[quote:WORDS|N]]  quote these words and cite label N
 
 import { type ErrorKind, subjectTokens } from '@noema/core';
 import { type ModelProvider, ProviderError, type StreamEvent, type StreamRequest, sleep } from './provider.ts';
@@ -250,8 +252,12 @@ export class FakeProvider implements ModelProvider {
     const think = slow ? Math.max(this.delayMs, 250) : delay;
     const after = req.messages.slice(at + 1);
     const rounds = after.filter((m) => m.role === 'assistant' && m.toolCalls).length;
-    const lookups = [...question.matchAll(/\[\[(search|open|list):([^\]]*)\]\]/g)].map((m) => {
+    const lookups = [...question.matchAll(/\[\[(search|open|list|call):(.*?)\]\](?!\])/g)].map((m) => {
       const [name, arg] = [m[1] as string, m[2] as string];
+      if (name === 'call') {
+        const colon = arg.indexOf(':');
+        return { name: arg.slice(0, colon), arguments: arg.slice(colon + 1) };
+      }
       if (name === 'search') return { name, arguments: JSON.stringify({ query: arg }) };
       if (name === 'list') return { name, arguments: JSON.stringify({ what: arg }) };
       const [ref, page] = arg.split(':');
@@ -273,11 +279,13 @@ export class FakeProvider implements ModelProvider {
     const source = results.at(-1) ?? question;
     const first = /^\[(\d+)\]/m.exec(source)?.[1];
     const cite = /\[\[cite:([^\]]*)\]\]/.exec(question)?.[1];
+    const quotes = [...question.matchAll(/\[\[quote:([^|\]]*)\|(\d+)\]\]/g)].map((m) => `“${m[1]}” [${m[2]}]`);
     const asked = question.slice(question.lastIndexOf('\n\n') + 2).replace(/\[\[[^\]]*\]\]/g, '').trim();
     const answer = [
       `You asked the Assistant: "${asked}"`,
       '',
       `I looked ${results.length} time${results.length === 1 ? '' : 's'}.${first ? ` The first thing I found is here [${first}].` : ''}${cite ? ` See also [${cite}].` : ''}`,
+      ...(quotes.length > 0 ? ['', `It says ${quotes.join(' and ')}.`] : []),
       '',
       'A label it was never given stays as written [99].',
     ].join('\n');

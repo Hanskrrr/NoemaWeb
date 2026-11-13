@@ -3,7 +3,7 @@
 // every response with them, so a drift between the two fails loudly.
 
 import { z } from 'zod';
-import { AssistantPhase, LookupStep, Lookups } from './assistant.ts';
+import { AssistantAction, AssistantPhase, AssistantPlace, LookupStep, Lookups } from './assistant.ts';
 import { isUlid } from './ids.ts';
 
 export const Id = z.string().refine(isUlid, 'expected a ULID');
@@ -635,6 +635,8 @@ export type CreateAssistantRequest = z.infer<typeof CreateAssistantRequest>;
 export const AskRequest = z.object({
   id: Id,
   content: z.string().trim().min(1).max(100_000),
+  /** To the Assistant: where the learner is, and what they selected there (ADR 0024). */
+  place: AssistantPlace.optional(),
 });
 export type AskRequest = z.infer<typeof AskRequest>;
 export const SourceThreadRequest = z.object({
@@ -856,7 +858,12 @@ export const StreamPhase = z.object({ phase: AssistantPhase });
 export const StreamStep = z.object({ step: LookupStep });
 export type StreamPhase = z.infer<typeof StreamPhase>;
 export type StreamStep = z.infer<typeof StreamStep>;
-export const STREAM_EVENTS = ['snapshot', 'delta', 'status', 'phase', 'step', 'end'] as const;
+/** The Assistant proposed a change, or one changed state (ADR 0024). */
+export const StreamAction = z.object({ action: AssistantAction });
+export type StreamAction = z.infer<typeof StreamAction>;
+export const AssistantActionList = z.object({ actions: z.array(AssistantAction) });
+export type AssistantActionList = z.infer<typeof AssistantActionList>;
+export const STREAM_EVENTS = ['snapshot', 'delta', 'status', 'phase', 'step', 'action', 'end'] as const;
 
 /** Sent on every state-changing request; the server rejects requests without it. */
 export const CLIENT_HEADER = 'x-noema-client';

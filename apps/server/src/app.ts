@@ -24,6 +24,7 @@ import {
   isLive,
   MergeNoteRequest,
   type Message,
+  type Source,
   MoveBlockRequest,
   MoveOutRequest,
   cleanFileName,
@@ -47,6 +48,7 @@ import {
   UpdateNoteRequest,
   UseRevisionRequest,
 } from '@noema/core';
+import { AssistantActions } from './chat/actions.ts';
 import { AskedJudge, askedHit } from './chat/asked.ts';
 import { Generations } from './chat/generation.ts';
 import { fullTranscript, MergeWriter } from './chat/merges.ts';
@@ -102,6 +104,28 @@ export function createApp(deps: AppDeps): App {
       throw err;
     }
   };
+  /** A source from a page read at its address, or from text. */
+  const addSource = async (
+    notebookId: string,
+    id: string,
+    body: { url?: string | null | undefined; text?: string | null | undefined; title?: string | null | undefined },
+  ): Promise<Source> => {
+    if (body.url) {
+      const page = await readPage(body.url);
+      return repo.createSource(id, notebookId, {
+        title: body.title || page.title || (page.fileName ? withoutPdf(page.fileName) : new URL(page.fetchedUrl).hostname),
+        url: body.url,
+        version: fetchedVersion(page),
+      }).source;
+    }
+    const text = (body.text ?? '').replace(/\r\n?/g, '\n').trim();
+    if (!text) throw new HttpError(400, 'invalid', 'There is no text to add.');
+    return repo.createSource(id, notebookId, {
+      title: body.title || pastedTitle(text),
+      url: null,
+      version: { content: text, origin: 'paste', fetchedUrl: null, raw: null, extractor: 'pasted' },
+    }).source;
+  };
   const titler = new Titler({ repo, models, log });
   const askedJudge = new AskedJudge({ repo, models, log });
   const headliner = new Headliner({ repo, models, log });
@@ -110,6 +134,24 @@ export function createApp(deps: AppDeps): App {
   const suggestions = new Suggester({ repo, models, maxOutputTokens: deps.config.maxOutputTokens, log });
   const merges = new MergeWriter({ repo, models, log });
   const router = new Router();
+  const answerPair = (notebookId: string, threadId: string, pair: AskPair) =>
+    generations.start({
+      threadId,
+      notebookId,
+      messageId: pair.assistant.id,
+      revisionId: pair.assistant.revisionId,
+      question: { id: pair.user.id, content: pair.user.content, seq: pair.user.seq },
+    });
+  // What the Assistant proposed, run when the learner confirms it (ADR 0024).
+  const actions = new AssistantActions({
+    repo,
+    log,
+    answer: answerPair,
+    writeNote: (noteId, threadId) => notes.start(noteId, threadId),
+    draftMerge: (mergeId) => merges.start(mergeId),
+    stopAnswer: (messageId) => generations.stopAndWait(messageId),
+    addSource,
+  });
 
   const notFound = (what: string) => new HttpError(404, 'not_found', `${what} not found`);
 
@@ -181,6 +223,24 @@ export function createApp(deps: AppDeps): App {
     const body = await ctx.body(CreateAssistantRequest);
     const { thread, created } = repo.assistantThread(notebookId, body.id);
     sendJson(ctx.res, created ? 201 : 200, thread);
+  });
+
+  // The Assistant's proposed changes in a thread, and doing, cancelling or undoing one.
+  router.on('GET', '/api/threads/:id/actions', ({ res, params }) => {
+    if (!repo.getThread(params.id as string)) throw notFound('thread');
+    sendJson(res, 200, { actions: actions.list(params.id as string) });
+  });
+
+  router.on('POST', '/api/assistant/actions/:id/run', async ({ res, params }) => {
+    sendJson(res, 200, { action: await actions.run(params.id as string) });
+  });
+
+  router.on('POST', '/api/assistant/actions/:id/cancel', ({ res, params }) => {
+    sendJson(res, 200, { action: actions.cancel(params.id as string) });
+  });
+
+  router.on('POST', '/api/assistant/actions/:id/undo', async ({ res, params }) => {
+    sendJson(res, 200, { action: await actions.undo(params.id as string) });
   });
 
   router.on('POST', '/api/notebooks/:id/threads', async (ctx) => {
@@ -264,20 +324,15 @@ export function createApp(deps: AppDeps): App {
     sendJson(res, 200, repo.discardMerge(params.id as string));
   });
 
-  const answer = (notebookId: string, threadId: string, pair: AskPair) =>
-    generations.start({
-      threadId,
-      notebookId,
-      messageId: pair.assistant.id,
-      revisionId: pair.assistant.revisionId,
-      question: { id: pair.user.id, content: pair.user.content, seq: pair.user.seq },
-    });
+  const answer = answerPair;
 
   router.on('POST', '/api/threads/:id/messages', async (ctx) => {
     const thread = repo.getThread(ctx.params.id as string);
     if (!thread) throw notFound('thread');
     const body = await ctx.body(AskRequest);
     const { pair, created } = repo.createAsk(thread.id, body.id, body.content);
+    // Asked of the Assistant from somewhere: where, and what was selected there.
+    if (created && body.place && thread.kind === 'assistant') repo.setPlace(pair.user.id, body.place);
     if (created) answer(thread.notebookId, thread.id, pair);
     sendJson(ctx.res, created ? 201 : 200, { user: pair.user, assistant: current(pair.assistant) });
   });
@@ -357,23 +412,7 @@ export function createApp(deps: AppDeps): App {
       sendJson(ctx.res, 200, existing);
       return;
     }
-    if (body.url !== undefined) {
-      const page = await readPage(body.url);
-      const { source } = repo.createSource(body.id, notebookId, {
-        title: body.title || page.title || (page.fileName ? withoutPdf(page.fileName) : new URL(page.fetchedUrl).hostname),
-        url: body.url,
-        version: fetchedVersion(page),
-      });
-      sendJson(ctx.res, 201, source);
-      return;
-    }
-    const text = (body.text ?? '').replace(/\r\n?/g, '\n').trim();
-    const { source } = repo.createSource(body.id, notebookId, {
-      title: body.title || pastedTitle(text),
-      url: null,
-      version: { content: text, origin: 'paste', fetchedUrl: null, raw: null, extractor: 'pasted' },
-    });
-    sendJson(ctx.res, 201, source);
+    sendJson(ctx.res, 201, await addSource(notebookId, body.id, body));
   });
 
   // A PDF from the learner's computer: the body is the file. Read page by page
@@ -739,6 +778,7 @@ export function createApp(deps: AppDeps): App {
       status: (status, error) => sse.send('status', { status, error }),
       phase: (phase) => sse.send('phase', { phase }),
       step: (step) => sse.send('step', { step }),
+      action: (action) => sse.send('action', { action }),
       end: () => {
         sse.send('end', {});
         sse.close();

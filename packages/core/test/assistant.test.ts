@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  ACTION_KINDS,
+  ActionArgs,
   ASSISTANT_TOOLS,
   assembleContext,
   type ChatMessage,
   citedLabels,
   cutLookup,
   describeSent,
+  findQuote,
   Lookups,
   normalizeNumbered,
   OpenArgs,
+  quotesNear,
   SearchArgs,
   splitNumbered,
   withoutLabels,
@@ -17,10 +21,10 @@ import {
 
 const known = (...labels: string[]) => (label: string) => labels.includes(label);
 
-test('the three tools are read-only lookups the model is told about in its own format', () => {
+test('the lookups come first, then the changes; all in the model\'s own format', () => {
   assert.deepEqual(
-    ASSISTANT_TOOLS.map((t) => t.name),
-    ['search', 'open', 'list'],
+    ASSISTANT_TOOLS.slice(0, 4).map((t) => t.name),
+    ['search', 'open', 'list', 'show'],
   );
   for (const t of ASSISTANT_TOOLS) {
     assert.equal((t.parameters as { type: string }).type, 'object');
@@ -132,4 +136,43 @@ test('What was sent shows each lookup after the question: what was asked for, it
       ['open', 'Opened', 7, null, 'Let me open it.'],
     ],
   );
+});
+
+test('quotes it attributes to a label: in quotation marks just before it, or a quoted paragraph', () => {
+  const text = [
+    'The slides say “gradients are averaged with an all-reduce” [3], and also "stages live on devices", [4].',
+    '',
+    '> Each worker holds a copy',
+    '> of the model.',
+    '[5]',
+    '',
+    'Not a quote [6]. 中文「梯度会被平均」[7]',
+  ].join('\n');
+  assert.deepEqual(quotesNear(text, '3'), ['gradients are averaged with an all-reduce']);
+  assert.deepEqual(quotesNear(text, '4'), ['stages live on devices']);
+  assert.deepEqual(quotesNear(text, '5'), ['Each worker holds a copy of the model.']);
+  assert.deepEqual(quotesNear(text, '6'), []);
+  assert.deepEqual(quotesNear(text, '7'), ['梯度会被平均']);
+});
+
+test('a quote is checked against the original, white space aside; … stands for words left out', () => {
+  const original = 'Each worker holds a copy\nof the model and a shard   of the batch; gradients are averaged.';
+  assert.equal(findQuote(original, 'a copy of the model'), original.indexOf('a copy'));
+  assert.equal(findQuote(original, 'Each worker … gradients are averaged'), 0);
+  assert.equal(findQuote(original, 'a copy of the modle'), -1);
+  assert.equal(findQuote(original, 'gradients … Each worker'), -1);
+});
+
+test('changes the Assistant can propose are checked before anything happens', () => {
+  assert.equal(ActionArgs.start_thread.safeParse({ question: 'Why?' }).success, true);
+  assert.equal(ActionArgs.pin.safeParse({ ref: '3', quote: 'x' }).success, true);
+  assert.equal(ActionArgs.add_source.safeParse({ url: 'https://arxiv.org/abs/1706.03762' }).success, true);
+  assert.equal(ActionArgs.add_source.safeParse({}).success, false);
+  assert.equal(ActionArgs.add_source.safeParse({ url: 'https://x.org', text: 'both' }).success, false);
+  assert.ok(ASSISTANT_TOOLS.some((t) => t.name === 'show'));
+  for (const kind of ACTION_KINDS) {
+    const tool = ASSISTANT_TOOLS.find((t) => t.name === kind);
+    assert.ok(tool, kind);
+    assert.match(tool.description, /confirms it/);
+  }
 });

@@ -5,6 +5,7 @@
 
 import {
   ASSISTANT_TOOLS,
+  type AssistantAction,
   type AssistantPhase,
   assembleContext,
   type ChatMessage,
@@ -25,6 +26,7 @@ import {
   parsePageImageRef,
   type SentImage,
   type ToolCall,
+  ulid,
   withoutLabels,
 } from '@noema/core';
 import type { Config } from '../config.ts';
@@ -32,6 +34,7 @@ import { type ModelProvider, ProviderError, type StreamEvent, type Usage } from 
 import type { ModelSource } from '../llm/settings.ts';
 import type { Logger } from '../log.ts';
 import type { Repo } from '../store/repo.ts';
+import { ACTION_TOOL_NAMES, actionView, planAction } from './actions.ts';
 import { ASSISTANT_PROMPT, VaultLookup } from './assistant.ts';
 import { SYSTEM_PROMPT } from './prompt.ts';
 import type { Headliner } from './headlines.ts';
@@ -46,6 +49,8 @@ export interface Watcher {
   phase?(phase: AssistantPhase): void;
   /** The Assistant: a lookup it just made. */
   step?(step: LookupStep): void;
+  /** The Assistant: a change it proposed (or a place it took the learner to). */
+  action?(action: AssistantAction): void;
   end(): void;
 }
 
@@ -148,6 +153,14 @@ export class Generations {
     entry.stopReason ??= 'user';
     entry.controller.abort();
     return true;
+  }
+
+  /** Stop an answer and wait until it is stored as stopped (nothing if it is not live). */
+  async stopAndWait(messageId: string): Promise<void> {
+    const entry = this.live.get(messageId);
+    if (!entry) return;
+    this.stop(messageId);
+    await entry.done;
   }
 
   /** Stop everything (server shutdown); the answers are stored as interrupted. */
@@ -359,7 +372,7 @@ export class Generations {
       system: ASSISTANT_PROMPT,
       aboutMe: notebook?.aboutMe ?? '',
       history,
-      overview: vault.overview(),
+      overview: this.withPlace(vault, args.question.id),
       question: { id: args.question.id, content: args.question.content },
       budgetTokens: this.config.contextBudgetTokens,
     });
@@ -447,6 +460,9 @@ export class Generations {
         if (i >= MAX_LOOKUPS_PER_ROUND) {
           return { role: 'tool', toolCallId: call.id, content: `Not looked up: at most ${MAX_LOOKUPS_PER_ROUND} lookups at once.` };
         }
+        if (ACTION_TOOL_NAMES.has(call.name)) {
+          return { role: 'tool', toolCallId: call.id, content: this.propose(entry, vault, call) };
+        }
         const result = vault.run(call);
         lookedUp++;
         entry.steps.push(result.step);
@@ -470,10 +486,38 @@ export class Generations {
     entry.content = normalizeNumbered(entry.content, (label) => vault.has(label));
     const refs: Lookups['refs'] = {};
     for (const label of citedLabels(entry.content, (l) => vault.has(l))) {
-      const target = vault.target(label);
+      const target = vault.cite(label, entry.content);
       if (target) refs[label] = target;
     }
     return { steps: entry.steps, refs };
+  }
+
+  /** The overview, and where the learner was when they asked (what was open, what they selected). */
+  private withPlace(vault: VaultLookup, questionId: string): string {
+    const place = this.repo.placeOf(questionId);
+    return place ? `${vault.overview()}\n\n${vault.place(place)}` : vault.overview();
+  }
+
+  /** A change the model asked for: checked and kept as a proposal (or done, for show). What the model is told. */
+  private propose(entry: Live, vault: VaultLookup, call: ToolCall): string {
+    const plan = planAction(vault, this.repo, call);
+    if ('refused' in plan) return plan.refused;
+    const show = plan.kind === 'show';
+    const stored = this.repo.addAction({
+      id: ulid(),
+      messageId: entry.messageId,
+      revisionId: entry.revisionId,
+      kind: plan.kind,
+      summary: plan.summary,
+      payload: { ...plan.payload, open: plan.open },
+      status: show ? 'done' : 'proposed',
+      ...(show ? { result: { open: plan.open } } : {}),
+    });
+    const view = actionView(stored);
+    this.emit(entry, (w) => w.action?.(view));
+    return show
+      ? `Done: the learner is being shown ${plan.open?.title ? `“${plan.open.title}”` : 'it'} now.`
+      : `Proposed to the learner; it happens only when they tap Do it under your answer: ${plan.summary}.`;
   }
 
   /** The picture a reference names, for the provider. */

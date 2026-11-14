@@ -49,9 +49,13 @@ export const keys = {
   sidebarFolded: 'noema:sidebar-folded',
   sidebarSection: 'noema:sidebar-section',
   sidebarCollapsed: 'noema:sidebar-collapsed',
-  /** The Assistant open beside what is open, and how wide. */
+  /** The Assistant open with what is open ('1'), pinned beside it ('1') or floating, and how wide when pinned. */
   assistantDock: 'noema:assistant-dock',
+  assistantPinned: 'noema:assistant-pinned',
   assistantDockWidth: 'noema:assistant-dock-width',
+  /** Floating: folded to a bar ('1'), and where its window is (ADR 0028). */
+  assistantFolded: 'noema:assistant-folded',
+  assistantFloat: 'noema:assistant-float',
   /** Folders of linked folders shown open in Files. */
   filesOpen: 'noema:files-open',
   /** Whether "In no room yet" is open in Rooms. */

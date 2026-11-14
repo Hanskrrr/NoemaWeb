@@ -245,7 +245,7 @@ test('read with AI: summaries whose points open the words they quote; suggested 
   await expect(page.getByTestId('room')).toBeVisible();
 });
 
-test('with the Assistant open beside a room, nothing of the room is drawn over it; the map scrolls sideways instead', async ({
+test('with the Assistant open on a room, nothing of the room is drawn over it: floating, the room keeps its width; pinned, the map scrolls sideways', async ({
   page,
   request,
 }) => {
@@ -260,25 +260,37 @@ test('with the Assistant open beside a room, nothing of the room is drawn over i
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/#/room/${room}`);
   await expect(page.getByTestId('room-cluster')).toHaveCount(3);
+  const map = page.getByTestId('room-map');
+  const mapWidth = () => map.evaluate((e) => e.clientWidth);
+  const wide = await mapWidth();
+  // The map fits the room: no sideways scrolling before the Assistant opens.
+  expect(await map.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
   await page.getByTestId('assistant-open').click();
   const dock = page.getByTestId('assistant-dock');
   await expect(dock).toBeVisible();
   // Every point of the Assistant shows the Assistant, not a card of the room.
-  const covered = await page.evaluate(() => {
-    const d = document.querySelector('[data-testid=assistant-dock]')?.getBoundingClientRect();
-    if (!d) return -1;
-    let n = 0;
-    for (let x = d.left + 8; x < d.right; x += 24) {
-      for (let y = d.top + 8; y < d.bottom; y += 24) {
-        const e = document.elementFromPoint(x, y);
-        if (e && !e.closest('[data-testid=assistant-dock]')) n++;
+  const covered = () =>
+    page.evaluate(() => {
+      const d = document.querySelector('[data-testid=assistant-dock]')?.getBoundingClientRect();
+      if (!d) return -1;
+      let n = 0;
+      for (let x = d.left + 8; x < d.right - 2; x += 24) {
+        for (let y = d.top + 8; y < d.bottom - 2; y += 24) {
+          const e = document.elementFromPoint(x, y);
+          if (e && !e.closest('[data-testid=assistant-dock]')) n++;
+        }
       }
-    }
-    return n;
-  });
-  expect(covered).toBe(0);
-  // The map keeps its place and scrolls sideways to the cluster that does not fit.
-  const map = page.getByTestId('room-map');
+      return n;
+    });
+  // Floating: over the room, which keeps its width.
+  await expect(dock).toHaveAttribute('data-mode', 'float');
+  expect(await covered()).toBe(0);
+  expect(await mapWidth()).toBe(wide);
+
+  // Pinned beside it: the map keeps its place and scrolls sideways to the cluster that does not fit.
+  await dock.getByTestId('assistant-pin').click();
+  await expect(dock).toHaveAttribute('data-mode', 'pinned');
+  expect(await covered()).toBe(0);
   expect(await map.evaluate((e) => e.scrollWidth > e.clientWidth)).toBe(true);
   const last = page.getByTestId('room-cluster').nth(2);
   await last.scrollIntoViewIfNeeded();

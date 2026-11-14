@@ -4418,6 +4418,210 @@ body.resizing {
   }
 }
 
+/* The Assistant floating over whatever is open (ADR 0028): glass, its edge
+   glowing in the colours of what it is doing; folded, only its bar. */
+.assistant-float {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 3.1rem - 16px);
+  border-radius: 18px;
+  overflow: hidden;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--sheet) 84%, transparent);
+  -webkit-backdrop-filter: blur(22px) saturate(1.35);
+  backdrop-filter: blur(22px) saturate(1.35);
+  border: 1px solid color-mix(in srgb, var(--lf-b) 34%, var(--rule));
+  box-shadow:
+    0 30px 80px -18px rgba(0, 0, 0, 0.5),
+    0 0 0 1px color-mix(in srgb, var(--lf-a) 10%, transparent),
+    0 0 44px -16px color-mix(in srgb, var(--lf-b) 70%, transparent);
+  transition:
+    box-shadow 0.6s ease,
+    border-color 0.6s ease;
+  animation: float-in 0.18s ease-out;
+}
+/* Busy, it glows brighter. */
+.assistant-float[data-presence="thinking"],
+.assistant-float[data-presence="looking"],
+.assistant-float[data-presence="writing"] {
+  border-color: color-mix(in srgb, var(--lf-a) 60%, var(--rule));
+  box-shadow:
+    0 30px 80px -18px rgba(0, 0, 0, 0.5),
+    0 0 0 1px color-mix(in srgb, var(--lf-a) 30%, transparent),
+    0 0 60px -10px color-mix(in srgb, var(--lf-b) 85%, transparent),
+    0 0 26px -12px color-mix(in srgb, var(--lf-c) 90%, transparent);
+}
+@keyframes float-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-float {
+    animation: none;
+  }
+}
+.assistant-float .assistant {
+  height: 100%;
+  min-height: 0;
+}
+.assistant-float .assistant-bar {
+  border-bottom-color: color-mix(in srgb, var(--rule) 70%, transparent);
+}
+.assistant-bar.is-handle {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+body.moving,
+body.moving * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+.assistant-float .assistant-hello {
+  margin: 1.6rem auto 1rem;
+}
+.assistant-float .assistant-hello h2 {
+  font-size: 1.12rem;
+}
+.assistant-float .assistant-a .md {
+  font-size: 0.95rem;
+}
+.assistant-float .assistant-compose {
+  border-top-color: color-mix(in srgb, var(--rule) 70%, transparent);
+}
+/* Folded to a bar: the conversation out of sight; what was last asked, and questions for the place. */
+.assistant.is-folded {
+  height: auto;
+}
+.assistant.is-folded .assistant-scroll {
+  display: none;
+}
+.assistant.is-folded .assistant-compose {
+  border-top: none;
+  padding-top: 0.2rem;
+}
+.assistant-doing {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+.assistant-glance {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem 0.9rem 0.3rem;
+}
+.assistant-last {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--rule) 80%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--paper) 50%, transparent);
+  color: var(--ink);
+  text-align: left;
+  font-size: 0.85rem;
+}
+.assistant-last:hover,
+.assistant-last:focus-visible {
+  border-color: color-mix(in srgb, var(--lf-b) 55%, var(--rule));
+}
+.assistant-last-label {
+  flex: none;
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+}
+.assistant-last-q {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assistant-last-show {
+  flex: none;
+  color: var(--ink-faint);
+}
+.assistant-asks.is-bar {
+  justify-content: flex-start;
+  gap: 0.35rem;
+  margin: 0;
+}
+.assistant-asks.is-bar button {
+  padding: 0.25rem 0.7rem;
+  font-size: 0.82rem;
+  background: color-mix(in srgb, var(--sheet) 70%, transparent);
+}
+/* The corner to drag, to make it bigger or smaller. */
+.float-grip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.float-grip::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  width: 7px;
+  height: 7px;
+  border-top: 2px solid color-mix(in srgb, var(--ink-faint) 60%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--ink-faint) 60%, transparent);
+  border-top-left-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.assistant-float:hover .float-grip::after,
+.float-grip:focus-visible::after {
+  opacity: 1;
+}
+/* Put away, the Assistant rests as its orb in the corner. */
+.assistant-launcher {
+  position: fixed;
+  right: calc(1.2rem + env(safe-area-inset-right, 0px));
+  bottom: calc(1.2rem + env(safe-area-inset-bottom, 0px));
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--lf-b, var(--accent)) 35%, var(--rule));
+  background: color-mix(in srgb, var(--sheet) 80%, transparent);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  box-shadow:
+    0 10px 30px -10px rgba(0, 0, 0, 0.45),
+    0 0 26px -10px color-mix(in srgb, var(--lf-b, var(--accent)) 70%, transparent);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.3s ease;
+}
+.assistant-launcher:hover,
+.assistant-launcher:focus-visible {
+  transform: scale(1.06);
+  box-shadow:
+    0 12px 34px -10px rgba(0, 0, 0, 0.5),
+    0 0 34px -8px color-mix(in srgb, var(--lf-b, var(--accent)) 85%, transparent);
+}
+.assistant-launcher .orb {
+  width: 1.7rem;
+  height: 1.7rem;
+}
+
 /* Files: folders on this computer (ADR 0025), listed like a code editor's files. */
 .sidebar ul.file-list {
   padding-left: 0;

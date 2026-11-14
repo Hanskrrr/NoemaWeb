@@ -17,15 +17,17 @@ import {
   ulid,
   type VaultTarget,
 } from '@noema/core';
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AboutYouDialog } from './AboutYou.tsx';
 import { AddSourceDialog } from './AddSource.tsx';
 import { api } from './api.ts';
 import { type AssistantWhere, AssistantChat } from './Assistant.tsx';
+import { clampFloat, type FloatBox, growFloat, moveFloat, readFloat } from './assistantFloat.ts';
 import { ContextMenuHost } from './ContextMenu.tsx';
 import { ContextDialog } from './ContextView.tsx';
 import { ExportDialog } from './ExportImport.tsx';
 import { LivingFrame, Orb } from './LivingFrame.tsx';
+import { usePresence } from './presence.ts';
 import { expectFound } from './found.ts';
 import { MapView } from './MapView.tsx';
 import { ConnectScreen, ModelDialog } from './ModelSettings.tsx';
@@ -121,20 +123,35 @@ function NotebookView({
   /** The notebook's Assistant thread, once it is opened (made the first time). */
   const [assistantId, setAssistantId] = useState<string | null>(null);
   const [assistantError, setAssistantError] = useState<string | null>(null);
-  /** The Assistant beside whatever is open (ADR 0024); kept open across reloads. */
+  /** The Assistant with whatever is open (ADRs 0024, 0028); kept open across reloads. */
   const [docked, setDocked] = useState(() => storage.get(keys.assistantDock) === '1');
   const dock = useCallback((open: boolean) => {
     setDocked(open);
     storage.set(keys.assistantDock, open ? '1' : '0');
   }, []);
+  /** Floating over what is open (the usual), or pinned beside it. */
+  const [pinned, setPinnedState] = useState(() => storage.get(keys.assistantPinned) === '1');
+  const setPinned = useCallback((on: boolean) => {
+    setPinnedState(on);
+    storage.set(keys.assistantPinned, on ? '1' : '0');
+  }, []);
+  /** Floating, folded to a bar until something is asked. */
+  const [folded, setFoldedState] = useState(() => storage.get(keys.assistantFolded) !== '0');
+  const setFolded = useCallback((on: boolean) => {
+    setFoldedState(on);
+    storage.set(keys.assistantFolded, on ? '1' : '0');
+  }, []);
+  const [floatBox, setFloatBox] = useState<FloatBox>(() => readFloat(storage.get(keys.assistantFloat)));
+  const keepFloat = useCallback((box: FloatBox) => storage.set(keys.assistantFloat, JSON.stringify(box)), []);
   const [dockWidth, setDockWidth] = useState(() => clampDock(Number(storage.get(keys.assistantDockWidth)) || DOCK_WIDTH));
   const resizeDock = useCallback((width: number) => {
     const w = clampDock(width);
     setDockWidth(w);
     storage.set(keys.assistantDockWidth, String(w));
   }, []);
-  // The room the panel takes on the right: what is fixed there (the catalog) moves over by it.
-  const dockShown = docked && route?.kind !== 'assistant';
+  // The room the panel takes on the right when pinned: what is fixed there (the catalog) moves over by it.
+  const dockShown = docked && pinned && route?.kind !== 'assistant';
+  const floatShown = docked && !pinned && route?.kind !== 'assistant';
   useEffect(() => {
     document.documentElement.style.setProperty('--dock-width', dockShown ? `${dockWidth}px` : '0px');
   }, [dockShown, dockWidth]);
@@ -323,6 +340,7 @@ function NotebookView({
     if (hit.threadId && hit.threadId === assistantId) {
       setSearching(false);
       dock(true);
+      setFolded(false);
       return;
     }
     const target =
@@ -435,8 +453,11 @@ function NotebookView({
       if (t.kind === 'thread' && t.messageId) expectFound(t.messageId, words);
       else if (t.kind === 'source') expectFound(`${t.versionId}:${t.at}`, words);
       else if (t.kind === 'note' && t.blockId) expectFound(t.blockId, words);
-      // From the Assistant's own page, it moves beside what it opens.
-      if (route?.kind === 'assistant' || (t.kind === 'thread' && t.threadId === assistantId)) dock(true);
+      // From the Assistant's own page, it comes along to what it opens, open on the conversation.
+      if (route?.kind === 'assistant' || (t.kind === 'thread' && t.threadId === assistantId)) {
+        dock(true);
+        setFolded(false);
+      }
       if (t.kind === 'thread' && t.threadId === assistantId) return;
       else if (t.kind === 'thread') go({ kind: 'thread', id: t.threadId, message: t.messageId ?? undefined });
       else if (t.kind === 'note') go({ kind: 'note', id: t.noteId, block: t.blockId ?? undefined });
@@ -450,7 +471,7 @@ function NotebookView({
         });
       }
     },
-    [go, sources, assistantId, dock, route],
+    [go, sources, assistantId, dock, route, setFolded],
   );
 
   const startNew = () => go({ kind: 'new' });
@@ -663,6 +684,39 @@ function NotebookView({
     }
     return null;
   })();
+  /** Floating: dragged by its header, it moves; kept where it was put. */
+  const floatRef = useRef(floatBox);
+  floatRef.current = floatBox;
+  const grabFloat = (e: ReactPointerEvent<HTMLElement>) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return;
+    e.preventDefault();
+    const start = floatRef.current;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    document.body.classList.add('moving');
+    const view = () => ({ w: window.innerWidth, h: window.innerHeight });
+    const move = (ev: PointerEvent) => setFloatBox(clampFloat(moveFloat(start, ev.clientX - x0, ev.clientY - y0), view()));
+    const up = () => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      handle.removeEventListener('pointercancel', up);
+      document.body.classList.remove('moving');
+      keepFloat(floatRef.current);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
+  };
+  // A smaller browser window keeps it in reach.
+  useEffect(() => {
+    const fit = () => setFloatBox((b) => clampFloat(b, { w: window.innerWidth, h: window.innerHeight }));
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, []);
+
   const assistantChat = (mode: 'panel' | 'page') => (
     <AssistantChat
       key={`${mode}:${assistantId}`}
@@ -681,7 +735,16 @@ function NotebookView({
       }}
       onOpenSettings={() => setSettingsOpen(true)}
       {...(mode === 'panel'
-        ? { onExpand: () => go({ kind: 'assistant' }), onClose: () => dock(false) }
+        ? {
+            onExpand: () => go({ kind: 'assistant' }),
+            onClose: () => dock(false),
+            layout: pinned ? ('pinned' as const) : ('float' as const),
+            folded: !pinned && folded,
+            onFold: setFolded,
+            onPin: () => setPinned(true),
+            onFloat: () => setPinned(false),
+            onGrab: grabFloat,
+          }
         : { onClose: () => window.history.back() })}
     />
   );
@@ -735,7 +798,7 @@ function NotebookView({
           onClick={() => (route?.kind === 'assistant' ? undefined : dock(!docked))}
           aria-pressed={docked || route?.kind === 'assistant'}
           aria-keyshortcuts="Meta+J Control+J"
-          title="The Assistant, beside whatever is open"
+          title="The Assistant, over whatever is open"
           data-testid="assistant-open"
         >
           <Orb size="small" />
@@ -868,12 +931,35 @@ function NotebookView({
           {route?.kind === 'assistant' && assistantId ? assistantChat('page') : main}
         </div>
         {dockShown && assistantId && (
-          <aside className="assistant-dock" data-testid="assistant-dock">
+          <aside className="assistant-dock" data-testid="assistant-dock" data-mode="pinned">
             <DockResizer width={dockWidth} onResize={resizeDock} />
             {assistantChat('panel')}
           </aside>
         )}
       </div>
+      {floatShown && assistantId && (
+        <FloatingAssistant
+          box={floatBox}
+          folded={folded}
+          onResize={(box) => setFloatBox(box)}
+          onResized={(box) => keepFloat(box ?? floatRef.current)}
+          onClose={() => dock(false)}
+        >
+          {assistantChat('panel')}
+        </FloatingAssistant>
+      )}
+      {!docked && route?.kind !== 'assistant' && (
+        <button
+          type="button"
+          className="assistant-launcher"
+          onClick={() => dock(true)}
+          title={`Assistant (${searchShortcut().replace(/K$/, 'J')})`}
+          aria-label="Open the Assistant"
+          data-testid="assistant-launcher"
+        >
+          <Orb size="normal" />
+        </button>
+      )}
     </div>
     </RoomsContext.Provider>
   );
@@ -885,6 +971,91 @@ const DOCK_MIN = 300;
 function clampDock(width: number): number {
   const max = typeof window === 'undefined' ? 900 : Math.max(DOCK_MIN, Math.min(900, window.innerWidth * 0.6));
   return Math.round(Math.min(max, Math.max(DOCK_MIN, width)));
+}
+
+/**
+ * The Assistant floating over whatever is open (ADR 0028): a window held by
+ * its bottom-right corner, moved by its header, resized from its top-left
+ * corner; folded, only the bar. Esc puts it away. Its edge glows with what
+ * the Assistant is doing.
+ */
+function FloatingAssistant({
+  box,
+  folded,
+  onResize,
+  onResized,
+  onClose,
+  children,
+}: {
+  box: FloatBox;
+  folded: boolean;
+  onResize: (box: FloatBox) => void;
+  /** Done resizing: keep it (the box given, or as last drawn). */
+  onResized: (box?: FloatBox) => void;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const presence = usePresence();
+  const view = () => ({ w: window.innerWidth, h: window.innerHeight });
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: Esc anywhere in the window puts it away
+    <aside
+      className="assistant-float"
+      data-testid="assistant-dock"
+      data-mode="float"
+      data-folded={folded ? 'true' : 'false'}
+      data-presence={presence}
+      style={{ right: box.right, bottom: box.bottom, width: box.width, height: folded ? undefined : box.height }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Escape' || e.defaultPrevented) return;
+        // A preview open in it closes first.
+        if (e.currentTarget.querySelector('[data-testid=quote-preview]')) return;
+        e.preventDefault();
+        onClose();
+      }}
+    >
+      {!folded && (
+        // biome-ignore lint/a11y/useSemanticElements: a corner to drag has no element of its own
+        <div
+          className="float-grip"
+          role="separator"
+          aria-label="Size of the Assistant"
+          tabIndex={0}
+          title="Drag to resize"
+          data-testid="float-grip"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            const start = box;
+            const x0 = e.clientX;
+            const y0 = e.clientY;
+            const handle = e.currentTarget;
+            handle.setPointerCapture(e.pointerId);
+            document.body.classList.add('moving');
+            const move = (ev: PointerEvent) => onResize(clampFloat(growFloat(start, ev.clientX - x0, ev.clientY - y0, view()), view()));
+            const up = () => {
+              handle.removeEventListener('pointermove', move);
+              handle.removeEventListener('pointerup', up);
+              handle.removeEventListener('pointercancel', up);
+              document.body.classList.remove('moving');
+              onResized();
+            };
+            handle.addEventListener('pointermove', move);
+            handle.addEventListener('pointerup', up);
+            handle.addEventListener('pointercancel', up);
+          }}
+          onKeyDown={(e) => {
+            const step = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }[e.key];
+            if (!step) return;
+            e.preventDefault();
+            const next = clampFloat(growFloat(box, step[0] as number, step[1] as number, view()), view());
+            onResize(next);
+            onResized(next);
+          }}
+        />
+      )}
+      {children}
+    </aside>
+  );
 }
 
 /** The panel's left edge: drag it (or use the arrow keys) to make the Assistant wider or narrower; double-click for the usual width. */

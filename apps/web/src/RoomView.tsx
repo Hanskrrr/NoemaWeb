@@ -665,7 +665,7 @@ export function RoomView({
       <div
         ref={canvas}
         className={`room-canvas${dropOver ? ' drop-over' : ''}`}
-        style={{ minWidth: maxX + 2 * EDGE, minHeight: Math.max(420, maxY + 160) }}
+        style={{ minWidth: maxX + EDGE, minHeight: Math.max(420, maxY + 160) }}
         onDragOver={(e) => {
           if (!isItemDrag(e) && !isOutsideDrag(e)) return;
           e.preventDefault();
@@ -678,7 +678,7 @@ export function RoomView({
         onDrop={onDrop}
         data-testid="room-canvas"
       >
-        <svg className="room-lines" aria-hidden width={maxX + 2 * EDGE} height={Math.max(420, maxY + 160)}>
+        <svg className="room-lines" aria-hidden width={maxX + EDGE} height={Math.max(420, maxY + 160)}>
           {view.links.map((l) => {
             const a = box(l.from);
             const b = box(l.to);
@@ -724,7 +724,7 @@ export function RoomView({
           editing={editing}
           onEdit={setEditing}
           onChange={(id, patch) => void changeLink(id, patch)}
-          width={maxX + 2 * EDGE}
+          width={maxX + EDGE}
           height={Math.max(420, maxY + 160)}
           room={roomWidth}
         />

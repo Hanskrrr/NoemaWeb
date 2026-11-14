@@ -1,5 +1,6 @@
-// The Assistant (ADRs 0023, 0024): one assistant for the whole notebook,
-// beside whatever is open (the panel) or on a page of its own. It knows where
+// The Assistant (ADRs 0023, 0024, 0028): one assistant for the whole notebook,
+// floating over whatever is open (folded to a bar, or open on the
+// conversation), pinned beside it, or on a page of its own. It knows where
 // the learner is and what they selected; it looks things up as it answers;
 // what it cites becomes cards that open a preview of the very words, and the
 // changes it proposes wait here for Do it, with Open and Undo after.
@@ -18,8 +19,9 @@ import {
   ulid,
   type VaultTarget,
 } from '@noema/core';
-import { type ReactNode, useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { ApiFailure, api, watchMessage } from './api.ts';
+import { asksFor } from './assistantFloat.ts';
 import { Composer } from './Composer.tsx';
 import { Orb } from './LivingFrame.tsx';
 import { MessageView } from './MessageView.tsx';
@@ -63,14 +65,6 @@ function reducer(state: Message[], action: Action): Message[] {
 /** How long the frame shows a lookup just made: a lookup takes milliseconds, too quick to see. */
 const LOOKED_MS = 1100;
 
-const FIRST_ASKS = [
-  'Where did I leave off?',
-  'What have I asked about the most?',
-  'Which side questions did I never come back to?',
-  'What did my sources say that my threads never asked about?',
-];
-const HERE_ASKS = ['Explain what I selected', 'What have I asked about this before?', 'Make a note of this'];
-
 const GLYPH: Record<VaultTarget['kind'], string> = { thread: '◇', source: '❡', note: '▤' };
 const KIND_NAME: Record<VaultTarget['kind'], string> = { thread: 'Thread', source: 'Source', note: 'Note' };
 
@@ -87,9 +81,15 @@ export function AssistantChat({
   onOpenSettings,
   onExpand,
   onClose,
+  layout = 'pinned',
+  folded = false,
+  onFold,
+  onPin,
+  onFloat,
+  onGrab,
 }: {
   threadId: string;
-  /** Beside what is open, or a page of its own. */
+  /** With what is open (floating or pinned beside it), or a page of its own. */
   mode: 'panel' | 'page';
   /** What is open, sent with each question. */
   where: AssistantWhere | null;
@@ -105,6 +105,15 @@ export function AssistantChat({
   onOpenSettings: () => void;
   onExpand?: () => void;
   onClose?: () => void;
+  /** As a panel: floating over what is open, or pinned beside it. */
+  layout?: 'float' | 'pinned';
+  /** Floating, folded to a bar: the conversation is out of sight. */
+  folded?: boolean;
+  onFold?: (folded: boolean) => void;
+  onPin?: () => void;
+  onFloat?: () => void;
+  /** Floating: a pointer pressed on its header, to move it. */
+  onGrab?: (e: ReactPointerEvent<HTMLElement>) => void;
 }) {
   const [messages, dispatch] = useReducer(reducer, []);
   const [loaded, setLoaded] = useState(false);
@@ -265,6 +274,8 @@ export function AssistantChat({
       dispatch({ type: 'upsert', message: r.assistant });
       setNotice(null);
       onClearSelection();
+      // Folded to a bar: asking opens it on the conversation.
+      if (folded) onFold?.(false);
       if (!isTerminal(r.assistant.status)) watch(r.assistant.id);
       return true;
     } catch (err) {
@@ -289,16 +300,56 @@ export function AssistantChat({
     onOpenTarget(t);
   };
 
-  const asks = where && selection ? HERE_ASKS : FIRST_ASKS;
+  const asks = asksFor(mode === 'panel' && where ? where.place.kind : null, Boolean(where && selection));
+  const floating = mode === 'panel' && layout === 'float';
+  const lastAsked = [...messages].reverse().find((m) => m.role === 'user');
+  const doing = !live ? null : looked || livePhase === 'looking' ? 'Looking things up…' : live.status === 'streaming' ? 'Writing…' : 'Thinking…';
   return (
-    <section className={`assistant assistant-${mode}`} data-testid={`assistant-${mode}`} aria-label="Assistant">
-      <header className="assistant-bar" data-testid="assistant-head">
+    <section
+      className={`assistant assistant-${mode}${floating && folded ? ' is-folded' : ''}`}
+      data-testid={`assistant-${mode}`}
+      aria-label="Assistant"
+    >
+      <header
+        className={`assistant-bar${floating ? ' is-handle' : ''}`}
+        data-testid="assistant-head"
+        onPointerDown={floating ? onGrab : undefined}
+        title={floating ? 'Drag to move' : undefined}
+      >
         <Orb size={mode === 'page' ? 'normal' : 'small'} />
         <div className="assistant-name">
           <h1>Assistant</h1>
           {mode === 'page' && <p>One assistant for your whole notebook. It looks things up, and shows where it found them.</p>}
+          {floating && doing && folded && (
+            <p className="assistant-doing" data-testid="assistant-doing">
+              {doing}
+            </p>
+          )}
         </div>
         <div className="assistant-bar-actions">
+          {floating && onFold && (
+            <button
+              type="button"
+              className="quiet"
+              onClick={() => onFold(!folded)}
+              title={folded ? 'Open the conversation' : 'Fold to a bar'}
+              aria-label={folded ? 'Open the conversation' : 'Fold to a bar'}
+              aria-expanded={!folded}
+              data-testid="assistant-fold"
+            >
+              {folded ? '⌃' : '⌄'}
+            </button>
+          )}
+          {floating && onPin && (
+            <button type="button" className="quiet" onClick={onPin} title="Pin beside what is open" aria-label="Pin beside what is open" data-testid="assistant-pin">
+              ⇥
+            </button>
+          )}
+          {mode === 'panel' && layout === 'pinned' && onFloat && (
+            <button type="button" className="quiet" onClick={onFloat} title="Float over what is open" aria-label="Float over what is open" data-testid="assistant-float">
+              ⧉
+            </button>
+          )}
           {onExpand && (
             <button type="button" className="quiet" onClick={onExpand} title="Open the Assistant on a page of its own" data-testid="assistant-expand">
               ⤢
@@ -319,7 +370,7 @@ export function AssistantChat({
           stick.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
         }}
       >
-        {loaded && messages.length === 0 && (
+        {loaded && messages.length === 0 && !(floating && folded) && (
           <div className="assistant-hello" data-testid="assistant-hello">
             <Orb size={mode === 'page' ? 'large' : 'normal'} />
             <h2>{where ? `Ask about ${where.title ? `“${where.title}”` : 'what is open'}, or anything else.` : 'Ask about anything you have read, asked or written.'}</h2>
@@ -365,6 +416,26 @@ export function AssistantChat({
         )}
       </div>
       {preview && <QuotePreview target={preview} onOpen={() => openTarget(preview)} onClose={() => setPreview(null)} />}
+      {floating && folded && (
+        <div className="assistant-glance" data-testid="assistant-glance">
+          {lastAsked && (
+            <button type="button" className="assistant-last" onClick={() => onFold?.(false)} data-testid="assistant-last">
+              <span className="assistant-last-label">{doing ?? 'Last asked'}</span>
+              <span className="assistant-last-q">“{lastAsked.content.length > 90 ? `${lastAsked.content.slice(0, 90)}…` : lastAsked.content}”</span>
+              <span className="assistant-last-show" aria-hidden>
+                ⌃
+              </span>
+            </button>
+          )}
+          <div className="assistant-asks is-bar">
+            {asks.map((q) => (
+              <button key={q} type="button" onClick={() => void send(q)} data-testid="assistant-ask">
+                {q}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="assistant-compose">
         {where && (
           <p className="assistant-where" data-testid="assistant-where">
@@ -392,7 +463,13 @@ export function AssistantChat({
           draftKey={keys.draft(threadId)}
           busy={Boolean(live)}
           autoFocus={mode === 'panel'}
-          placeholder={selection ? 'Ask about what you selected…' : 'Ask, or tell it what to do…'}
+          placeholder={
+            selection
+              ? 'Ask about what you selected…'
+              : floating && where?.title
+                ? `Ask about “${where.title.length > 40 ? `${where.title.slice(0, 40)}…` : where.title}”, or anything…`
+                : 'Ask, or tell it what to do…'
+          }
           onSend={send}
           onStop={() => live && void api.stop(live.id).catch(() => {})}
           onDraft={onDraft}

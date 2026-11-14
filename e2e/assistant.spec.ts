@@ -1,8 +1,9 @@
 import { expect, type Page, test } from '@playwright/test';
 import { freshThread, ulidish } from './helpers.ts';
 
-// The Assistant (ADRs 0023, 0024): beside whatever is open (⌘J, the header
-// or the rail), or on its own page. It knows what is open and what is
+// The Assistant (ADRs 0023, 0024, 0028): floating over whatever is open (⌘J,
+// the header, the rail or its orb in the corner), folded to a bar until
+// something is asked; pinned beside it; or on its own page. It knows what is open and what is
 // selected, looks things up as it answers (the fake model does what the
 // question's markers say), cites with cards that preview the very words,
 // proposes changes that wait for Do it, and the frame shows it working.
@@ -169,7 +170,7 @@ test('its own page, and back beside what it opens; never a thread in the list, n
   await expect(page.getByTestId('thread-link').filter({ hasText: 'Assistant' })).toHaveCount(0);
 });
 
-test('the panel can be made wider or narrower, and the catalog stays clear of it', async ({ page, request }) => {
+test('pinned beside what is open, the panel can be made wider or narrower, and the catalog stays clear of it', async ({ page, request }) => {
   const id = await freshThread(request);
   for (const q of ['What is a warp?', 'And a block?', 'And a grid?']) {
     const r = await request.post(`/api/threads/${id}/messages`, { data: { id: ulidish(), content: q }, headers: H });
@@ -180,6 +181,8 @@ test('the panel can be made wider or narrower, and the catalog stays clear of it
   const catalog = page.locator('nav.outline');
   await expect(catalog).toBeVisible();
   await openDock(page);
+  await dock(page).getByTestId('assistant-pin').click();
+  await expect(dock(page)).toHaveAttribute('data-mode', 'pinned');
   const clear = async () => {
     const c = await catalog.boundingBox();
     const d = await dock(page).boundingBox();
@@ -208,4 +211,102 @@ test('the panel can be made wider or narrower, and the catalog stays clear of it
   await handle.focus();
   await page.keyboard.press('ArrowRight');
   await expect.poll(width).toBe(dragged - 24);
+});
+
+test('it floats over what is open: a bar that knows the place, the conversation once asked, folded back; Esc puts it away and its orb brings it back', async ({
+  page,
+  request,
+}) => {
+  await freshThread(request);
+  const id = await addPasted(page, '# Week 10: Warps\n\nA warp is 32 threads that run in step.');
+  await page.goto(`/#/s/${id}`);
+  await expect(page.getByTestId('source-text')).toBeVisible();
+  const mainWidth = () => page.locator('.main').evaluate((e) => e.clientWidth);
+  const before = await mainWidth();
+  await expect(page.getByTestId('assistant-launcher')).toBeVisible();
+
+  await page.keyboard.press('ControlOrMeta+j');
+  await expect(dock(page)).toHaveAttribute('data-mode', 'float');
+  await expect(dock(page)).toHaveAttribute('data-folded', 'true');
+  await expect(page.getByTestId('assistant-launcher')).toHaveCount(0);
+  // It floats: what is open keeps its width.
+  expect(await mainWidth()).toBe(before);
+  // Questions for a source, and the place in its words.
+  const chips = dock(page).getByTestId('assistant-glance').getByTestId('assistant-ask');
+  await expect(chips.first()).toHaveText('What are the key ideas here?');
+  await expect(dock(page).getByTestId('composer')).toHaveAttribute('placeholder', 'Ask about “Week 10: Warps”, or anything…');
+
+  // Asked, it opens on the conversation.
+  await chips.first().click();
+  await expect(dock(page)).toHaveAttribute('data-folded', 'false');
+  await expect(answers(page).last()).toHaveAttribute('data-status', 'done', { timeout: 15_000 });
+  await expect(answers(page).last()).toBeVisible();
+
+  // Folded: what was last asked, one click from the conversation.
+  await dock(page).getByTestId('assistant-fold').click();
+  await expect(dock(page)).toHaveAttribute('data-folded', 'true');
+  await expect(answers(page).last()).toBeHidden();
+  await expect(dock(page).getByTestId('assistant-last')).toContainText('What are the key ideas here?');
+
+  // Esc puts it away; the orb in the corner brings it back as it was.
+  await dock(page).getByTestId('composer').press('Escape');
+  await expect(dock(page)).toHaveCount(0);
+  await expect(frame(page)).toHaveAttribute('data-presence', 'off');
+  await page.getByTestId('assistant-launcher').click();
+  await expect(dock(page)).toHaveAttribute('data-folded', 'true');
+  await dock(page).getByTestId('assistant-last').click();
+  await expect(dock(page)).toHaveAttribute('data-folded', 'false');
+});
+
+test('moved by its header and resized from its corner, it stays where it was put; pinned, it is the side panel again, and floats back', async ({
+  page,
+  request,
+}) => {
+  await freshThread(request);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await openDock(page);
+  if ((await dock(page).getAttribute('data-folded')) === 'true') await dock(page).getByTestId('assistant-fold').click();
+  await expect(dock(page)).toHaveAttribute('data-folded', 'false');
+  const box = async () => {
+    const b = await dock(page).boundingBox();
+    if (!b) throw new Error('no box');
+    return { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) };
+  };
+  const start = await box();
+
+  // Dragged by its header, 300 left and 100 up.
+  const head = await dock(page).getByTestId('assistant-head').boundingBox();
+  if (!head) throw new Error('no header');
+  await page.mouse.move(head.x + 90, head.y + head.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(head.x + 90 - 300, head.y + head.height / 2 - 100, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(async () => { const b = await box(); return [b.x - start.x, b.y - start.y]; }).toEqual([-300, -100]);
+
+  // Resized from its top-left corner: 80 wider, 60 taller, its bottom-right where it was.
+  const moved = await box();
+  const grip = await dock(page).getByTestId('float-grip').boundingBox();
+  if (!grip) throw new Error('no grip');
+  await page.mouse.move(grip.x + 6, grip.y + 6);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + 6 - 80, grip.y + 6 - 60, { steps: 6 });
+  await page.mouse.up();
+  await expect.poll(async () => { const b = await box(); return [b.w - moved.w, b.h - moved.h, b.x + b.w - (moved.x + moved.w), b.y + b.h - (moved.y + moved.h)]; }).toEqual([80, 60, 0, 0]);
+
+  // Kept after a reload.
+  const kept = await box();
+  await page.reload();
+  await expect(dock(page)).toBeVisible();
+  await expect.poll(box).toEqual(kept);
+
+  // Pinned beside: the side panel, and what is open makes room; floated back, as it was.
+  const mainWidth = () => page.locator('.main').evaluate((e) => e.clientWidth);
+  const floating = await mainWidth();
+  await dock(page).getByTestId('assistant-pin').click();
+  await expect(dock(page)).toHaveAttribute('data-mode', 'pinned');
+  await expect.poll(mainWidth).toBeLessThan(floating - 200);
+  await dock(page).getByTestId('assistant-float').click();
+  await expect(dock(page)).toHaveAttribute('data-mode', 'float');
+  await expect.poll(box).toEqual(kept);
 });

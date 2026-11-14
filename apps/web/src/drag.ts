@@ -27,9 +27,32 @@ export function draggableItem(item: DragItem) {
 }
 
 export const isItemDrag = (e: DragEvent) => e.dataTransfer.types.includes(ITEM_MIME);
+
+/** A room dragged from the sidebar, to put in another room (ADR 0032). */
+export const ROOM_MIME = 'application/x-noema-room';
+export function draggableRoom(room: { id: string; title: string }) {
+  return {
+    draggable: true,
+    onDragStart: (e: DragEvent) => {
+      e.dataTransfer.setData(ROOM_MIME, JSON.stringify({ id: room.id, title: room.title }));
+      e.dataTransfer.setData('text/plain', room.title || 'Untitled room');
+      e.dataTransfer.effectAllowed = 'copyLink';
+    },
+  };
+}
+export const isRoomDrag = (e: DragEvent) => e.dataTransfer.types.includes(ROOM_MIME);
+export function droppedRoom(e: DragEvent): { id: string; title: string } | null {
+  try {
+    const raw = JSON.parse(e.dataTransfer.getData(ROOM_MIME)) as { id?: unknown; title?: unknown };
+    if (typeof raw.id === 'string') return { id: raw.id, title: typeof raw.title === 'string' ? raw.title : '' };
+  } catch {
+    // not ours
+  }
+  return null;
+}
 /** Files, or a link, from outside Noema. */
 export const isOutsideDrag = (e: DragEvent) =>
-  !isItemDrag(e) && (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes('text/uri-list'));
+  !isItemDrag(e) && !isRoomDrag(e) && (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes('text/uri-list'));
 
 export function droppedItem(e: DragEvent): DragItem | null {
   try {

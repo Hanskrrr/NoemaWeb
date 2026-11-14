@@ -33,6 +33,8 @@ import {
   RenameRoomRequest,
   RoomItemRef,
   RoomPlacesRequest,
+  PutRoomInRequest,
+  DoorPlacesRequest,
   ulid,
   CreateThreadRequest,
   describeError,
@@ -419,6 +421,21 @@ export function createApp(deps: AppDeps): App {
   router.on('PUT', '/api/rooms/:id/places', async (ctx) => {
     const body = await ctx.body(RoomPlacesRequest);
     repo.placeRoomItems(ctx.params.id as string, body.places);
+    sendJson(ctx.res, 200, { ok: true });
+  });
+  // Rooms in rooms (ADR 0032): a room put in another (never inside itself), taken out, placed on its map.
+  router.on('POST', '/api/rooms/:id/rooms', async (ctx) => {
+    const body = await ctx.body(PutRoomInRequest);
+    const at = { ...(body.x !== undefined ? { x: body.x } : {}), ...(body.y !== undefined ? { y: body.y } : {}) };
+    sendJson(ctx.res, 200, repo.putRoomIn(ctx.params.id as string, body.room, at, 'you'));
+  });
+  router.on('DELETE', '/api/rooms/:id/rooms/:child', ({ res, params }) => {
+    sendJson(res, 200, repo.takeRoomOut(params.id as string, params.child as string));
+  });
+  router.on('PUT', '/api/rooms/:id/door-places', async (ctx) => {
+    const body = await ctx.body(DoorPlacesRequest);
+    if (!repo.getRoom(ctx.params.id as string)) throw notFound('room');
+    repo.placeDoors(ctx.params.id as string, body.doors);
     sendJson(ctx.res, 200, { ok: true });
   });
 

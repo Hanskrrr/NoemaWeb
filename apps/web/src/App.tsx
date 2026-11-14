@@ -103,6 +103,8 @@ function NotebookView({
   const [rooms, setRooms] = useState<Room[]>([]);
   const [roomsChanged, setRoomsChanged] = useState(0);
   const [roomNotice, setRoomNotice] = useState<string | null>(null);
+  /** The way into the room open (ADR 0032): the rooms passed through, by their doors. */
+  const [roomVia, setRoomVia] = useState<{ id: string; path: string[] } | null>(null);
   const [trash, setTrash] = useState<Trash>({ threads: [], notes: [], sources: [] });
   const [adding, setAdding] = useState(false);
   /** A source added from a room goes in that room (ADR 0030). */
@@ -275,7 +277,30 @@ function NotebookView({
       changed: roomsChanged,
       refresh: refreshRooms,
       unit: (item) => unitOf(threads ?? [], item),
-      openRoom: (id) => go({ kind: 'room', id }),
+      openRoom: (id, path) => {
+        setRoomVia(path && path.length > 0 ? { id, path } : null);
+        go({ kind: 'room', id });
+      },
+      putRoom: async (parentId, childId, at) => {
+        try {
+          await api.putRoomIn(parentId, childId, at ?? {});
+          await refreshRooms();
+          say(`Put ${nameOf(childId)} in ${nameOf(parentId)}`);
+          return true;
+        } catch (err) {
+          failed(err);
+          return false;
+        }
+      },
+      takeRoom: async (parentId, childId) => {
+        try {
+          await api.takeRoomOut(parentId, childId);
+          await refreshRooms();
+          say(`Took ${nameOf(childId)} out of ${nameOf(parentId)}`);
+        } catch (err) {
+          failed(err);
+        }
+      },
       add: async (roomId, items) => {
         try {
           await api.addToRoom(roomId, items);
@@ -578,6 +603,7 @@ function NotebookView({
       <RoomView
         key={route.id}
         roomId={route.id}
+        path={roomVia?.id === route.id ? roomVia.path : []}
         notebookId={notebook.id}
         threads={threads ?? []}
         sources={sources}

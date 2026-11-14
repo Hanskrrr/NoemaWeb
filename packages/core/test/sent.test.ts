@@ -158,6 +158,9 @@ test('a thread in a room is told what the room adds up to and what is still open
   // A room with no brief yet is not sent.
   const none = assembleContext({ system: 'S', room: { title: 'R', brief: '  ', open: [] }, history: [], question: { id: 'q', content: 'Q' }, budgetTokens: 1000 });
   assert.deepEqual(none.manifest.parts.map((p) => p.kind), ['system', 'question']);
+  // A room inside bigger rooms (ADR 0032) says so.
+  const inner = assembleContext({ system: 'S', room: { ...room, within: ['Machine learning', ' '] }, history: [], question: { id: 'q', content: 'Q' }, budgetTokens: 1000 });
+  assert.match(inner.messages[0]?.content ?? '', /subject\. The room is part of the bigger room "Machine learning"\. What the room adds up to/);
 });
 
 test('what a search of the web found goes before the question, labelled to be cited; What was sent says so', () => {

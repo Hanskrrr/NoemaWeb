@@ -6144,3 +6144,224 @@ body.moving * {
   padding: 0.15rem 0.4rem;
   font-size: 0.82rem;
 }
+
+/* ------------------------------------------------------------------------ */
+/* Rooms in rooms (ADR 0032).                                                */
+/* The sidebar: a tree, a room under each room it is in. */
+.room-tree .room-row {
+  display: flex;
+  align-items: center;
+  padding-left: calc(var(--depth, 0) * 0.85rem);
+}
+.room-tree .room-row .room-link {
+  flex: 1;
+  min-width: 0;
+}
+.room-fold {
+  flex: none;
+  width: 1.05rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-faint);
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+}
+span.room-fold {
+  cursor: default;
+}
+button.room-fold:hover {
+  color: var(--ink);
+}
+.room-also {
+  margin-left: 0.25rem;
+  color: var(--k-room);
+  font-size: 0.74rem;
+}
+
+/* A room inside a room: a door, a stack of what it holds in the room's colour. */
+.room-cluster.room-door-place {
+  padding: 0 8px 8px 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+.room-door {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.55rem 0.7rem 0.65rem;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--k-room) 45%, var(--rule));
+  border-top: 4px solid var(--k-room);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--k-room) 12%, var(--sheet)), var(--sheet) 72px);
+  box-shadow:
+    4px 4px 0 -1px var(--sheet),
+    4px 4px 0 0 color-mix(in srgb, var(--k-room) 38%, var(--rule)),
+    8px 8px 0 -1px var(--sheet),
+    8px 8px 0 0 color-mix(in srgb, var(--k-room) 22%, var(--rule)),
+    0 8px 20px -12px rgba(0, 0, 0, 0.35);
+  transition: box-shadow 0.15s ease, outline-color 0.15s ease;
+}
+.room-door-open {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.room-door-open:focus-visible {
+  outline: 2px solid var(--k-room);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+.room-door .room-card-kind {
+  color: color-mix(in srgb, var(--k-room) 85%, var(--ink-soft));
+}
+.room-door .room-card-title {
+  font-size: 1.02rem;
+  font-weight: 600;
+}
+.room-door-open:hover .room-card-title {
+  color: color-mix(in srgb, var(--k-room) 70%, var(--ink));
+}
+.room-door-picture {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 0.15rem 0 0.05rem;
+}
+.room-door-tile {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--k-thread);
+}
+.room-door-tile.is-source {
+  background: var(--k-source);
+}
+.room-door-tile.is-note {
+  background: var(--k-note);
+}
+.room-door-tile.is-room {
+  background: var(--k-room);
+  box-shadow: inset 0 2px 0 color-mix(in srgb, #fff 35%, transparent);
+}
+.room-door-brief {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+.room-door-brief.is-stale {
+  opacity: 0.72;
+}
+.room-door-things {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+.room-door-things li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.room-door-also {
+  margin: 0;
+  font-size: 0.76rem;
+  text-align: left;
+}
+/* A card drawn onto a door: let go, and it goes in. */
+.room-door.is-target {
+  outline: 2px solid var(--k-room);
+  outline-offset: 3px;
+}
+.room-door.is-target::after {
+  content: 'Let go to put it in';
+  position: absolute;
+  right: 0.5rem;
+  top: -0.85rem;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  background: var(--k-room);
+  color: #fff;
+  font-size: 0.72rem;
+}
+.room-door-place.is-lifted {
+  box-shadow: none;
+  transform: scale(1.015);
+}
+.room-door-place.is-lifted .room-door {
+  box-shadow:
+    0 18px 40px -12px rgba(0, 0, 0, 0.45),
+    0 0 0 2px var(--k-room);
+}
+
+/* The way into a room, above its name. */
+.room-path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.3rem;
+}
+.room-path-sep {
+  color: var(--ink-faint);
+}
+
+/* Putting a room in this one, above the bar at the foot of the room. */
+.room-here {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--k-room) 40%, var(--rule));
+  background: color-mix(in srgb, var(--sheet) 94%, transparent);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 16px 40px -18px rgba(0, 0, 0, 0.5);
+}
+.room-here-head {
+  margin: 0;
+  font-size: 0.86rem;
+}
+.room-here-rooms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.room-here-new {
+  display: flex;
+  gap: 0.35rem;
+}
+.room-here-new input {
+  flex: 1;
+  min-width: 0;
+}
+.room-put-into {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+/* A long invitation to ask stays on one line beside the buttons. */
+.room-create-bar textarea::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

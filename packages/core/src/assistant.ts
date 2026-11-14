@@ -113,6 +113,9 @@ export const ActionArgs = {
   rename_room: z.object({ room: Title, title: Title }),
   delete_room: z.object({ room: Title }),
   merge_rooms: z.object({ from: Title, into: Title }),
+  // Rooms in rooms (ADR 0032): a smaller field inside a bigger one.
+  put_room_in: z.object({ room: Title, into: Title }),
+  take_room_out: z.object({ room: Title, from: Title }),
   change_link: z
     .object({
       from: Ref,
@@ -388,6 +391,16 @@ function actionTools(): ToolSpec[] {
       name: 'merge_rooms',
       description: `Merge one room into another: what was put in the first is put in the second, and the first is gone.${proposed}`,
       parameters: object({ from: str('The room that goes.'), into: str('The room it goes into.') }, ['from', 'into']),
+    },
+    {
+      name: 'put_room_in',
+      description: `Put a room inside a bigger room, as a smaller field of its subject (a room can be in several rooms, never inside itself). It shows there as a door; what is in it stays in it. Either room may be a new name, to make it.${proposed}`,
+      parameters: object({ room: str('The smaller room.'), into: str('The bigger room it goes in.') }, ['room', 'into']),
+    },
+    {
+      name: 'take_room_out',
+      description: `Take a room out of a bigger room it is in. It stays a room, with all in it, and in any other room it is in.${proposed}`,
+      parameters: object({ room: str('The smaller room.'), from: str('The bigger room it is in.') }, ['room', 'from']),
     },
     {
       name: 'change_link',

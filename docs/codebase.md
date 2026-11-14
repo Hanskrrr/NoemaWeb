@@ -38,7 +38,7 @@ Imported by both the server and the web app. No I/O.
 | `src/html.ts` | A web page as Markdown: the article only, with math, footnotes, tables and code |
 | `src/sources.ts` | A source's blocks and headings, and the section around a passage |
 | `src/gists.ts`, `src/links.ts` | Reading a room (ADR 0027): what the AI is asked for a summary and for links, its replies read and checked (quotes found in the original, numbers and kinds it knows); the kinds of link |
-| `src/rooms.ts` | Rooms (ADR 0026): what a room holds (put in, and what comes with it), its clusters and the lines between them, the marks on its cards, where new clusters go, clusters set apart when they grow into each other, where the words of a link go so they cover nothing (ADR 0027 addendum) |
+| `src/rooms.ts` | Rooms (ADR 0026): what a room holds (put in, and what comes with it), its clusters and the lines between them, the marks on its cards, where new clusters go, clusters set apart when they grow into each other, where the words of a link go so they cover nothing (ADR 0027 addendum); rooms in rooms: what is inside a room at any depth, `wouldLoop`, the sidebar's `roomTree` (ADR 0032) |
 | `src/files.ts` | Files of a linked folder (ADR 0025): a file's text as a source shows it (Markdown as it is, other text as a code block), a path kept inside the folder, a note as a Markdown file |
 | `src/assistant.ts` | The Assistant's tools as the model is told about them (lookups, file lookups, show, the changes, file changes included), their arguments, a proposed change as shown (`AssistantAction`), where the learner is (`AssistantPlace`), quotes found near a label and checked (`quotesNear`, `quoteRange`), where a label points (`VaultTarget`), the lookups kept with an answer, labels in answers (`[3]`): found, put in one form, taken out of earlier answers |
 | `src/pdf.ts` | A PDF's text items, page by page, as Markdown: lines, paragraphs, headings, lists, page headings; running heads dropped; where each item landed (the map from pages to text) |
@@ -61,7 +61,7 @@ Imported by both the server and the web app. No I/O.
 | `src/chat/prompt.ts` | The system prompt |
 | `src/chat/titles.ts`, `headlines.ts` | Titles for new threads, and a one-line headline for each exchange, written by the model afterwards |
 | `src/chat/notes.ts` | Rewriting a thread as a note, and AI suggestions for a block |
-| `src/rooms/reader.ts` | Reading a room (ADR 0027): summaries of what needs one, a few at a time, then suggested links; the progress the room shows |
+| `src/rooms/reader.ts` | Reading a room (ADR 0027): summaries of what needs one, a few at a time, then suggested links; the progress the room shows; the brief, with the rooms inside by their briefs (ADRs 0030, 0032) |
 | `src/files/folders.ts` | Folders on the learner's computer (ADR 0025): linking, listing, every path resolved inside the folder (links leading out refused), reading a file and opening it as a source (a new version when it changed on disk), writing with a backup, undo, finding lines in files |
 | `src/chat/assistant.ts` | The Assistant's instructions and its lookups over the store (`VaultLookup`): the overview sent with each question, where the learner is and what they selected, search, open, list, the files of linked folders, the labels numbered through one answer, quotes checked against the original, passages resolved for changes |
 | `src/chat/actions.ts` | The changes the Assistant proposes: checked and resolved when asked for (`planAction`), run on Do it through the store, cancelled, undone (`AssistantActions`) |
@@ -88,7 +88,7 @@ React 19 and Vite, no router or state library. One stylesheet with light and dar
 | `src/storage.ts` | `localStorage` for small conveniences: drafts, the last place, folded lists |
 | `src/Sidebar.tsx`, `icons.tsx` | The rail of icons and the lists of threads, sources, notes, files and the Trash |
 | `src/Files.tsx` | Files: linked folders listed like a code editor's files; the editor for a text file; saving a note into a folder (ADR 0025) |
-| `src/Rooms.tsx`, `RoomView.tsx` | Rooms (ADR 0026): the list in the sidebar with what is in no room yet, the shared room actions and right-click menu; a room's map of clusters, its picker, moving clusters; Read with AI, summaries and their points on cards, links drawn card to card and their editor, Link to… (ADR 0027) |
+| `src/Rooms.tsx`, `RoomView.tsx` | Rooms (ADR 0026): the list in the sidebar with what is in no room yet, the shared room actions and right-click menu; a room's map of clusters, its picker, moving clusters; Read with AI, summaries and their points on cards, links drawn card to card and their editor, Link to… (ADR 0027); rooms in rooms (ADR 0032): the sidebar tree, doors on the map, the way in, Room here |
 | `src/ContextMenu.tsx`, `drag.ts` | The right-click menu (one for the app); dragging things onto rooms, and files and links from outside read as sources |
 | `src/ThreadView.tsx` | A thread: messages, the composer, select to ask a side question, Back, split-off, delete, drafts of new threads |
 | `src/Assistant.tsx` | The Assistant, floating over what is open (folded to a bar, or open on the conversation), pinned beside it, or on its own page: questions with where the learner is, answers with their lookups, cards for what they cite, the quote preview, the changes to confirm |

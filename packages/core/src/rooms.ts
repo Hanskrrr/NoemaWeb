@@ -474,3 +474,65 @@ export function placeLabels(
   }
   return out;
 }
+
+// Rooms in rooms (ADR 0032) ---------------------------------------------------
+// A room can be put in other rooms, as a door: a small field inside a bigger
+// one. One room, many homes, no copies; never inside itself, at any depth.
+
+/** A room put in another. */
+export interface Door {
+  parent: string;
+  child: string;
+}
+
+/** Every room inside a room, at any depth. */
+export function roomsInside(doors: Door[], id: string): Set<string> {
+  const out = new Set<string>();
+  const todo = [id];
+  for (let at = todo.pop(); at !== undefined; at = todo.pop()) {
+    for (const d of doors) {
+      if (d.parent === at && !out.has(d.child)) {
+        out.add(d.child);
+        todo.push(d.child);
+      }
+    }
+  }
+  return out;
+}
+
+/** Whether putting `child` in `parent` would put a room inside itself. */
+export function wouldLoop(doors: Door[], parent: string, child: string): boolean {
+  return parent === child || roomsInside(doors, child).has(parent);
+}
+
+export interface RoomNode {
+  id: string;
+  /** The rooms it is in besides the one it is shown under. */
+  alsoIn: string[];
+  children: RoomNode[];
+}
+
+/**
+ * The rooms as a tree, for the sidebar: the rooms in no room first, each with
+ * the rooms in it, in the order given. A room in two rooms is shown under each.
+ */
+export function roomTree(rooms: Array<{ id: string; parents: string[] }>): RoomNode[] {
+  const ids = new Set(rooms.map((r) => r.id));
+  const parentsOf = new Map(rooms.map((r) => [r.id, r.parents.filter((p) => ids.has(p) && p !== r.id)]));
+  const shown = new Set<string>();
+  const node = (id: string, under: string | null, path: Set<string>): RoomNode => {
+    shown.add(id);
+    const inner = new Set(path).add(id);
+    return {
+      id,
+      alsoIn: (parentsOf.get(id) ?? []).filter((p) => p !== under),
+      children: rooms
+        .filter((r) => !inner.has(r.id) && (parentsOf.get(r.id) ?? []).includes(id))
+        .map((r) => node(r.id, id, inner)),
+    };
+  };
+  const roots = rooms.filter((r) => (parentsOf.get(r.id) ?? []).length === 0).map((r) => node(r.id, null, new Set()));
+  // Rooms only reachable through a loop (which Noema never makes) are shown at the top, so none is lost.
+  for (const r of rooms) if (!shown.has(r.id)) roots.push(node(r.id, null, new Set()));
+  return roots;
+}

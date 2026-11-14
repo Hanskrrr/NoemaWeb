@@ -157,20 +157,31 @@ export class RoomReader {
         suggested += 1;
       }
     }
-    // The brief: what the room adds up to, and what is still open in it (ADR 0030).
+    // The brief: what the room adds up to, and what is still open in it (ADR 0030); with the rooms in it, each
+    // by its own brief (ADR 0032). Those rooms are not read again here: each is read in itself.
     const basis = this.repo.roomBriefBasis(roomId);
     const known2 = this.repo.gists(room.members.map(key));
     const briefed = room.members.filter((x) => known2.has(key(x))).slice(0, LINKS_MAX_ITEMS);
-    if (basis && briefed.length > 0) {
+    const doors = this.repo.roomDoorsOf(roomId).slice(0, 12);
+    if (basis && briefed.length + doors.length > 0) {
       this.set(roomId, { phase: 'brief' });
       try {
         const titles = this.titles(room.notebookId);
+        const holds = (c: (typeof doors)[number]['counts']) =>
+          [[c.sources, 'source'], [c.threads, 'thread'], [c.notes, 'note'], [c.rooms, 'room']]
+            .filter(([n]) => (n as number) > 0)
+            .map(([n, w]) => `${n} ${w}${n === 1 ? '' : 's'}`)
+            .join(', ');
         let raw = '';
         for await (const ev of provider.stream({
-          messages: briefRequest(
-            room.title,
-            briefed.map((x) => ({ kind: x.kind, title: titles.get(key(x)) ?? '', gist: known2.get(key(x))?.text ?? '' })),
-          ),
+          messages: briefRequest(room.title, [
+            ...briefed.map((x) => ({ kind: x.kind, title: titles.get(key(x)) ?? '', gist: known2.get(key(x))?.text ?? '' })),
+            ...doors.map((d) => ({
+              kind: 'room' as const,
+              title: d.title,
+              gist: d.brief ?? `Not read yet; it holds ${holds(d.counts) || 'nothing yet'}.`,
+            })),
+          ]),
           maxTokens: 900,
           light: true,
           purpose: 'brief',
@@ -178,11 +189,13 @@ export class RoomReader {
         })) {
           if (ev.type === 'text') raw += ev.text;
         }
-        const draft = readBrief(raw, briefed.length);
+        const draft = readBrief(raw, briefed.length + doors.length);
         if (draft) {
           const open = draft.open.map((o) => {
             const at = o.from ? briefed[o.from - 1] : undefined;
-            return { question: o.question, item: at ? { kind: at.kind as 'thread' | 'source' | 'note', id: at.id } : null };
+            const door = o.from && o.from > briefed.length ? doors[o.from - briefed.length - 1] : undefined;
+            const item = at ? { kind: at.kind as 'thread' | 'source' | 'note', id: at.id } : door ? { kind: 'room' as const, id: door.id } : null;
+            return { question: o.question, item };
           });
           this.repo.saveRoomBrief(roomId, basis, draft.text, open, provider.model);
         } else {

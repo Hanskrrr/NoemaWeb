@@ -4,6 +4,8 @@
 // asked, side questions not come back from. Lines join clusters only where
 // something links them, and say how. Clusters stay where they are put: Noema
 // places new ones, and you move them by dragging (or Alt+arrow keys).
+// Rooms in rooms (ADR 0032): a room inside this one is a door, showing what it
+// holds and its brief; it opens that room, and a card dropped on it goes in.
 
 import {
   type Curve,
@@ -12,6 +14,7 @@ import {
   LINK_WORDS,
   type LinkKind,
   type NoteSummary,
+  type Room,
   placeClusters,
   placeLabels,
   type RoomKind,
@@ -23,12 +26,16 @@ import {
   threadOf,
   ulid,
   type VaultTarget,
+  wouldLoop,
 } from '@noema/core';
 import {
   type CSSProperties,
   type DragEvent,
+  Fragment,
   type KeyboardEvent,
+  type MouseEvent,
   type PointerEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -37,7 +44,7 @@ import {
 } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { openMenu } from './ContextMenu.tsx';
-import { addDropped, droppedItem, isItemDrag, isOutsideDrag, takeOutsideDrop } from './drag.ts';
+import { addDropped, droppedItem, droppedRoom, isItemDrag, isOutsideDrag, isRoomDrag, takeOutsideDrop } from './drag.ts';
 import { EditableTitle } from './EditableTitle.tsx';
 import { Orb } from './LivingFrame.tsx';
 import { WebFinds } from './MessageView.tsx';
@@ -58,6 +65,10 @@ type Spot = { x: number; y: number };
 type Box = { x: number; y: number; w: number; h: number };
 type Cluster = RoomViewData['clusters'][number];
 type RoomCard = Cluster['cards'][number];
+type Door = RoomViewData['doors'][number];
+/** A door's place on the map is kept by "room:id", beside the clusters' "kind:id". */
+const doorKey = (id: string) => `room:${id}`;
+const isDoorKey = (key: string) => key.startsWith('room:');
 
 const GLYPH: Record<RoomKind, string> = { source: '❡', thread: '◦', note: '▤' };
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -85,6 +96,7 @@ const day = (at: string) => (at ? new Date(at).toLocaleDateString(undefined, { d
 
 export function RoomView({
   roomId,
+  path,
   notebookId,
   threads,
   sources,
@@ -95,6 +107,8 @@ export function RoomView({
   onDeleted,
 }: {
   roomId: string;
+  /** The rooms passed through to get here, by their doors (ADR 0032). */
+  path: string[];
   /** Add a source, which goes in this room (ADR 0030). */
   onAddSource: () => void;
   /** A key point's words, where they are in the original. */
@@ -141,10 +155,16 @@ export function RoomView({
     el: HTMLElement;
     pointerId: number;
     over: string | null;
+    /** A door (ADR 0032) moves as soon as it is dragged; a card drawn onto a door goes in that room. */
+    door: boolean;
+    overDoor: string | null;
   } | null>(null);
   const [pressing, setPressing] = useState<string | null>(null);
   const [lifted, setLifted] = useState<string | null>(null);
-  const [connecting, setConnecting] = useState<{ from: string; x: number; y: number; over: string | null } | null>(null);
+  const [connecting, setConnecting] = useState<{ from: string; x: number; y: number; over: string | null; overDoor: string | null } | null>(null);
+  // Rooms in rooms (ADR 0032): putting a room in this one; a card just put in a room inside.
+  const [puttingRoom, setPuttingRoom] = useState(false);
+  const [putInto, setPutInto] = useState<{ ref: { kind: RoomKind; id: string }; title: string; door: string } | null>(null);
   const [choosing, setChoosing] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [merging, setMerging] = useState(false);
@@ -158,11 +178,13 @@ export function RoomView({
       // Where clusters are on screen wins over what the server last heard (a drag may be on its way).
       setSpots((had) => {
         const next = new Map<string, Spot>();
-        for (const c of v.clusters) {
-          const mine = had.get(c.key);
-          if (mine) next.set(c.key, mine);
-          else if (c.x !== null && c.y !== null) next.set(c.key, { x: c.x, y: c.y });
-        }
+        const keep = (key: string, x: number | null, y: number | null) => {
+          const mine = had.get(key);
+          if (mine) next.set(key, mine);
+          else if (x !== null && y !== null) next.set(key, { x, y });
+        };
+        for (const c of v.clusters) keep(c.key, c.x, c.y);
+        for (const d of v.doors) keep(doorKey(d.id), d.x, d.y);
         return next;
       });
     } catch (err) {
@@ -250,15 +272,15 @@ export function RoomView({
   };
 
   const headOf = (c: Cluster) => c.cards[0] as RoomCard;
-  const save = (places: Array<{ cluster: Cluster; at: Spot }>) => {
-    if (places.length === 0) return;
-    void api
-      .placeInRoom(
-        roomId,
-        places.map(({ cluster, at }) => ({ kind: headOf(cluster).kind, id: headOf(cluster).id, x: at.x, y: at.y })),
-      )
-      .catch(() => {});
+  /** Where clusters (by their first card) and doors were put, told to the server. */
+  const save = (places: Array<{ key: string; at: Spot }>) => {
+    const items = places.filter((p) => !isDoorKey(p.key)).map(({ key, at }) => ({ ...refOf(key), x: at.x, y: at.y }));
+    const doors = places.filter((p) => isDoorKey(p.key)).map(({ key, at }) => ({ room: key.slice('room:'.length), x: at.x, y: at.y }));
+    if (items.length) void api.placeInRoom(roomId, items).catch(() => {});
+    if (doors.length) void api.placeDoors(roomId, doors).catch(() => {});
   };
+  /** What is placed on the map: the rooms in it first (ADR 0032), then the clusters. */
+  const blocks = (v: RoomViewData) => [...v.doors.map((d) => doorKey(d.id)), ...v.clusters.map((c) => c.key as string)];
 
   // Measure the clusters; place the new ones, and keep them there.
   useLayoutEffect(() => {
@@ -291,32 +313,33 @@ export function RoomView({
     if (moved) setCardBoxes(boxes);
     const width = canvas.current.clientWidth;
     if (width !== roomWidth) setRoomWidth(width);
-    const unplaced = view.clusters.filter((c) => !spots.has(c.key));
+    const all = blocks(view);
+    const unplaced = all.filter((k) => !spots.has(k));
     if (unplaced.length > 0) {
       const columns = Math.max(1, Math.floor((width - 2 * EDGE + GAP) / (WIDTH + GAP)));
       const placed = placeClusters(
-        view.clusters.map((c) => ({
-          key: c.key,
-          w: measured.get(c.key)?.w ?? WIDTH,
-          h: measured.get(c.key)?.h ?? 120,
-          x: spots.get(c.key)?.x ?? null,
-          y: spots.get(c.key)?.y ?? null,
+        all.map((k) => ({
+          key: k,
+          w: measured.get(k)?.w ?? WIDTH,
+          h: measured.get(k)?.h ?? 120,
+          x: spots.get(k)?.x ?? null,
+          y: spots.get(k)?.y ?? null,
         })),
         { columns, columnWidth: WIDTH, gap: GAP, rowGap: ROW_GAP, left: EDGE, top: EDGE },
       );
       const next = new Map(spots);
       for (const [k, at] of placed) next.set(k, at);
       setSpots(next);
-      save(unplaced.map((c) => ({ cluster: c, at: placed.get(c.key) as Spot })));
+      save(unplaced.map((k) => ({ key: k, at: placed.get(k) as Spot })));
       return;
     }
     // Clusters that grew into each other (a summary came in) or were dropped on each other: set apart.
     if (gesture.current?.mode === 'lift') return;
     const settled = settleClusters(
-      view.clusters.flatMap((c) => {
-        const at = spots.get(c.key);
-        const size = measured.get(c.key);
-        return at && size ? [{ key: c.key, ...at, ...size }] : [];
+      all.flatMap((k) => {
+        const at = spots.get(k);
+        const size = measured.get(k);
+        return at && size ? [{ key: k, ...at, ...size }] : [];
       }),
       SETTLE_GAP,
     );
@@ -324,17 +347,19 @@ export function RoomView({
     const next = new Map(spots);
     for (const [k, at] of settled) next.set(k, at);
     setSpots(next);
-    save(view.clusters.filter((c) => settled.has(c.key)).map((c) => ({ cluster: c, at: settled.get(c.key) as Spot })));
+    save([...settled].map(([key, at]) => ({ key, at })));
   });
 
   // A press on a card: draw a link (move at once), or lift its cluster to move it (hold still a moment). Alt+arrows move too.
-  const down = (e: PointerEvent<HTMLDivElement>, cluster: Cluster) => {
+  // A door (ADR 0032) moves as soon as it is dragged.
+  const down = (e: PointerEvent<HTMLDivElement>, key: string) => {
     if (e.button !== 0 || linking) return;
     const target = e.target as HTMLElement;
     if (target.closest('.room-point, input, select, textarea, a')) return;
-    const at = spots.get(cluster.key);
+    const at = spots.get(key);
     if (!at) return;
-    const cardKey = target.closest<HTMLElement>('[data-card-key]')?.dataset.cardKey ?? `${headOf(cluster).kind}:${headOf(cluster).id}`;
+    const door = isDoorKey(key);
+    const cardKey = door ? key : (target.closest<HTMLElement>('[data-card-key]')?.dataset.cardKey ?? key);
     const el = e.currentTarget;
     const pointerId = e.pointerId;
     const timer = window.setTimeout(() => {
@@ -347,9 +372,9 @@ export function RoomView({
         // the pointer is already gone
       }
       setPressing(null);
-      setLifted(cluster.key);
+      setLifted(key);
     }, HOLD_MS);
-    gesture.current = { cardKey, clusterKey: cluster.key, sx: e.clientX, sy: e.clientY, x0: at.x, y0: at.y, mode: 'press', timer, el, pointerId, over: null };
+    gesture.current = { cardKey, clusterKey: key, sx: e.clientX, sy: e.clientY, x0: at.x, y0: at.y, mode: 'press', timer, el, pointerId, over: null, door, overDoor: null };
     setPressing(cardKey);
   };
   const move = (e: PointerEvent<HTMLDivElement>) => {
@@ -360,8 +385,9 @@ export function RoomView({
     if (g.mode === 'press') {
       if (Math.hypot(dx, dy) < 6) return;
       window.clearTimeout(g.timer);
-      g.mode = 'connect';
+      g.mode = g.door ? 'lift' : 'connect';
       setPressing(null);
+      if (g.door) setLifted(g.clusterKey);
       try {
         g.el.setPointerCapture(e.pointerId);
       } catch {
@@ -374,9 +400,12 @@ export function RoomView({
     }
     const origin = canvas.current?.getBoundingClientRect();
     if (!origin) return;
-    const hit = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('[data-card-key]')?.dataset.cardKey ?? null;
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    const hit = under?.closest<HTMLElement>('[data-card-key]')?.dataset.cardKey ?? null;
     g.over = hit && hit !== g.cardKey ? hit : null;
-    setConnecting({ from: g.cardKey, x: e.clientX - origin.left, y: e.clientY - origin.top, over: g.over });
+    // Over a door: let go, and the thing goes in that room (ADR 0032).
+    g.overDoor = g.over ? null : (under?.closest<HTMLElement>('[data-door-id]')?.dataset.doorId ?? null);
+    setConnecting({ from: g.cardKey, x: e.clientX - origin.left, y: e.clientY - origin.top, over: g.over, overDoor: g.overDoor });
   };
   const up = () => {
     const g = gesture.current;
@@ -392,15 +421,23 @@ export function RoomView({
     }, 0);
     if (g.mode === 'lift') {
       setLifted(null);
-      const cluster = view?.clusters.find((c) => c.key === g.clusterKey);
       const at = spots.get(g.clusterKey);
-      if (cluster && at && (at.x !== g.x0 || at.y !== g.y0)) save([{ cluster, at }]);
+      if (at && (at.x !== g.x0 || at.y !== g.y0)) save([{ key: g.clusterKey, at }]);
       // Drawn again, so a cluster dropped onto another is set apart.
       setSpots((m) => new Map(m));
       return;
     }
     setConnecting(null);
     if (g.over) void connect(g.cardKey, g.over);
+    else if (g.overDoor) void putInDoor(g.cardKey, g.overDoor);
+  };
+  /** A card drawn onto a door goes in that room too; it stays here until taken out (ADR 0032). */
+  const putInDoor = async (cardKey: string, doorId: string) => {
+    const ref = refOf(cardKey);
+    const card = view?.clusters.flatMap((c) => c.cards).find((c) => c.kind === ref.kind && c.id === ref.id);
+    const door = view?.doors.find((d) => d.id === doorId);
+    await rooms.add(doorId, [ref]);
+    setPutInto({ ref, title: card?.title ?? '', door: door?.title ?? '' });
   };
   const cancel = () => {
     const g = gesture.current;
@@ -410,15 +447,15 @@ export function RoomView({
     setLifted(null);
     setConnecting(null);
   };
-  const nudge = (e: KeyboardEvent, cluster: Cluster) => {
+  const nudge = (e: KeyboardEvent, key: string) => {
     if (!e.altKey) return;
     const delta = { ArrowLeft: [-STEP, 0], ArrowRight: [STEP, 0], ArrowUp: [0, -STEP], ArrowDown: [0, STEP] }[e.key];
-    const at = spots.get(cluster.key);
+    const at = spots.get(key);
     if (!delta || !at) return;
     e.preventDefault();
     const next = { x: Math.max(0, at.x + (delta[0] ?? 0)), y: Math.max(0, at.y + (delta[1] ?? 0)) };
-    setSpots((m) => new Map(m).set(cluster.key, next));
-    save([{ cluster, at: next }]);
+    setSpots((m) => new Map(m).set(key, next));
+    save([{ key, at: next }]);
   };
 
   /** Everything placed again by Noema, in the order they came in. */
@@ -426,12 +463,13 @@ export function RoomView({
     if (!view || !canvas.current) return;
     const width = canvas.current.clientWidth;
     const columns = Math.max(1, Math.floor((width - 2 * EDGE + GAP) / (WIDTH + GAP)));
+    const all = blocks(view);
     const placed = placeClusters(
-      view.clusters.map((c) => ({ key: c.key, w: sizes.get(c.key)?.w ?? WIDTH, h: sizes.get(c.key)?.h ?? 120, x: null, y: null })),
+      all.map((k) => ({ key: k, w: sizes.get(k)?.w ?? WIDTH, h: sizes.get(k)?.h ?? 120, x: null, y: null })),
       { columns, columnWidth: WIDTH, gap: GAP, rowGap: ROW_GAP, left: EDGE, top: EDGE },
     );
     setSpots(new Map(placed));
-    save(view.clusters.map((c) => ({ cluster: c, at: placed.get(c.key) as Spot })));
+    save(all.map((k) => ({ key: k, at: placed.get(k) as Spot })));
   };
 
   // Dropping: a thread, source or note from a list; files and links from outside, read as sources.
@@ -446,6 +484,14 @@ export function RoomView({
     if (item) {
       e.preventDefault();
       void rooms.add(roomId, [{ ...rooms.unit(item), ...at }]);
+      return;
+    }
+    // A room from the sidebar: it goes in this one, as a door where it was let go (ADR 0032).
+    const inner = droppedRoom(e);
+    if (inner) {
+      e.preventDefault();
+      if (inner.id === roomId) setStatus('A room cannot be put inside itself.');
+      else void rooms.putRoom(roomId, inner.id, at);
       return;
     }
     if (!isOutsideDrag(e)) return;
@@ -487,13 +533,16 @@ export function RoomView({
   };
   let maxX = 0;
   let maxY = 0;
-  for (const c of view.clusters) {
-    const b = box(c.key);
+  for (const k of blocks(view)) {
+    const b = box(k);
     if (b) {
       maxX = Math.max(maxX, b.x + b.w);
       maxY = Math.max(maxY, b.y + b.h);
     }
   }
+  const doorBoxes = view.doors.flatMap((d) => box(doorKey(d.id)) ?? []);
+  const titleOfRoom = (id: string) => rooms.rooms.find((r) => r.id === id)?.title || 'Untitled room';
+  const through = [...path, roomId];
 
   const cardButton = (c: RoomCard, head: boolean) => {
     const open = c.kind !== 'note' ? c.marks.open : 0;
@@ -629,6 +678,7 @@ export function RoomView({
     <section className="room" aria-label={`Room: ${room.title}`} data-testid="room">
       <header className="room-head">
         <div className="room-title">
+          <RoomWhere room={room} path={path} />
           <EditableTitle
             title={room.title}
             label="Rename this room"
@@ -641,6 +691,7 @@ export function RoomView({
           />
           <p className="room-meta" data-testid="room-meta">
             {plural(room.counts.sources, 'source')} · {plural(room.counts.threads, 'thread')} · {plural(room.counts.notes, 'note')}
+            {room.counts.rooms > 0 && ` · ${plural(room.counts.rooms, 'room')} inside`}
           </p>
         </div>
         <div className="room-actions">
@@ -653,7 +704,7 @@ export function RoomView({
           >
             Choose what is in it
           </button>
-          {view.clusters.length > 1 && (
+          {blocks(view).length > 1 && (
             <button type="button" className="quiet" onClick={arrange} title="Place every cluster again, in the order they came in" data-testid="room-arrange">
               Arrange
             </button>
@@ -701,7 +752,10 @@ export function RoomView({
       )}
       {confirming && (
         <div className="askbox confirm-row room-confirm" role="alert" data-testid="room-delete-confirm">
-          <span>Delete “{room.title}”? What is in it stays where it is; only the room and its map go.</span>
+          <span>
+            Delete “{room.title}”? What is in it stays where it is; only the room and its map go.
+            {room.rooms.length > 0 && ` The ${room.rooms.length === 1 ? 'room in it stays a room' : `${room.rooms.length} rooms in it stay rooms`}.`}
+          </span>
           <button
             type="button"
             onClick={() => {
@@ -777,7 +831,27 @@ export function RoomView({
           {status}
         </p>
       )}
-      {view.clusters.length > 0 && (
+      {putInto && (
+        <p className="hint room-status room-put-into" role="status" data-testid="room-put-into">
+          “{putInto.title || 'Untitled'}” is in “{putInto.door}” now, and still here.
+          <button
+            type="button"
+            className="quiet inline"
+            onClick={() => {
+              const ref = putInto.ref;
+              setPutInto(null);
+              void rooms.remove(roomId, ref);
+            }}
+            data-testid="room-put-into-move"
+          >
+            Take it out of “{room.title}”
+          </button>
+          <button type="button" className="quiet inline" onClick={() => setPutInto(null)} aria-label="Close">
+            ×
+          </button>
+        </p>
+      )}
+      {(view.clusters.length > 0 || view.doors.length > 0) && (
         <RoomBrief
           view={view}
           busy={busy}
@@ -790,7 +864,7 @@ export function RoomView({
           reviewing={reviewing}
           onRead={() => void startReading()}
           onReview={() => setReviewing((r) => !r)}
-          onOpen={(item) => onOpen(item.kind, item.id)}
+          onOpen={(item) => (item.kind === 'room' ? rooms.openRoom(item.id, through) : onOpen(item.kind, item.id))}
           titles={cards}
         />
       )}
@@ -833,7 +907,7 @@ export function RoomView({
         className={`room-canvas${dropOver ? ' drop-over' : ''}`}
         style={{ minWidth: maxX + EDGE, minHeight: Math.max(420, maxY + 160) }}
         onDragOver={(e) => {
-          if (!isItemDrag(e) && !isOutsideDrag(e)) return;
+          if (!isItemDrag(e) && !isOutsideDrag(e) && !isRoomDrag(e)) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = 'copy';
           setDropOver(true);
@@ -886,7 +960,7 @@ export function RoomView({
           <svg className="connect-line" aria-hidden width={maxX + EDGE} height={Math.max(420, maxY + 160)}>
             {(() => {
               const a = cardBoxes.get(connecting.from) as Box;
-              const t = connecting.over ? cardBoxes.get(connecting.over) : null;
+              const t = connecting.over ? cardBoxes.get(connecting.over) : connecting.overDoor ? box(doorKey(connecting.overDoor)) : null;
               const x1 = connecting.x >= a.x + a.w / 2 ? a.x + a.w : a.x;
               const y1 = a.y + Math.min(a.h / 2, 28);
               const x2 = t ? (t.x > x1 ? t.x : t.x + t.w) : connecting.x;
@@ -908,8 +982,53 @@ export function RoomView({
           width={maxX + EDGE}
           height={Math.max(420, maxY + 160)}
           room={roomWidth}
+          others={doorBoxes}
         />
-        {view.clusters.length === 0 && (
+        {view.doors.map((d) => {
+          const k = doorKey(d.id);
+          const at = spots.get(k);
+          const also = (rooms.rooms.find((r) => r.id === d.id)?.parents ?? []).filter((p) => p !== roomId).map(titleOfRoom);
+          return (
+            // biome-ignore lint/a11y/noStaticElementInteractions: moved by pointer; Alt+arrows on its button do the same
+            <div
+              key={k}
+              className={`room-cluster room-door-place${lifted === k ? ' is-lifted' : ''}`}
+              data-cluster={k}
+              style={at ? { left: at.x, top: at.y } : { left: 0, top: 0, visibility: 'hidden' }}
+              onPointerDown={(e) => down(e, k)}
+              onPointerMove={move}
+              onPointerUp={up}
+              onPointerCancel={cancel}
+              onKeyDown={(e) => nudge(e, k)}
+              data-testid="room-door-place"
+            >
+              <DoorCard
+                door={d}
+                also={also}
+                target={connecting?.overDoor === d.id}
+                onOpen={() => {
+                  if (!swallow.current) rooms.openRoom(d.id, through);
+                }}
+                onMenu={(e) =>
+                  openMenu(
+                    e,
+                    [
+                      { label: 'Open', onSelect: () => rooms.openRoom(d.id, through) },
+                      {
+                        label: 'Take out of this room',
+                        hint: 'It stays a room, with all in it',
+                        onSelect: () => rooms.takeRoom(roomId, d.id),
+                        testId: 'menu-door-take-out',
+                      },
+                    ],
+                    d.title || 'Untitled room',
+                  )
+                }
+              />
+            </div>
+          );
+        })}
+        {view.clusters.length === 0 && view.doors.length === 0 && (
           <div className="room-empty" data-testid="room-empty">
             <p className="empty-title">Nothing in this room yet</p>
             <p className="hint">
@@ -930,11 +1049,11 @@ export function RoomView({
               className={`room-cluster${lifted === c.key ? ' is-lifted' : ''}`}
               data-cluster={c.key}
               style={at ? { left: at.x, top: at.y } : { left: 0, top: 0, visibility: 'hidden' }}
-              onPointerDown={(e) => down(e, c)}
+              onPointerDown={(e) => down(e, c.key)}
               onPointerMove={move}
               onPointerUp={up}
               onPointerCancel={cancel}
-              onKeyDown={(e) => nudge(e, c)}
+              onKeyDown={(e) => nudge(e, c.key)}
               data-testid="room-cluster"
               data-key={c.key}
             >
@@ -963,6 +1082,23 @@ export function RoomView({
       </div>
       <CreateHere
         title={room.title}
+        puttingRoom={puttingRoom}
+        onRoom={() => setPuttingRoom((p) => !p)}
+        roomPanel={
+          puttingRoom ? (
+            <RoomHere
+              room={room}
+              onPut={async (childId) => {
+                if (await rooms.putRoom(roomId, childId)) setPuttingRoom(false);
+              }}
+              onMake={async (title) => {
+                const made = await rooms.create(title);
+                if (made && (await rooms.putRoom(roomId, made.id))) setPuttingRoom(false);
+              }}
+              onClose={() => setPuttingRoom(false)}
+            />
+          ) : null
+        }
         web={view.webAvailable ? room.web : null}
         onToggleWeb={async () => {
           await api.setRoomWeb(roomId, !room.web);
@@ -1012,12 +1148,16 @@ function RoomBrief({
   reviewing: boolean;
   onRead: () => void;
   onReview: () => void;
-  onOpen: (item: { kind: RoomKind; id: string }) => void;
+  onOpen: (item: { kind: RoomKind | 'room'; id: string }) => void;
   titles: Map<string, RoomCard>;
 }) {
   const { brief, reading, unread } = view;
   const [finding, setFinding] = useState<string | null>(null);
   const things = view.clusters.reduce((n, c) => n + c.cards.length, 0);
+  const doors = view.doors.length;
+  const held = [...(things ? [plural(things, 'thing')] : []), ...(doors ? [plural(doors, 'room')] : [])].join(' · ');
+  const titleOfItem = (item: { kind: RoomKind | 'room'; id: string }) =>
+    item.kind === 'room' ? (view.doors.find((d) => d.id === item.id)?.title ?? '') : (titles.get(`${item.kind}:${item.id}`)?.title ?? '');
   const status = !reading
     ? null
     : reading.phase === 'summaries'
@@ -1043,7 +1183,7 @@ function RoomBrief({
           <Orb size="normal" />
           <div>
             <p className="room-brief-label">
-              {brief ? `AI · read ${day(brief.at)} · ${plural(things, 'thing')}${brief.fresh ? '' : ' · older: things changed since'}` : 'AI · not read yet'}
+              {brief ? `AI · read ${day(brief.at)} · ${held}${brief.fresh ? '' : ' · older: things changed since'}` : 'AI · not read yet'}
             </p>
             <h2>{brief ? 'What this room adds up to' : 'Read this room'}</h2>
           </div>
@@ -1055,8 +1195,9 @@ function RoomBrief({
         ) : (
           <p className="room-brief-text is-invite">
             The AI writes each thing here a short summary, its points linked to the words they come from; then it
-            suggests links between them, and writes the room a brief: what it adds up to, and what is still open. It
-            uses your model: about {things + 2} calls.
+            suggests links between them, and writes the room a brief: what it adds up to, and what is still open.
+            {doors > 0 && ' The rooms in it go in by their own briefs: read them first for a fuller one.'} It uses your
+            model: about {unread + 2} calls.
           </p>
         )}
         {status && (
@@ -1082,7 +1223,7 @@ function RoomBrief({
                     type="button"
                     className="room-open-q"
                     onClick={() => o.item && onOpen(o.item)}
-                    title={`Open “${titles.get(`${o.item.kind}:${o.item.id}`)?.title ?? ''}”`}
+                    title={`Open “${titleOfItem(o.item)}”`}
                     data-testid="room-open-q"
                   >
                     {o.question} <span aria-hidden>↗</span>
@@ -1143,6 +1284,9 @@ function RoomBrief({
 /** Making things in the room (ADR 0030): a question starts a thread here; a note or a source goes in it. */
 function CreateHere({
   title,
+  puttingRoom,
+  onRoom,
+  roomPanel,
   web,
   onToggleWeb,
   onAsk,
@@ -1150,6 +1294,10 @@ function CreateHere({
   onSource,
 }: {
   title: string;
+  /** Putting a room in this one (ADR 0032): whether its panel is open, how to open it, and the panel. */
+  puttingRoom: boolean;
+  onRoom: () => void;
+  roomPanel: ReactNode;
   /** Whether its questions may search the web; null when the web cannot be searched with this model. */
   web: boolean | null;
   onToggleWeb: () => Promise<void>;
@@ -1181,12 +1329,23 @@ function CreateHere({
           {problem}
         </p>
       )}
+      {roomPanel}
       <div className="room-create-bar">
         <button type="button" className="quiet" onClick={() => void run(onNote)} disabled={busy} data-testid="room-note-here">
           ▤ Note here
         </button>
         <button type="button" className="quiet" onClick={onSource} disabled={busy} data-testid="room-source-here">
           ❡ Source here
+        </button>
+        <button
+          type="button"
+          className={puttingRoom ? 'active' : 'quiet'}
+          onClick={onRoom}
+          aria-expanded={puttingRoom}
+          title="Put a smaller room inside this one, or make one"
+          data-testid="room-room-here"
+        >
+          ⌂ Room here
         </button>
         {web !== null && (
           <button
@@ -1222,6 +1381,174 @@ function CreateHere({
   );
 }
 
+const DOOR_GLYPH: Record<'thread' | 'source' | 'note' | 'room', string> = { ...GLYPH, room: '⌂' };
+const cut = (text: string, n: number) => (text.length > n ? `${text.slice(0, n - 1).trimEnd()}…` : text);
+
+/**
+ * The way into this room (ADR 0032), above its name: the rooms passed through to get here, each one click back;
+ * opened another way, the rooms it is in.
+ */
+function RoomWhere({ room, path }: { room: Room; path: string[] }) {
+  const rooms = useRooms();
+  const byId = new Map(rooms.rooms.map((r) => [r.id, r]));
+  // The way you came, while it still holds: each room inside the one before it.
+  const chain = [...path, room.id];
+  const holds = chain.every((id, i) => i === 0 || (byId.get(id)?.parents ?? (id === room.id ? room.parents : [])).includes(chain[i - 1] as string));
+  const title = (id: string) => byId.get(id)?.title || 'Untitled room';
+  if (path.length > 0 && holds) {
+    return (
+      <nav className="room-path" aria-label="The way you came in" data-testid="room-path">
+        {path.map((id, i) => (
+          <Fragment key={id}>
+            <button type="button" className="room-trail-room" onClick={() => rooms.openRoom(id, path.slice(0, i))} data-testid="room-path-room">
+              ⌂ {title(id)}
+            </button>
+            <span className="room-path-sep" aria-hidden>
+              ›
+            </span>
+          </Fragment>
+        ))}
+      </nav>
+    );
+  }
+  if (room.parents.length === 0) return null;
+  return (
+    <nav className="room-path" aria-label="The rooms it is in" data-testid="room-path">
+      <span className="hint">Inside</span>
+      {room.parents.map((id) => (
+        <button key={id} type="button" className="room-trail-room" onClick={() => rooms.openRoom(id)} data-testid="room-path-room">
+          ⌂ {title(id)}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+/**
+ * A room inside this one (ADR 0032), as a door: its name, a picture of what it holds (a tile for each thing, in
+ * its colour), a few of its things, its brief if it was read. It opens the room; a card drawn onto it goes in.
+ */
+function DoorCard({
+  door,
+  also,
+  target,
+  onOpen,
+  onMenu,
+}: {
+  door: Door;
+  also: string[];
+  target: boolean;
+  onOpen: () => void;
+  onMenu: (e: MouseEvent) => void;
+}) {
+  const c = door.counts;
+  const holds = [
+    ...(c.sources ? [plural(c.sources, 'source')] : []),
+    ...(c.threads ? [plural(c.threads, 'thread')] : []),
+    ...(c.notes ? [plural(c.notes, 'note')] : []),
+    ...(c.rooms ? [plural(c.rooms, 'room')] : []),
+  ].join(' · ');
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: right-click is a shortcut; its button opens the room
+    <div className={`room-door${target ? ' is-target' : ''}`} onContextMenu={onMenu} data-door-id={door.id} data-testid="room-door">
+      <button type="button" className="room-door-open" onClick={onOpen} title={`Open the room “${door.title}”`} data-testid="room-door-open">
+        <span className="room-card-kind">
+          <span aria-hidden>⌂ </span>Room inside
+        </span>
+        <span className="room-card-title">{door.title || 'Untitled room'}</span>
+        {door.kinds.length > 0 && (
+          <span className="room-door-picture" aria-hidden>
+            {door.kinds.map((k, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: a fixed picture
+              <i key={i} className={`room-door-tile is-${k}`} />
+            ))}
+          </span>
+        )}
+        <span className="room-card-marks">{holds || 'Nothing in it yet'}</span>
+      </button>
+      {door.brief ? (
+        <p className={`room-door-brief${door.fresh ? '' : ' is-stale'}`} data-testid="room-door-brief">
+          <span className="room-gist-by">AI{door.fresh ? '' : ', older'} · </span>
+          {cut(door.brief, 240)}
+        </p>
+      ) : (
+        door.things.length > 0 && (
+          <ul className="room-door-things">
+            {door.things.map((t, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list
+              <li key={i}>
+                <span aria-hidden>{DOOR_GLYPH[t.kind]} </span>
+                {t.title || 'Untitled'}
+              </li>
+            ))}
+          </ul>
+        )
+      )}
+      {also.length > 0 && <p className="hint room-door-also">Also in {also.join(', ')}</p>}
+    </div>
+  );
+}
+
+/** Putting a room in this one (ADR 0032): a room there is (none that would end up inside itself), or a new one. */
+function RoomHere({
+  room,
+  onPut,
+  onMake,
+  onClose,
+}: {
+  room: Room;
+  onPut: (childId: string) => Promise<void>;
+  onMake: (title: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const rooms = useRooms();
+  const [title, setTitle] = useState('');
+  const [busy, setBusy] = useState(false);
+  const doors = rooms.rooms.flatMap((r) => r.rooms.map((child) => ({ parent: r.id, child })));
+  const can = rooms.rooms.filter((r) => r.id !== room.id && !room.rooms.includes(r.id) && !wouldLoop(doors, room.id, r.id));
+  const run = (what: Promise<void>) => {
+    setBusy(true);
+    void what.finally(() => setBusy(false));
+  };
+  return (
+    <div className="room-here" data-testid="room-here">
+      <p className="room-here-head">
+        Put a room inside “{room.title}”: a smaller part of its subject. It shows here as a door; what is in it stays in it.
+      </p>
+      <div className="room-here-rooms">
+        {can.map((r) => (
+          <button key={r.id} type="button" className="room-trail-room" onClick={() => run(onPut(r.id))} disabled={busy} data-testid="room-here-pick">
+            ⌂ {r.title || 'Untitled room'}
+          </button>
+        ))}
+        {can.length === 0 && <span className="hint">No other room can go in it.</span>}
+      </div>
+      <form
+        className="room-here-new"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (title.trim() && !busy) run(onMake(title.trim()));
+        }}
+      >
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Or a new room inside it"
+          aria-label="Name of a new room inside this one"
+          maxLength={200}
+          data-testid="room-here-new"
+        />
+        <button type="submit" disabled={busy || !title.trim()} data-testid="room-here-make">
+          Make
+        </button>
+        <button type="button" className="quiet" onClick={onClose}>
+          Cancel
+        </button>
+      </form>
+    </div>
+  );
+}
+
 /** How a link reads, from its first end: its own words, or its kind's. */
 const linkWords = (l: ItemLink) => l.label || LINK_WORDS[l.kind];
 
@@ -1244,6 +1571,7 @@ function ItemLinks({
   width,
   height,
   room,
+  others,
 }: {
   links: ItemLink[];
   /** The link whose kind the AI is choosing. */
@@ -1258,6 +1586,8 @@ function ItemLinks({
   height: number;
   /** How wide the room is on screen: a link between cards one above the other goes round the side with room. */
   room: number;
+  /** Other things on the map words must not cover: the doors (ADR 0032). */
+  others: Box[];
 }) {
   const labelEls = useRef(new Map<string, HTMLElement>());
   const [labelSizes, setLabelSizes] = useState<Map<string, { w: number; h: number }>>(new Map());
@@ -1313,7 +1643,7 @@ function ItemLinks({
       curve: x.curve,
       ...(worded(x) ? (labelSizes.get(x.l.id) ?? { w: Math.min(116, 16 + text(x.l).length * 6.5), h: 20 }) : { w: 12, h: 12 }),
     })),
-    [...boxes.values()],
+    [...boxes.values(), ...others],
   );
   useLayoutEffect(() => {
     const next = new Map<string, { w: number; h: number }>();

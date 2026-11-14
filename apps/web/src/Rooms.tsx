@@ -1,11 +1,13 @@
 // Rooms (ADR 0026), in the sidebar: the list of rooms, each a place to drop
 // threads, sources and notes on; and what is in no room yet, to drag into one.
 // Any thread, source or note can be put in a room with right-click too.
+// Rooms in rooms (ADR 0032): the list is a tree, a room under each room it is
+// in; drag a room onto another to put it inside.
 
-import { type NoteSummary, type Room, type RoomItemRef, type Source, type Thread, threadOf } from '@noema/core';
-import { createContext, type DragEvent, type FormEvent, type ReactNode, useContext, useRef, useState } from 'react';
+import { type NoteSummary, type Room, type RoomItemRef, type RoomNode, roomTree, type Source, type Thread, threadOf, wouldLoop } from '@noema/core';
+import { type CSSProperties, createContext, type DragEvent, type FormEvent, type ReactNode, useContext, useRef, useState } from 'react';
 import { type MenuItem, openMenu } from './ContextMenu.tsx';
-import { type DragItem, draggableItem, droppedItem, isItemDrag } from './drag.ts';
+import { type DragItem, draggableItem, draggableRoom, droppedItem, droppedRoom, isItemDrag, isRoomDrag } from './drag.ts';
 import { keys, storage } from './storage.ts';
 
 export interface RoomsApi {
@@ -17,8 +19,12 @@ export interface RoomsApi {
   create: (title: string, items?: RoomItemRef[]) => Promise<Room | null>;
   /** What goes in a room for this: a side question goes in as the thread it is part of. */
   unit: (item: { kind: DragItem['kind']; id: string }) => RoomItemRef;
-  openRoom: (roomId: string) => void;
+  /** Open a room; through a door, with the rooms passed through to get there (ADR 0032). */
+  openRoom: (roomId: string, path?: string[]) => void;
   refresh: () => Promise<void>;
+  /** Rooms in rooms (ADR 0032): put a room in another (false if it could not be), or take it out. */
+  putRoom: (parentId: string, childId: string, at?: { x: number; y: number }) => Promise<boolean>;
+  takeRoom: (parentId: string, childId: string) => Promise<void>;
 }
 
 const none: RoomsApi = {
@@ -30,6 +36,8 @@ const none: RoomsApi = {
   unit: (item) => item,
   openRoom: () => {},
   refresh: async () => {},
+  putRoom: async () => false,
+  takeRoom: async () => {},
 };
 export const RoomsContext = createContext<RoomsApi>(none);
 export const useRooms = () => useContext(RoomsContext);
@@ -72,47 +80,171 @@ export function roomMenu(rooms: RoomsApi, item: DragItem, before: MenuItem[] = [
   return out;
 }
 
-/** A room in the list: open it, or drop something on it. */
-function RoomRow({ room, active, onOpen }: { room: Room; active: boolean; onOpen: () => void }) {
+/** Right-click on a room (ADR 0032): open it; the bigger rooms it is in, to put it in or take it out; a new one around it. */
+export function roomPlaceMenu(rooms: RoomsApi, room: Room): MenuItem[] {
+  const doors = rooms.rooms.flatMap((r) => r.rooms.map((child) => ({ parent: r.id, child })));
+  const out: MenuItem[] = [
+    { label: 'Open', onSelect: () => rooms.openRoom(room.id) },
+    { kind: 'separator' },
+    { kind: 'heading', label: 'Put it inside a bigger room' },
+  ];
+  for (const r of rooms.rooms) {
+    if (r.id === room.id) continue;
+    const inIt = room.parents.includes(r.id);
+    // Not offered where it would end up inside itself.
+    if (!inIt && wouldLoop(doors, r.id, room.id)) continue;
+    out.push({
+      label: r.title || 'Untitled room',
+      checked: inIt,
+      hint: inIt ? 'It is in this room. Pick it to take it out.' : undefined,
+      onSelect: () => (inIt ? rooms.takeRoom(r.id, room.id) : rooms.putRoom(r.id, room.id).then(() => {})),
+      testId: 'menu-room-in',
+    });
+  }
+  out.push({
+    kind: 'input',
+    label: 'New room around it…',
+    placeholder: 'Name of the bigger room',
+    onSubmit: async (title) => {
+      const made = await rooms.create(title);
+      if (made) await rooms.putRoom(made.id, room.id);
+    },
+    testId: 'menu-room-around',
+  });
+  return out;
+}
+
+/** A room in the list: open it, drop a thing or another room on it, drag it into another; fold the rooms in it. */
+function RoomRow({
+  room,
+  depth,
+  alsoIn,
+  active,
+  fold,
+  onOpen,
+}: {
+  room: Room;
+  depth: number;
+  /** The other rooms it is in, by name. */
+  alsoIn: string[];
+  active: boolean;
+  /** For a room with rooms in it: whether they show, and how to fold or unfold them. */
+  fold: { open: boolean; toggle: () => void } | null;
+  onOpen: () => void;
+}) {
   const rooms = useRooms();
   const [over, setOver] = useState(false);
-  const total = room.counts.sources + room.counts.threads + room.counts.notes;
+  const total = room.counts.sources + room.counts.threads + room.counts.notes + room.counts.rooms;
+  const accepts = (e: DragEvent) => isItemDrag(e) || isRoomDrag(e);
   const drop = (e: DragEvent) => {
     setOver(false);
     const item = droppedItem(e);
-    if (!item) return;
-    e.preventDefault();
-    void rooms.add(room.id, [rooms.unit(item)]);
+    if (item) {
+      e.preventDefault();
+      void rooms.add(room.id, [rooms.unit(item)]);
+      return;
+    }
+    const inner = droppedRoom(e);
+    if (inner) {
+      e.preventDefault();
+      if (inner.id !== room.id) void rooms.putRoom(room.id, inner.id);
+    }
   };
+  const counts = [
+    `${room.counts.sources} sources`,
+    `${room.counts.threads} threads`,
+    `${room.counts.notes} notes`,
+    ...(room.counts.rooms ? [`${room.counts.rooms} room${room.counts.rooms === 1 ? '' : 's'}`] : []),
+  ].join(' · ');
   return (
-    <li>
+    <li className="room-row" style={{ '--depth': depth } as CSSProperties}>
+      {fold ? (
+        <button
+          type="button"
+          className="room-fold"
+          onClick={fold.toggle}
+          aria-expanded={fold.open}
+          aria-label={fold.open ? `Fold the rooms in ${room.title}` : `Show the rooms in ${room.title}`}
+          data-testid="room-fold"
+        >
+          {fold.open ? '▾' : '▸'}
+        </button>
+      ) : (
+        <span className="room-fold" aria-hidden />
+      )}
       <button
         type="button"
         className={`thread-link room-link${active ? ' active' : ''}${over ? ' drop-over' : ''}`}
         aria-current={active ? 'page' : undefined}
         onClick={onOpen}
+        onContextMenu={(e) => openMenu(e, roomPlaceMenu(rooms, room), room.title || 'Untitled room')}
+        {...draggableRoom(room)}
         onDragEnter={(e) => {
-          if (!isItemDrag(e)) return;
+          if (!accepts(e)) return;
           e.preventDefault();
           setOver(true);
         }}
         onDragOver={(e) => {
-          if (!isItemDrag(e)) return;
+          if (!accepts(e)) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = 'copy';
           setOver(true);
         }}
         onDragLeave={() => setOver(false)}
         onDrop={drop}
-        title={`${room.counts.sources} sources · ${room.counts.threads} threads · ${room.counts.notes} notes`}
+        title={`${counts}${alsoIn.length ? `\nAlso in ${alsoIn.join(', ')}` : ''}`}
         data-testid="room-link"
         data-room-id={room.id}
+        data-depth={depth}
       >
         <span aria-hidden>⌂ </span>
         {room.title || 'Untitled room'}
+        {alsoIn.length > 0 && (
+          <span className="room-also" aria-label={`also in ${alsoIn.join(', ')}`} data-testid="room-also">
+            ⧉
+          </span>
+        )}
         <span className="room-count">{total}</span>
       </button>
     </li>
+  );
+}
+
+/** A room and, unless folded, the rooms in it, at any depth (ADR 0032). */
+function RoomBranch({
+  node,
+  depth,
+  byId,
+  activeRoomId,
+  folded,
+  onFold,
+}: {
+  node: RoomNode;
+  depth: number;
+  byId: Map<string, Room>;
+  activeRoomId: string | null;
+  folded: Set<string>;
+  onFold: (id: string) => void;
+}) {
+  const rooms = useRooms();
+  const room = byId.get(node.id);
+  if (!room) return null;
+  const open = !folded.has(node.id);
+  return (
+    <>
+      <RoomRow
+        room={room}
+        depth={depth}
+        alsoIn={node.alsoIn.map((id) => byId.get(id)?.title || 'Untitled room')}
+        active={room.id === activeRoomId}
+        fold={node.children.length > 0 ? { open, toggle: () => onFold(node.id) } : null}
+        onOpen={() => rooms.openRoom(room.id)}
+      />
+      {open &&
+        node.children.map((c) => (
+          <RoomBranch key={c.id} node={c} depth={depth + 1} byId={byId} activeRoomId={activeRoomId} folded={folded} onFold={onFold} />
+        ))}
+    </>
   );
 }
 
@@ -157,6 +289,14 @@ export function RoomsPanel({
   const [naming, setNaming] = useState(false);
   const [title, setTitle] = useState('');
   const [loose, setLoose] = useState(() => storage.get(keys.roomsLooseOpen) !== '0');
+  const [folded, setFolded] = useState(() => new Set(storage.getJson<string[]>(keys.roomsFolded, [])));
+  const fold = (id: string) => {
+    const next = new Set(folded);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setFolded(next);
+    storage.setJson(keys.roomsFolded, [...next]);
+  };
   const input = useRef<HTMLInputElement>(null);
 
   const make = async (e: FormEvent) => {
@@ -194,10 +334,11 @@ export function RoomsPanel({
       </p>
     );
   } else {
+    const byId = new Map(rooms.rooms.map((r) => [r.id, r]));
     list = (
-      <ul className="sidebar-list" data-testid="room-list">
-        {rooms.rooms.map((r) => (
-          <RoomRow key={r.id} room={r} active={r.id === activeRoomId} onOpen={() => rooms.openRoom(r.id)} />
+      <ul className="sidebar-list room-tree" data-testid="room-list">
+        {roomTree(rooms.rooms).map((n) => (
+          <RoomBranch key={n.id} node={n} depth={0} byId={byId} activeRoomId={activeRoomId} folded={folded} onFold={fold} />
         ))}
       </ul>
     );

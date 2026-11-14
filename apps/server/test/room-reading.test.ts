@@ -29,7 +29,7 @@ async function read(id: string): Promise<RoomView> {
   assert.equal(r.status, 202);
   let v = await room(id);
   const start = Date.now();
-  while (v.reading && (v.reading.phase === 'summaries' || v.reading.phase === 'links')) {
+  while (v.reading && (v.reading.phase === 'summaries' || v.reading.phase === 'links' || v.reading.phase === 'brief')) {
     if (Date.now() - start > 5000) throw new Error('reading did not finish');
     await new Promise((r) => setTimeout(r, 20));
     v = await room(id);

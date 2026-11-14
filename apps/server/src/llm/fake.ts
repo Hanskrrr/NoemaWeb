@@ -234,8 +234,11 @@ export class FakeProvider implements ModelProvider {
       const room = /^The room “(.*)”:/m.exec(question)?.[1] ?? '';
       const n = [...question.matchAll(/^(\d+)\. /gm)].length;
       const first = /^1\. \w+ “(.*?)”/m.exec(question)?.[1] ?? '';
+      // The rooms in it (ADR 0032), by name: the brief is written from theirs.
+      const inner = [...question.matchAll(/^\d+\. room “(.*?)”/gm)].map((m) => m[1]);
       await sleep(this.delayMs, req.signal);
-      yield { type: 'text', text: JSON.stringify({ brief: `Fake brief of “${room}”: ${n} things, read in order.`, open: [{ question: `What is still unclear about ${first}?`, from: 1 }] }) };
+      const brief = `Fake brief of “${room}”: ${n} things, read in order.${inner.length ? ` Its rooms: ${inner.join(', ')}.` : ''}`;
+      yield { type: 'text', text: JSON.stringify({ brief, open: [{ question: `What is still unclear about ${first}?`, from: 1 }] }) };
       yield { type: 'finish', reason: 'stop' };
       return;
     }

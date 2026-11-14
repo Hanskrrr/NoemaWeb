@@ -50,9 +50,12 @@ import {
   type RoomKind,
   type RoomRow,
   type RoomView,
+  type Door,
+  type RoomDoor,
   roomKey,
   roomMap,
   roomMembers,
+  wouldLoop,
   threadOf,
   type Source,
   type SourceDetail,
@@ -332,6 +335,8 @@ export interface ModelCallEnd {
 
 /** A room and its rows, as stored (see Repo.roomSnapshot). */
 export interface RoomSnapshot {
+  /** Its doors both ways (ADR 0032); missing in snapshots from before rooms held rooms. */
+  doors?: Array<Record<string, unknown>>;
   room: Record<string, unknown>;
   items: Array<Record<string, unknown>>;
   brief?: Record<string, unknown> | null;
@@ -1018,12 +1023,14 @@ export class Repo {
     }));
   }
 
-  private toRoom(r: Row, graph: RoomGraph): Room {
-    const members = [...roomMembers(this.roomRows(r.id as string), graph).keys()];
-    const counts = { sources: 0, threads: 0, notes: 0 };
+  private toRoom(r: Row, graph: RoomGraph, doors: Door[]): Room {
+    const id = r.id as string;
+    const members = [...roomMembers(this.roomRows(id), graph).keys()];
+    const rooms = doors.filter((d) => d.parent === id).map((d) => d.child);
+    const counts = { sources: 0, threads: 0, notes: 0, rooms: rooms.length };
     for (const k of members) counts[k.startsWith('source:') ? 'sources' : k.startsWith('thread:') ? 'threads' : 'notes'] += 1;
     return {
-      id: r.id as string,
+      id,
       notebookId: r.notebook_id as string,
       title: r.title as string,
       createdAt: r.created_at as string,
@@ -1031,7 +1038,140 @@ export class Repo {
       members,
       counts,
       web: r.web === undefined ? true : Number(r.web) === 1,
+      parents: doors.filter((d) => d.child === id).map((d) => d.parent),
+      rooms,
     };
+  }
+
+  /** Rooms in rooms (ADR 0032): every door of a notebook, as (room, the room in it), in the order they were made. */
+  private doors(notebookId: string): Door[] {
+    return (
+      this.db.sql
+        .prepare(
+          `SELECT d.room_id, d.child_id FROM room_door d JOIN room r ON r.id = d.room_id
+           WHERE r.notebook_id = ? ORDER BY d.created_at, d.rowid`,
+        )
+        .all(notebookId) as Row[]
+    ).map((r) => ({ parent: r.room_id as string, child: r.child_id as string }));
+  }
+
+  /**
+   * What a room's brief is written from (ADR 0030): each thing in it as it is now, and (ADR 0032) the brief of each
+   * room in it as it was last written. A room with no rooms in it hashes as it did before rooms could hold rooms.
+   */
+  private briefBasisOf(roomId: string, members: string[], bases: Map<string, string>, doors: Door[]): string {
+    const keys = [...members];
+    const at = new Map(bases);
+    const written = this.db.sql.prepare('SELECT created_at FROM room_brief WHERE room_id = ?');
+    for (const d of doors) {
+      if (d.parent !== roomId) continue;
+      const key = `room:${d.child}`;
+      keys.push(key);
+      at.set(key, ((written.get(d.child) as Row | undefined)?.created_at as string | undefined) ?? '');
+    }
+    return briefBasis(keys, at);
+  }
+
+  /** Put a room in another (ADR 0032), at a place on its map if given; never inside itself, at any depth. */
+  putRoomIn(parentId: string, childId: string, at: { x?: number; y?: number } = {}, by: 'you' | 'assistant' = 'you'): Room {
+    return this.db.tx(() => {
+      const get = this.db.sql.prepare('SELECT id, notebook_id, title FROM room WHERE id = ?');
+      const parent = get.get(parentId) as Row | undefined;
+      const child = get.get(childId) as Row | undefined;
+      if (!parent || !child || parent.notebook_id !== child.notebook_id) throw new NotFoundError('room');
+      if (parentId === childId) throw new InvalidError('A room cannot be put inside itself.');
+      if (wouldLoop(this.doors(parent.notebook_id as string), parentId, childId)) {
+        throw new InvalidError(`“${parent.title as string}” is inside “${child.title as string}”, so “${child.title as string}” cannot go in it.`);
+      }
+      const t = now();
+      this.db.sql
+        .prepare(
+          `INSERT INTO room_door (room_id, child_id, x, y, added_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (room_id, child_id) DO UPDATE SET
+             x = coalesce(excluded.x, room_door.x), y = coalesce(excluded.y, room_door.y), updated_at = excluded.updated_at`,
+        )
+        .run(parentId, childId, at.x ?? null, at.y ?? null, by, t, t);
+      this.db.sql.prepare('UPDATE room SET updated_at = ? WHERE id = ?').run(t, parentId);
+      this.logEvent('room.put_in', parentId, { by });
+      return this.getRoom(parentId) as Room;
+    });
+  }
+
+  /** Take a room out of another; it stays where else it is, and in the list. */
+  takeRoomOut(parentId: string, childId: string): Room {
+    const room = this.getRoom(parentId);
+    if (!room) throw new NotFoundError('room');
+    const r = this.db.sql.prepare('DELETE FROM room_door WHERE room_id = ? AND child_id = ?').run(parentId, childId);
+    if (Number(r.changes) > 0) {
+      this.db.sql.prepare('UPDATE room SET updated_at = ? WHERE id = ?').run(now(), parentId);
+      this.logEvent('room.taken_out', parentId);
+    }
+    return this.getRoom(parentId) as Room;
+  }
+
+  /** Where the rooms in a room sit on its map. */
+  placeDoors(parentId: string, places: Array<{ room: string; x: number; y: number }>): void {
+    const put = this.db.sql.prepare('UPDATE room_door SET x = ?, y = ?, updated_at = ? WHERE room_id = ? AND child_id = ?');
+    const t = now();
+    this.db.tx(() => {
+      for (const p of places) put.run(Math.round(p.x), Math.round(p.y), t, parentId, p.room);
+    });
+  }
+
+  /** A door's row as it is, to put it back (the Assistant's Undo). */
+  doorRow(parentId: string, childId: string): Record<string, unknown> | null {
+    const r = this.db.sql.prepare('SELECT * FROM room_door WHERE room_id = ? AND child_id = ?').get(parentId, childId) as Row | undefined;
+    return r ? { ...r } : null;
+  }
+
+  putDoorRow(row: Record<string, unknown>): void {
+    const exists = this.db.sql.prepare('SELECT 1 FROM room WHERE id = ?');
+    if (!exists.get(row.room_id as string) || !exists.get(row.child_id as string)) return;
+    const cols = Object.keys(row);
+    this.db.sql
+      .prepare(`INSERT OR REPLACE INTO room_door (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`)
+      .run(...(cols.map((c) => row[c]) as Array<string | number | null>));
+  }
+
+  /** The rooms in a room, as doors: what each holds, a few of its things, its brief. */
+  private roomDoors(roomId: string, graph: RoomGraph, doors: Door[], bases: Map<string, string>): RoomDoor[] {
+    const known = new Map<string, { title: string; at: string }>();
+    for (const t of graph.threads) known.set(roomKey('thread', t.id), { title: t.title, at: t.updatedAt });
+    for (const x of graph.sources) known.set(roomKey('source', x.id), { title: x.title, at: x.updatedAt });
+    for (const n of graph.notes) known.set(roomKey('note', n.id), { title: n.title, at: n.updatedAt });
+    const getRoom = this.db.sql.prepare('SELECT * FROM room WHERE id = ?');
+    const getBrief = this.db.sql.prepare('SELECT * FROM room_brief WHERE room_id = ?');
+    const rows = this.db.sql.prepare('SELECT * FROM room_door WHERE room_id = ? ORDER BY created_at, rowid').all(roomId) as Row[];
+    return rows.flatMap((d) => {
+      const child = getRoom.get(d.child_id as string) as Row | undefined;
+      if (!child) return [];
+      const id = child.id as string;
+      const members = [...roomMembers(this.roomRows(id), graph).keys()];
+      const inner = doors.filter((x) => x.parent === id).map((x) => x.child);
+      const counts = { sources: 0, threads: 0, notes: 0, rooms: inner.length };
+      for (const k of members) counts[k.startsWith('source:') ? 'sources' : k.startsWith('thread:') ? 'threads' : 'notes'] += 1;
+      const brief = getBrief.get(id) as Row | undefined;
+      const titleOf = new Map(inner.map((c) => [c, ((getRoom.get(c) as Row | undefined)?.title as string | undefined) ?? '']));
+      const newest = [...members].sort((a, b) => (known.get(b)?.at ?? '').localeCompare(known.get(a)?.at ?? ''));
+      const things = [
+        ...inner.map((c) => ({ kind: 'room' as const, title: titleOf.get(c) ?? '' })),
+        ...newest.map((k) => ({ kind: k.slice(0, k.indexOf(':')) as 'thread' | 'source' | 'note', title: known.get(k)?.title ?? '' })),
+      ].slice(0, 4);
+      const kinds = [...inner.map(() => 'room' as const), ...members.map((k) => k.slice(0, k.indexOf(':')) as 'thread' | 'source' | 'note')].slice(0, 24);
+      return [
+        {
+          id,
+          title: child.title as string,
+          x: (d.x as number | null) ?? null,
+          y: (d.y as number | null) ?? null,
+          counts,
+          brief: brief ? (brief.text as string) : null,
+          fresh: brief ? brief.basis === this.briefBasisOf(id, members, bases, doors) : false,
+          things,
+          kinds,
+        },
+      ];
+    });
   }
 
   /** Whether questions asked in a room may search the web (ADR 0031). */
@@ -1083,14 +1223,17 @@ export class Repo {
   /** The notebook's rooms, in the order they were made: places stay put. */
   listRooms(notebookId: string): Room[] {
     const graph = this.roomGraph(notebookId);
+    const doors = this.doors(notebookId);
     return (
       this.db.sql.prepare('SELECT * FROM room WHERE notebook_id = ? ORDER BY created_at, rowid').all(notebookId) as Row[]
-    ).map((r) => this.toRoom(r, graph));
+    ).map((r) => this.toRoom(r, graph, doors));
   }
 
   getRoom(id: string): Room | null {
     const r = this.db.sql.prepare('SELECT * FROM room WHERE id = ?').get(id) as Row | undefined;
-    return r ? this.toRoom(r, this.roomGraph(r.notebook_id as string)) : null;
+    if (!r) return null;
+    const notebookId = r.notebook_id as string;
+    return this.toRoom(r, this.roomGraph(notebookId), this.doors(notebookId));
   }
 
   /** A room drawn: clusters of what belongs together, the lines between them, summaries and links (ADR 0027). */
@@ -1099,6 +1242,7 @@ export class Repo {
     if (!r) return null;
     const notebookId = r.notebook_id as string;
     const graph = this.roomGraph(notebookId);
+    const doors = this.doors(notebookId);
     const rows = this.roomRows(id);
     const { clusters, links } = roomMap(rows, graph);
     const members = [...roomMembers(rows, graph).keys()];
@@ -1123,20 +1267,40 @@ export class Repo {
           open: JSON.parse(b.open as string) as NonNullable<RoomView['brief']>['open'],
           model: b.model as string,
           at: b.created_at as string,
-          fresh: b.basis === briefBasis(members, bases),
+          fresh: b.basis === this.briefBasisOf(id, members, bases, doors),
         }
       : null;
-    return { room: this.toRoom(r, graph), clusters, links, gists, itemLinks, unread, brief, webFinds: this.roomWebFinds(id) };
+    return {
+      room: this.toRoom(r, graph, doors),
+      clusters,
+      links,
+      gists,
+      itemLinks,
+      unread,
+      brief,
+      webFinds: this.roomWebFinds(id),
+      doors: this.roomDoors(id, graph, doors, bases),
+    };
   }
 
   /** Which summaries a room's brief is written from, as one hash: a brief from other summaries is older. */
   roomBriefBasis(id: string): string | null {
     const room = this.roomMembersOf(id);
     if (!room) return null;
-    return briefBasis(
+    return this.briefBasisOf(
+      id,
       room.members.map((x) => roomKey(x.kind, x.id)),
       this.itemBases(room.notebookId),
+      this.doors(room.notebookId),
     );
+  }
+
+  /** The rooms in a room, with their briefs, for the bigger room's brief (ADR 0032). */
+  roomDoorsOf(id: string): RoomDoor[] {
+    const r = this.db.sql.prepare('SELECT notebook_id FROM room WHERE id = ?').get(id) as Row | undefined;
+    if (!r) return [];
+    const notebookId = r.notebook_id as string;
+    return this.roomDoors(id, this.roomGraph(notebookId), this.doors(notebookId), this.itemBases(notebookId));
   }
 
   saveRoomBrief(id: string, basis: string, text: string, open: NonNullable<RoomView['brief']>['open'], model: string): void {
@@ -1161,18 +1325,24 @@ export class Repo {
    * The room a thread is in, for its questions (ADR 0030): of the rooms holding it (or the thread a side question
    * is part of), the one whose brief was written last. Null if none has a brief.
    */
-  roomOfThread(threadId: string): { title: string; brief: string; open: string[] } | null {
+  roomOfThread(threadId: string): { title: string; brief: string; open: string[]; within?: string[] } | null {
     const ids = this.roomsOfThread(threadId).map((r) => r.id);
     if (ids.length === 0) return null;
     const row = this.db.sql
       .prepare(
-        `SELECT b.text, b.open, r.title FROM room_brief b JOIN room r ON r.id = b.room_id
+        `SELECT b.room_id, b.text, b.open, r.title FROM room_brief b JOIN room r ON r.id = b.room_id
          WHERE b.room_id IN (${ids.map(() => '?').join(', ')}) ORDER BY b.created_at DESC LIMIT 1`,
       )
       .get(...ids) as Row | undefined;
     if (!row) return null;
     const open = (JSON.parse(row.open as string) as Array<{ question: string }>).map((o) => o.question);
-    return { title: row.title as string, brief: row.text as string, open };
+    // The bigger rooms it is in (ADR 0032), by name.
+    const within = (
+      this.db.sql
+        .prepare('SELECT r.title FROM room_door d JOIN room r ON r.id = d.room_id WHERE d.child_id = ? ORDER BY d.created_at, d.rowid')
+        .all(row.room_id as string) as Row[]
+    ).map((x) => x.title as string);
+    return { title: row.title as string, brief: row.text as string, open, ...(within.length ? { within } : {}) };
   }
 
   /** The things in a room, as "kind:id", and its notebook. */
@@ -1400,7 +1570,8 @@ export class Repo {
     if (!room) return null;
     const items = this.db.sql.prepare('SELECT * FROM room_item WHERE room_id = ?').all(id) as Row[];
     const brief = this.db.sql.prepare('SELECT * FROM room_brief WHERE room_id = ?').get(id) as Row | undefined;
-    return { room: { ...room }, items: items.map((r) => ({ ...r })), brief: brief ? { ...brief } : null };
+    const doors = this.db.sql.prepare('SELECT * FROM room_door WHERE room_id = ? OR child_id = ?').all(id, id) as Row[];
+    return { room: { ...room }, items: items.map((r) => ({ ...r })), brief: brief ? { ...brief } : null, doors: doors.map((r) => ({ ...r })) };
   }
 
   /** A room put back as it was in a snapshot: its title, what was in and out of it, where things were. */
@@ -1412,10 +1583,22 @@ export class Repo {
         .run(...(cols.map((c) => row[c]) as Array<string | number | null>));
     };
     this.db.tx(() => {
-      put('room', snap.room);
+      // An upsert, not a replace: replacing the row would take what hangs on it (its doors, its pages found) with it.
+      const cols = Object.keys(snap.room);
+      this.db.sql
+        .prepare(
+          `INSERT INTO room (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})
+           ON CONFLICT (id) DO UPDATE SET ${cols.filter((c) => c !== 'id').map((c) => `${c} = excluded.${c}`).join(', ')}`,
+        )
+        .run(...(cols.map((c) => snap.room[c]) as Array<string | number | null>));
       this.db.sql.prepare('DELETE FROM room_item WHERE room_id = ?').run(snap.room.id as string);
       for (const r of snap.items) put('room_item', r);
       if (snap.brief) put('room_brief', snap.brief);
+      // Its doors both ways (ADR 0032), as they were; those to a room that is gone stay gone.
+      if (snap.doors) {
+        this.db.sql.prepare('DELETE FROM room_door WHERE room_id = ? OR child_id = ?').run(snap.room.id as string, snap.room.id as string);
+        for (const d of snap.doors) this.putDoorRow(d);
+      }
     });
     this.logEvent('room.restored', snap.room.id as string);
     return this.getRoom(snap.room.id as string) as Room;
@@ -1430,7 +1613,18 @@ export class Repo {
     const rows = this.db.sql.prepare("SELECT kind, item_id FROM room_item WHERE room_id = ? AND state = 'in'").all(fromId) as Row[];
     this.db.tx(() => {
       if (rows.length) this.addRoomItems(intoId, rows.map((r) => ({ kind: r.kind as RoomItemRef['kind'], id: r.item_id as string })), by);
+      // Rooms in rooms (ADR 0032): the rooms in the first go in the second, and the second goes where the first was;
+      // never so that a room would be inside itself.
+      const doors = this.db.sql.prepare('SELECT * FROM room_door WHERE room_id = ? OR child_id = ?').all(fromId, fromId) as Row[];
       this.db.sql.prepare('DELETE FROM room WHERE id = ?').run(fromId);
+      const notebookId = from.notebookId;
+      for (const d of doors) {
+        const [parent, child] = d.room_id === fromId ? [intoId, d.child_id as string] : [d.room_id as string, intoId];
+        if (parent === child || wouldLoop(this.doors(notebookId), parent, child)) continue;
+        this.db.sql
+          .prepare('INSERT OR IGNORE INTO room_door (room_id, child_id, x, y, added_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(parent, child, (d.x as number | null) ?? null, (d.y as number | null) ?? null, by, now(), now());
+      }
     });
     this.logEvent('room.merged', intoId, { from: fromId, items: rows.length });
     return this.getRoom(intoId) as Room;

@@ -21,6 +21,7 @@ import {
   LINK_WORDS,
   type LinkKind,
   type VaultTarget,
+  wouldLoop,
 } from '@noema/core';
 import { FileProblem, type Folders } from '../files/folders.ts';
 import { HttpError } from '../http/router.ts';
@@ -233,10 +234,55 @@ export async function planAction(
       const room = roomNamed(args.room as string);
       if (!room) return { refused: `No room is called “${args.room as string}”. List rooms to see them.` };
       const n = room.members.length;
+      const k = room.rooms.length;
+      const stay = [
+        ...(n ? [`${n === 1 ? 'the thing in it stays' : `the ${n} things in it stay`} in the notebook`] : []),
+        ...(k ? [k === 1 ? 'the room in it stays a room' : `the ${k} rooms in it stay rooms`] : []),
+      ];
       return {
         kind,
-        summary: `Delete the room ${q(room.title)}${n ? ` (${n === 1 ? 'the thing in it stays' : `the ${n} things in it stay`} in the notebook)` : ''}`,
+        summary: `Delete the room ${q(room.title)}${stay.length ? ` (${stay.join('; ')})` : ''}`,
         payload: { roomId: room.id },
+        open: null,
+      };
+    }
+    case 'put_room_in': {
+      const innerName = (args.room as string).trim();
+      const outerName = (args.into as string).trim();
+      const inner = roomNamed(innerName);
+      const outer = roomNamed(outerName);
+      if (!inner && !outer) return { refused: `No room is called “${innerName}” or “${outerName}”. List rooms to see them; one of the two may be new.` };
+      if (inner && outer) {
+        if (inner.id === outer.id) return { refused: 'A room cannot be put inside itself.' };
+        if (outer.rooms.includes(inner.id)) return { refused: `${q(inner.title)} is in ${q(outer.title)} already.` };
+        const doors = repo.listRooms(vault.notebook).flatMap((r) => r.rooms.map((child) => ({ parent: r.id, child })));
+        if (wouldLoop(doors, outer.id, inner.id)) {
+          return { refused: `${q(outer.title)} is inside ${q(inner.title)}, so ${q(inner.title)} cannot go in it.` };
+        }
+      }
+      const summary =
+        inner && outer
+          ? `Put the room ${q(inner.title)} in ${q(outer.title)}`
+          : inner
+            ? `Make the room ${q(outerName)} and put ${q(inner.title)} in it`
+            : `Make the room ${q(innerName)} inside ${q(outer?.title ?? outerName)}`;
+      return {
+        kind,
+        summary,
+        payload: { innerId: inner?.id ?? null, innerTitle: inner?.title ?? innerName, outerId: outer?.id ?? null, outerTitle: outer?.title ?? outerName },
+        open: null,
+      };
+    }
+    case 'take_room_out': {
+      const inner = roomNamed(args.room as string);
+      if (!inner) return { refused: `No room is called “${args.room as string}”. List rooms to see them.` };
+      const outer = roomNamed(args.from as string);
+      if (!outer) return { refused: `No room is called “${args.from as string}”. List rooms to see them.` };
+      if (!outer.rooms.includes(inner.id)) return { refused: `${q(inner.title)} is not in ${q(outer.title)}.` };
+      return {
+        kind,
+        summary: `Take the room ${q(inner.title)} out of ${q(outer.title)} (it stays a room, with all in it)`,
+        payload: { innerId: inner.id, outerId: outer.id },
         open: null,
       };
     }
@@ -496,7 +542,9 @@ type Undo =
   | { room: { roomId: string; made: boolean; before: Array<{ kind: 'thread' | 'source' | 'note'; id: string; state: 'in' | 'out' | 'placed' | null }> } }
   | { roomTitle: { roomId: string; title: string } }
   | { rooms: RoomSnapshot[] }
-  | { linkRow: Record<string, unknown> };
+  | { linkRow: Record<string, unknown> }
+  /** A room put in or taken out of another (ADR 0032): the door as it was (none), and the rooms made for it. */
+  | { door: { parent: string; child: string; before: Record<string, unknown> | null; made: string[] } };
 
 /** Runs, cancels and undoes what the Assistant proposed. */
 export class AssistantActions {
@@ -686,6 +734,36 @@ export class AssistantActions {
         repo.mergeRooms(from.room.id as string, into.room.id as string, 'assistant');
         return { open: null, undo: { rooms: [from, into] } };
       }
+      case 'put_room_in': {
+        const notebookId = this.notebookOf(a);
+        const made: string[] = [];
+        const roomFor = (id: unknown, title: unknown): string => {
+          if (id) {
+            if (!repo.getRoom(id as string)) throw new InvalidError('that room is not there any more');
+            return id as string;
+          }
+          const made1 = ulid();
+          repo.createRoom(made1, notebookId, title as string, [], 'assistant');
+          made.push(made1);
+          return made1;
+        };
+        const child = roomFor(p.innerId, p.innerTitle);
+        const parent = roomFor(p.outerId, p.outerTitle);
+        const before = repo.doorRow(parent, child);
+        try {
+          repo.putRoomIn(parent, child, {}, 'assistant');
+        } catch (err) {
+          for (const id of made) repo.deleteRoom(id);
+          throw err;
+        }
+        return { open: null, undo: { door: { parent, child, before, made } } };
+      }
+      case 'take_room_out': {
+        const before = repo.doorRow(p.outerId as string, p.innerId as string);
+        if (!before) throw new InvalidError('that room is not in there any more');
+        repo.takeRoomOut(p.outerId as string, p.innerId as string);
+        return { open: null, undo: { door: { parent: p.outerId as string, child: p.innerId as string, before, made: [] } } };
+      }
       case 'change_link': {
         const before = repo.itemLinkRow(p.linkId as string);
         if (!before) throw new InvalidError('that link is not there any more');
@@ -792,6 +870,12 @@ export class AssistantActions {
     else if ('roomTitle' in undo) repo.renameRoom(undo.roomTitle.roomId, undo.roomTitle.title);
     else if ('rooms' in undo) for (const snap of undo.rooms) repo.restoreRoom(snap);
     else if ('linkRow' in undo) repo.putItemLinkRow(undo.linkRow);
+    else if ('door' in undo) {
+      const { parent, child, before, made } = undo.door;
+      if (before) repo.putDoorRow(before);
+      else if (repo.getRoom(parent)) repo.takeRoomOut(parent, child);
+      for (const id of made) repo.deleteRoom(id);
+    }
     else if ('room' in undo) {
       if (undo.room.made) repo.deleteRoom(undo.room.roomId);
       else for (const x of undo.room.before) repo.setRoomItemState(undo.room.roomId, x, x.state);

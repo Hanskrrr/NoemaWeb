@@ -986,9 +986,12 @@ export const Room = z.object({
   updatedAt: z.string(),
   /** Everything in it, as "kind:id": what was put in and what came with it. */
   members: z.array(RoomKeySchema),
-  counts: z.object({ sources: z.number().int(), threads: z.number().int(), notes: z.number().int() }),
+  counts: z.object({ sources: z.number().int(), threads: z.number().int(), notes: z.number().int(), rooms: z.number().int().default(0) }),
   /** Questions asked in it may search the web (ADR 0031). */
   web: z.boolean().default(true),
+  /** Rooms in rooms (ADR 0032): the rooms it is in, in the order it was put in them, and the rooms in it. */
+  parents: z.array(Id).default([]),
+  rooms: z.array(Id).default([]),
 });
 export type Room = z.infer<typeof Room>;
 export const RoomList = z.object({ rooms: z.array(Room) });
@@ -1010,6 +1013,29 @@ export const AddRoomItemsRequest = z.object({
 export const RoomPlacesRequest = z.object({
   places: z.array(RoomItemRef.extend({ x: z.number().finite(), y: z.number().finite() })).min(1).max(500),
 });
+/** A room put in another (ADR 0032), at a place on its map if given. */
+export const PutRoomInRequest = z.object({ room: Id, x: z.number().finite().optional(), y: z.number().finite().optional() });
+export const DoorPlacesRequest = z.object({
+  doors: z.array(z.object({ room: Id, x: z.number().finite(), y: z.number().finite() })).min(1).max(200),
+});
+/**
+ * A room inside the room drawn (ADR 0032): a door, not its contents. It shows what the room holds (a picture, a few
+ * titles), its brief if it was read, and opens it.
+ */
+export const RoomDoor = z.object({
+  id: Id,
+  title: z.string(),
+  x: z.number().nullable(),
+  y: z.number().nullable(),
+  counts: z.object({ sources: z.number().int(), threads: z.number().int(), notes: z.number().int(), rooms: z.number().int() }),
+  /** What its brief says, if it was read; and whether things changed in it since. */
+  brief: z.string().nullable(),
+  fresh: z.boolean(),
+  /** A few of the things in it, newest first, and the kind of each thing in it (up to 24), for its picture. */
+  things: z.array(z.object({ kind: z.enum(['thread', 'source', 'note', 'room']), title: z.string() })),
+  kinds: z.array(z.enum(['thread', 'source', 'note', 'room'])),
+});
+export type RoomDoor = z.infer<typeof RoomDoor>;
 
 const RoomMarksSchema = z.object({
   questions: z.number().int(),
@@ -1101,7 +1127,7 @@ export const RoomView = z.object({
   brief: z
     .object({
       text: z.string(),
-      open: z.array(z.object({ question: z.string(), item: z.object({ kind: z.enum(['thread', 'source', 'note']), id: z.string() }).nullable() })),
+      open: z.array(z.object({ question: z.string(), item: z.object({ kind: z.enum(['thread', 'source', 'note', 'room']), id: z.string() }).nullable() })),
       model: z.string(),
       at: z.string(),
       /** Written from the summaries as they are now. */
@@ -1112,6 +1138,8 @@ export const RoomView = z.object({
   clusters: z.array(
     z.object({ key: RoomKeySchema, x: z.number().nullable(), y: z.number().nullable(), cards: z.array(RoomCardSchema) }),
   ),
+  /** The rooms inside it (ADR 0032), as doors. */
+  doors: z.array(RoomDoor).default([]),
   links: z.array(
     z.object({
       from: RoomKeySchema,

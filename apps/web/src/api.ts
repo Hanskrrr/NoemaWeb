@@ -300,6 +300,10 @@ export const api = {
   removeFromRoom: (id: string, item: RoomItemRef) => call(Room, 'POST', `/api/rooms/${id}/items/remove`, item),
   placeInRoom: (id: string, places: Array<RoomItemRef & { x: number; y: number }>) =>
     call(Ok, 'PUT', `/api/rooms/${id}/places`, { places }),
+  /** Rooms in rooms (ADR 0032): a room put in another, taken out, its door placed on the bigger room's map. */
+  putRoomIn: (id: string, room: string, at: { x?: number; y?: number } = {}) => call(Room, 'POST', `/api/rooms/${id}/rooms`, { room, ...at }),
+  takeRoomOut: (id: string, room: string) => call(Room, 'DELETE', `/api/rooms/${id}/rooms/${room}`),
+  placeDoors: (id: string, doors: Array<{ room: string; x: number; y: number }>) => call(Ok, 'PUT', `/api/rooms/${id}/door-places`, { doors }),
   // Reading a room (ADR 0027): summaries, then suggested links; and links drawn by hand.
   readRoom: (id: string) => call(z.object({ reading: RoomReading }), 'POST', `/api/rooms/${id}/read`, {}),
   createLink: (notebookId: string, id: string, from: RoomItemRef, to: RoomItemRef, kind: LinkKind, label: string | null = null) =>

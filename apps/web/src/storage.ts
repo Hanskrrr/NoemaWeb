@@ -60,4 +60,6 @@ export const keys = {
   filesOpen: 'noema:files-open',
   /** Whether "In no room yet" is open in Rooms. */
   roomsLooseOpen: 'noema:rooms-loose-open',
+  /** Rooms in the sidebar whose rooms inside are folded away (ADR 0032). */
+  roomsFolded: 'noema:rooms-folded',
 };

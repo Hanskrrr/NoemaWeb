@@ -115,3 +115,12 @@ test("a room's brief: the things numbered with their summaries; what is still op
   assert.equal(readBrief('{"open":[]}', 2), null);
   assert.equal(readBrief('nothing', 2), null);
 });
+
+test("a bigger room's brief is written from its rooms' briefs too, each a part of the subject (ADR 0032)", () => {
+  const req = briefRequest('Machine learning', [
+    { kind: 'source', title: 'Syllabus', gist: 'The course in twelve weeks.' },
+    { kind: 'room', title: 'ML systems', gist: 'Memory comes from activations; checkpointing trades compute for it.' },
+  ]);
+  assert.match(req[0]?.content ?? '', /"room" is a smaller room inside this one/);
+  assert.equal(req[1]?.content.split('\n')[2], '2. room “ML systems”: Memory comes from activations; checkpointing trades compute for it.');
+});

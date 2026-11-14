@@ -10,6 +10,9 @@ import {
   roomKey,
   roomMap,
   roomMembers,
+  roomsInside,
+  roomTree,
+  wouldLoop,
   settleClusters,
 } from '../src/index.ts';
 
@@ -167,4 +170,42 @@ test("a link's words go on its line where no card is, and not on each other", ()
   // Nowhere clear: still placed, on the line.
   const boxed = placeLabels([{ id: 'x', curve, w: 90, h: 20 }], [{ x: -1000, y: -1000, w: 3000, h: 3000 }]);
   assert.deepEqual(boxed.get('x'), { x: Math.round(curveAt(curve, 0.5).x), y: 28 });
+});
+
+test('rooms in rooms: what is inside at any depth, and no room put inside itself', () => {
+  // ML holds Systems; Systems holds Parallelism and Memory; Memory is in ML too.
+  const doors = [
+    { parent: 'ml', child: 'systems' },
+    { parent: 'systems', child: 'parallel' },
+    { parent: 'systems', child: 'memory' },
+    { parent: 'ml', child: 'memory' },
+  ];
+  assert.deepEqual([...roomsInside(doors, 'ml')].sort(), ['memory', 'parallel', 'systems']);
+  assert.deepEqual([...roomsInside(doors, 'parallel')], []);
+  assert.equal(wouldLoop(doors, 'parallel', 'ml'), true, 'ML is around Parallelism');
+  assert.equal(wouldLoop(doors, 'memory', 'memory'), true);
+  assert.equal(wouldLoop(doors, 'memory', 'parallel'), false, 'side by side: fine');
+  assert.equal(wouldLoop(doors, 'ml', 'parallel'), false, 'already inside, deeper: fine');
+});
+
+test('the rooms as a tree: rooms in no room first; a room in two rooms under each, saying where else', () => {
+  const tree = roomTree([
+    { id: 'ml', parents: [] },
+    { id: 'systems', parents: ['ml'] },
+    { id: 'memory', parents: ['systems', 'ml'] },
+    { id: 'cooking', parents: [] },
+    { id: 'gone-home', parents: ['no-such-room'] },
+  ]);
+  const show = (n: { id: string; alsoIn: string[]; children: typeof tree }): unknown => [n.id, n.alsoIn, n.children.map(show)];
+  assert.deepEqual(tree.map(show), [
+    ['ml', [], [['systems', [], [['memory', ['ml'], []]]], ['memory', ['systems'], []]]],
+    ['cooking', [], []],
+    ['gone-home', [], []],
+  ]);
+  // A loop (never made by Noema) still shows every room once at the top.
+  const looped = roomTree([
+    { id: 'a', parents: ['b'] },
+    { id: 'b', parents: ['a'] },
+  ]);
+  assert.deepEqual(looped.map(show), [['a', ['b'], [['b', [], []]]]]);
 });

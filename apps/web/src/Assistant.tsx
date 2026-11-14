@@ -584,6 +584,8 @@ const ACTION_GLYPH: Record<AssistantAction['kind'], string> = {
   rename_room: '⌂',
   delete_room: '⌂',
   merge_rooms: '⌂',
+  put_room_in: '⌂',
+  take_room_out: '⌂',
   change_link: '⟷',
   unlink: '⟷',
   write_file: '⌸',

@@ -81,7 +81,7 @@ test('a room holds a source with what was asked about it, and a note made from a
   });
   assert.equal(made.status, 201);
   assert.equal(made.json.title, 'ML systems');
-  assert.deepEqual(made.json.counts, { sources: 1, threads: 2, notes: 1 });
+  assert.deepEqual(made.json.counts, { sources: 1, threads: 2, notes: 1, rooms: 0 });
   // The same id again: the same room.
   assert.equal((await api(s, 'POST', `/api/notebooks/${notebookId}/rooms`, { id, title: 'Other' })).status, 200);
 
@@ -103,10 +103,10 @@ test('a room holds a source with what was asked about it, and a note made from a
 
   // Taking out a thread that came with the source: it stays out, with its note.
   const out = await api<Room>(s, 'POST', `/api/rooms/${id}/items/remove`, { kind: 'thread', id: t1.id });
-  assert.deepEqual(out.json.counts, { sources: 1, threads: 1, notes: 0 });
+  assert.deepEqual(out.json.counts, { sources: 1, threads: 1, notes: 0, rooms: 0 });
   // Put back by hand: in again.
   const back = await api<Room>(s, 'POST', `/api/rooms/${id}/items`, { items: [{ kind: 'thread', id: t1.id }] });
-  assert.deepEqual(back.json.counts, { sources: 1, threads: 2, notes: 1 });
+  assert.deepEqual(back.json.counts, { sources: 1, threads: 2, notes: 1, rooms: 0 });
 });
 
 test('a side question goes in as its thread; things are placed, moved, and stay where they were put', async () => {

@@ -471,6 +471,72 @@ test('sources from the web: asked in a room, it searches when the question needs
   await expect(page.getByTestId('room-web')).toHaveText('◎ Web off');
 });
 
+test('rooms in rooms: a room put in a bigger one is a door there; through it, the way back; a card drawn onto it goes in; never inside itself', async ({
+  page,
+  request,
+}) => {
+  await freshThread(request);
+  const a = await addSource(request, 'Course outline');
+  const b = await addNote(request, 'Activation memory');
+  await request.post(`/api/notes/${b}/blocks`, { data: { id: ulidish(), after: null, content: 'Saved activations fill memory.' }, headers: H });
+  const nb = await notebookId(request);
+  const big = ulidish();
+  const small = ulidish();
+  await request.post(`/api/notebooks/${nb}/rooms`, { data: { id: big, title: 'Machine learning', items: [{ kind: 'source', id: a }] }, headers: H });
+  await request.post(`/api/notebooks/${nb}/rooms`, { data: { id: small, title: 'ML systems', items: [{ kind: 'note', id: b }] }, headers: H });
+  await request.post(`/api/notebooks/${nb}/rooms`, { data: { id: ulidish(), title: 'Cooking' }, headers: H });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/#/room/${big}`);
+
+  // Room here: the rooms that can go in it, or a new one.
+  await page.getByTestId('room-room-here').click();
+  const here = page.getByTestId('room-here');
+  await expect(here.getByTestId('room-here-pick')).toHaveText(['⌂ ML systems', '⌂ Cooking']);
+  await here.getByTestId('room-here-pick').filter({ hasText: 'ML systems' }).click();
+  await expect(here).toHaveCount(0);
+  const door = page.getByTestId('room-door');
+  await expect(door).toHaveCount(1);
+  await expect(door).toContainText('ML systems');
+  await expect(door).toContainText('1 note');
+  await expect(door.locator('.room-door-tile')).toHaveCount(1);
+  await expect(page.getByTestId('room-meta')).toContainText('1 room inside');
+  // In the sidebar, it is under the bigger room.
+  if (!(await page.getByTestId('room-list').isVisible())) await page.getByTestId('rail-rooms').click();
+  await expect(page.locator(`[data-testid=room-link][data-room-id="${small}"]`)).toHaveAttribute('data-depth', '1');
+
+  // A card drawn onto the door goes in that room, and stays here until taken out.
+  const card = page.locator(`[data-testid=room-card][data-id="${a}"]`);
+  const cb = (await card.boundingBox()) as { x: number; y: number; width: number; height: number };
+  const db = (await door.boundingBox()) as typeof cb;
+  await page.mouse.move(cb.x + 40, cb.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(cb.x + 80, cb.y + 40, { steps: 3 });
+  await page.mouse.move(db.x + 60, db.y + 30, { steps: 8 });
+  await expect(door).toHaveClass(/is-target/);
+  await page.mouse.up();
+  await expect(page.getByTestId('room-put-into')).toContainText('“Course outline” is in “ML systems” now, and still here.');
+  await expect(door).toContainText('1 source · 1 note');
+  await page.getByTestId('room-put-into-move').click();
+  await expect(card).toHaveCount(0);
+
+  // Through the door: the way back above its name; the bigger room is not offered to go in it.
+  await door.getByTestId('room-door-open').click();
+  await expect(page).toHaveURL(new RegExp(`#/room/${small}`));
+  await expect(page.getByTestId('room-path-room')).toHaveText('⌂ Machine learning');
+  await expect(page.locator(`[data-testid=room-card][data-id="${a}"]`)).toBeVisible();
+  await page.getByTestId('room-room-here').click();
+  await expect(page.getByTestId('room-here-pick')).toHaveText(['⌂ Cooking']);
+  await page.getByTestId('room-here').getByRole('button', { name: 'Cancel' }).click();
+  // The small room read; then the bigger one, whose brief is written from it.
+  await page.getByTestId('room-read').click();
+  await expect(page.getByTestId('room-brief-text')).toHaveText('Fake brief of “ML systems”: 2 things, read in order.');
+  await page.getByTestId('room-path-room').click();
+  await expect(page).toHaveURL(new RegExp(`#/room/${big}`));
+  await expect(page.getByTestId('room-door-brief')).toContainText('Fake brief of “ML systems”');
+  await page.getByTestId('room-read').click();
+  await expect(page.getByTestId('room-brief-text')).toHaveText('Fake brief of “Machine learning”: 1 things, read in order. Its rooms: ML systems.');
+});
+
 /** What covers what on the map of a room. */
 async function coverings(page: Page) {
   return page.evaluate(() => {

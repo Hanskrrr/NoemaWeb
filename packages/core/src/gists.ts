@@ -204,6 +204,7 @@ export interface RoomBriefDraft {
 
 export const BRIEF_PROMPT = [
   "You write the brief of one room in a learner's study notebook: the room holds what they read, asked and wrote on one subject. You get its things numbered, each with a short summary.",
+  'A thing of the kind "room" is a smaller room inside this one, a part of the subject, given with its own brief; say how the parts fit together.',
   'Write in the language of the things. Plain text, no Markdown.',
   'Reply with one JSON object and nothing else:',
   '{"brief": "three or four sentences: what the room adds up to, in the order a learner would follow it, naming what builds on what",',
@@ -211,7 +212,14 @@ export const BRIEF_PROMPT = [
   'Open questions are ones the summaries say stayed unclear or were not answered; give at most 4, each with the number of the thing it is open in, and none if nothing is open. Never invent.',
 ].join('\n');
 
-export function briefRequest(title: string, items: LinkCandidate[]): ChatMessage[] {
+/** A thing in a room for its brief: a source, thread or note with its summary, or a room inside it with its brief (ADR 0032). */
+export interface BriefItem {
+  kind: LinkCandidate['kind'] | 'room';
+  title: string;
+  gist: string;
+}
+
+export function briefRequest(title: string, items: BriefItem[]): ChatMessage[] {
   const list = items.map((x, i) => `${i + 1}. ${x.kind} “${clean(x.title, 120) || 'Untitled'}”: ${clean(x.gist, 400)}`).join('\n');
   return [
     { role: 'system', content: BRIEF_PROMPT },

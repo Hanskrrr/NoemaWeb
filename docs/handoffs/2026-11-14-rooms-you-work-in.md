@@ -75,3 +75,43 @@ The work goes in rounds; this file grows with each.
     - finding sources for what is open;
     - Add to room reading a real local page.
   - 82 e2e (one new). One full run had `branch.spec` "a double-clicked word" fail once; it passed alone three times and in every other run.
+
+## Round 4 (ADR 0032): rooms in rooms
+
+- **Core.**
+  - `rooms.ts`: `Door`, `roomsInside`, `wouldLoop`, `roomTree`.
+  - Contract: `Room.parents` / `rooms` / `counts.rooms`; `RoomView.doors` (`RoomDoor`); a brief's open item can be a room; `PutRoomInRequest`, `DoorPlacesRequest`.
+  - `formatRoom` names the bigger rooms (`RoomContext.within`).
+  - `briefRequest` takes rooms (`BriefItem`).
+- **Server.**
+  - Migration 024: `room_door`.
+  - Repo:
+    - `putRoomIn`, which refuses loops in words;
+    - `takeRoomOut`, `placeDoors`, `doorRow` / `putDoorRow`;
+    - `roomDoors` in `roomView`, `roomDoorsOf`;
+    - `briefBasisOf`, with each inner brief's time, unchanged for rooms without rooms;
+    - doors in snapshots, an upsert in `restoreRoom`, doors moved in `mergeRooms`.
+  - Reader: the brief with the rooms inside.
+  - Routes: `POST /api/rooms/:id/rooms`, `DELETE /api/rooms/:id/rooms/:child`, `PUT /api/rooms/:id/door-places`.
+  - Assistant: `put_room_in` and `take_room_out`, with Undo; `list rooms` says where each is.
+  - Fake brief: names the rooms in it.
+- **Web.**
+  - `Rooms.tsx`: the tree, folds kept in storage, drag a room onto a room, `roomPlaceMenu`.
+  - `RoomView.tsx`:
+    - `DoorCard`, placed like clusters; doors move on drag;
+    - a card drawn onto a door goes in;
+    - `RoomWhere` (the way in), `RoomHere`;
+    - a room dropped on the map becomes a door.
+  - `App.tsx`: `roomVia` (the path), `putRoom` / `takeRoom`.
+  - `drag.ts`: room drags.
+- **Verified.**
+  - 347 unit tests. New, in core: loops and the tree. New, on the server (`rooms-in-rooms.test.ts`):
+    - doors, many homes, places, taking out;
+    - loops refused in words;
+    - delete and merge;
+    - the brief from briefs, older when one is read again;
+    - the bigger room named to a thread;
+    - an open question tied to a room inside;
+    - the Assistant with Undo.
+  - 83 e2e (one new): Room here, the door, the tree, a card drawn onto a door, the way back, no loop offered, the brief from briefs.
+  - Screenshots in light and dark looked right.

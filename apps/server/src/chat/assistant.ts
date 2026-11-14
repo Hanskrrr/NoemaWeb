@@ -512,8 +512,15 @@ export class VaultLookup {
       const sources = new Map(this.repo.listSources(this.notebookId).map((x) => [x.id, x]));
       const threads = new Map(this.repo.listThreads(this.notebookId).map((x) => [x.id, x]));
       const notes = new Map(this.repo.listNotes(this.notebookId).map((x) => [x.id, x]));
+      const nameOf = new Map(rooms.map((r) => [r.id, r.title]));
+      const names = (ids: string[]) => ids.map((id) => quoted(nameOf.get(id) ?? '')).join(', ');
       for (const r of rooms) {
-        out.push(`Room ${quoted(r.title)}: ${r.counts.sources} sources, ${r.counts.threads} threads, ${r.counts.notes} notes.`);
+        // Rooms in rooms (ADR 0032): where it is, and the rooms in it.
+        const where = [
+          ...(r.parents.length ? [`Inside ${names(r.parents)}.`] : []),
+          ...(r.rooms.length ? [`Rooms in it: ${names(r.rooms)}.`] : []),
+        ];
+        out.push(`Room ${quoted(r.title)}: ${r.counts.sources} sources, ${r.counts.threads} threads, ${r.counts.notes} notes.${where.length ? ` ${where.join(' ')}` : ''}`);
         for (const key of r.members.slice(0, 25)) {
           const at = key.indexOf(':');
           const kind = key.slice(0, at);

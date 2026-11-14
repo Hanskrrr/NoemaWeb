@@ -7,6 +7,7 @@ const KIND_LABELS: Record<SentPart['kind'], string> = {
   about_me: 'About you',
   source: 'What you are reading',
   pinned: 'Passages you pinned',
+  room: 'The room it is in',
   inherited: 'From the thread this came from',
   history: 'Earlier in this thread',
   question: 'Your question',

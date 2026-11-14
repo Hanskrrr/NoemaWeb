@@ -31,3 +31,24 @@ The work goes in rounds; this file grows with each.
   - merge by hand.
 
   Screenshots in dark, at 1440: at rest, in focus, Review.
+
+## Round 2 (ADR 0030): the room's brief, reading you can see, making things in the room
+
+- **Core.**
+  - `briefRequest` / `readBrief` (`gists.ts`).
+  - `RoomContext`, `formatRoom`, the `room` part in `assembleContext` and `describeSent` (`context.ts`).
+  - `RoomReading` gets the `brief` phase and `current`; `RoomView.brief`.
+- **Server.**
+  - Migration 022 `room_brief`.
+  - Repo: `roomBriefBasis` (a hash of each thing as it is now), `saveRoomBrief`, `roomOfThread`; the room snapshot keeps the brief.
+  - The reader writes the brief after the links and says which things it is summarizing; `generation.ts` passes the room to `assembleContext`.
+  - Fake model: purpose `brief` (`[[fail-brief]]`).
+- **Web.**
+  - `RoomBrief` (the brief, still open, Review, Read) and `CreateHere` (Ask, Note here, Source here) in `RoomView.tsx`; cards glow while read.
+  - `RoomTrail` (`Rooms.tsx`) above a thread, source or note.
+  - `App.tsx`: a source added from a room goes in it.
+  - What was sent: "The room it is in".
+- **Verified.**
+  - 331 unit tests. New: the room part sent and split back; the brief read; the brief written, older when a thing changes, and sent with a thread's next question.
+  - 81 e2e. New: a room you work in (brief, still open, ask here and What was sent, note here, source here, older).
+  - Screenshots of the brief in dark.

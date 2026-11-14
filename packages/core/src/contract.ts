@@ -587,6 +587,7 @@ export const MessageContext = z.object({
           'about_me',
           'source',
           'pinned',
+          'room',
           'inherited',
           'history',
           'origin',
@@ -1048,8 +1049,10 @@ export const Gist = z.object({
 });
 export type Gist = z.infer<typeof Gist>;
 export const RoomReading = z.object({
-  phase: z.enum(['summaries', 'links', 'done', 'failed']),
+  phase: z.enum(['summaries', 'links', 'brief', 'done', 'failed']),
   done: z.number().int(),
+  /** Things being summarized this moment ("kind:id"): the light passes over their cards. */
+  current: z.array(z.string()).default([]),
   total: z.number().int(),
   /** Links suggested this time. */
   suggested: z.number().int(),
@@ -1067,6 +1070,18 @@ export const RoomView = z.object({
   unread: z.number().int(),
   /** The last or current reading of the room, while the server remembers it. */
   reading: RoomReading.nullable(),
+  /** What the room adds up to, and what is still open in it (ADR 0030); null until the room is read. */
+  brief: z
+    .object({
+      text: z.string(),
+      open: z.array(z.object({ question: z.string(), item: z.object({ kind: z.enum(['thread', 'source', 'note']), id: z.string() }).nullable() })),
+      model: z.string(),
+      at: z.string(),
+      /** Written from the summaries as they are now. */
+      fresh: z.boolean(),
+    })
+    .nullable()
+    .default(null),
   clusters: z.array(
     z.object({ key: RoomKeySchema, x: z.number().nullable(), y: z.number().nullable(), cards: z.array(RoomCardSchema) }),
   ),

@@ -9,7 +9,7 @@ import { ApiFailure, api } from './api.ts';
 import { partLabel } from './sent.ts';
 
 const tokens = (n: number) => `about ${n.toLocaleString()} tokens`;
-const OPEN_BY_DEFAULT = new Set<SentPart['kind']>(['about_me', 'source', 'pinned', 'question']);
+const OPEN_BY_DEFAULT = new Set<SentPart['kind']>(['about_me', 'source', 'pinned', 'room', 'question']);
 
 export function ContextDialog({
   messageId,

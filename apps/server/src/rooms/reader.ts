@@ -6,6 +6,7 @@
 // progress is kept here for the room to show.
 
 import {
+  briefRequest,
   type ChosenLink,
   chooseLinkRequest,
   describeError,
@@ -13,6 +14,7 @@ import {
   type ItemLink,
   LINKS_MAX_ITEMS,
   linksRequest,
+  readBrief,
   readChosenLink,
   readGist,
   readLinks,
@@ -50,7 +52,7 @@ export class RoomReader {
   start(roomId: string): RoomReading {
     const now = this.readings.get(roomId);
     if (now && this.running.has(roomId)) return now;
-    const first: RoomReading = { phase: 'summaries', done: 0, total: 0, suggested: 0, error: null };
+    const first: RoomReading = { phase: 'summaries', done: 0, total: 0, suggested: 0, error: null, current: [] };
     this.readings.set(roomId, first);
     const run = this.run(roomId)
       .catch((err: unknown) => {
@@ -70,7 +72,7 @@ export class RoomReader {
   }
 
   private set(roomId: string, patch: Partial<RoomReading>): void {
-    const at = this.readings.get(roomId) ?? { phase: 'summaries', done: 0, total: 0, suggested: 0, error: null };
+    const at = this.readings.get(roomId) ?? { phase: 'summaries' as const, done: 0, total: 0, suggested: 0, error: null, current: [] };
     this.readings.set(roomId, { ...at, ...patch });
   }
 
@@ -94,6 +96,8 @@ export class RoomReader {
     const queue = [...todo];
     const worker = async () => {
       for (let item = queue.shift(); item; item = queue.shift()) {
+        const k = key(item);
+        this.set(roomId, { current: [...(this.readings.get(roomId)?.current ?? []), k] });
         try {
           await this.summarize(item, bases.get(key(item)) ?? '');
         } catch (err) {
@@ -107,7 +111,7 @@ export class RoomReader {
           }
         }
         const at = this.readings.get(roomId);
-        this.set(roomId, { done: (at?.done ?? 0) + 1 });
+        this.set(roomId, { done: (at?.done ?? 0) + 1, current: (at?.current ?? []).filter((x) => x !== k) });
       }
     };
     await Promise.all(Array.from({ length: Math.min(AT_ONCE, todo.length) }, worker));
@@ -151,6 +155,41 @@ export class RoomReader {
         if (this.repo.linkBetween(room.notebookId, from, to)) continue;
         this.repo.createItemLink(ulid(), room.notebookId, { from, to, kind: d.kind, why: d.why || null }, 'ai', 'suggested');
         suggested += 1;
+      }
+    }
+    // The brief: what the room adds up to, and what is still open in it (ADR 0030).
+    const basis = this.repo.roomBriefBasis(roomId);
+    const known2 = this.repo.gists(room.members.map(key));
+    const briefed = room.members.filter((x) => known2.has(key(x))).slice(0, LINKS_MAX_ITEMS);
+    if (basis && briefed.length > 0) {
+      this.set(roomId, { phase: 'brief' });
+      try {
+        const titles = this.titles(room.notebookId);
+        let raw = '';
+        for await (const ev of provider.stream({
+          messages: briefRequest(
+            room.title,
+            briefed.map((x) => ({ kind: x.kind, title: titles.get(key(x)) ?? '', gist: known2.get(key(x))?.text ?? '' })),
+          ),
+          maxTokens: 900,
+          light: true,
+          purpose: 'brief',
+          signal: AbortSignal.timeout(90_000),
+        })) {
+          if (ev.type === 'text') raw += ev.text;
+        }
+        const draft = readBrief(raw, briefed.length);
+        if (draft) {
+          const open = draft.open.map((o) => {
+            const at = o.from ? briefed[o.from - 1] : undefined;
+            return { question: o.question, item: at ? { kind: at.kind as 'thread' | 'source' | 'note', id: at.id } : null };
+          });
+          this.repo.saveRoomBrief(roomId, basis, draft.text, open, provider.model);
+        } else {
+          this.log.warn('could not read the room brief', { chars: raw.length });
+        }
+      } catch (err) {
+        if (!(err instanceof ProviderError)) this.log.warn('the room brief could not be written', { err });
       }
     }
     this.repo.logEvent('room.read', roomId, { summaries: todo.length - failed, failed, suggested, model: provider.model });

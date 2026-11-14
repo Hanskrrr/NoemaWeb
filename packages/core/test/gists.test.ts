@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CHOOSE_PROMPT, chooseLinkRequest, gistRequest, type ItemText, linksRequest, readChosenLink, readGist, readLinks } from '../src/index.ts';
+import { BRIEF_PROMPT, briefRequest, CHOOSE_PROMPT, chooseLinkRequest, readBrief, gistRequest, type ItemText, linksRequest, readChosenLink, readGist, readLinks } from '../src/index.ts';
 
 // A conversation of two exchanges, as the AI reads it for a summary.
 const q1 = 'Q: What does an all-reduce do?\nA: It sums the gradients of every worker and gives each worker the result.';
@@ -99,4 +99,19 @@ test('a line the learner drew: the AI is asked what it means from A to B, and it
   assert.deepEqual(readChosenLink('{"kind":"explains","flip":true,"why":"B explains A."}')?.flip, true);
   assert.equal(readChosenLink('{"kind":"causes","why":"?"}'), null);
   assert.equal(readChosenLink('no json'), null);
+});
+
+test("a room's brief: the things numbered with their summaries; what is still open tied to the thing it is open in", () => {
+  const req = briefRequest('ML systems', [
+    { kind: 'thread', title: 'Why is backprop memory-bound?', gist: 'Saved activations fill memory.' },
+    { kind: 'note', title: 'Checkpointing', gist: 'Recompute some activations.' },
+  ]);
+  assert.equal(req[0]?.content, BRIEF_PROMPT);
+  assert.equal(req[1]?.content, 'The room “ML systems”:\n1. thread “Why is backprop memory-bound?”: Saved activations fill memory.\n2. note “Checkpointing”: Recompute some activations.');
+  assert.deepEqual(
+    readBrief('{"brief":"Memory comes from activations.","open":[{"question":"How is what to drop chosen?","from":2},{"question":"Does precision halve it?","from":9},{"question":""}]}', 2),
+    { text: 'Memory comes from activations.', open: [{ question: 'How is what to drop chosen?', from: 2 }, { question: 'Does precision halve it?', from: null }] },
+  );
+  assert.equal(readBrief('{"open":[]}', 2), null);
+  assert.equal(readBrief('nothing', 2), null);
 });

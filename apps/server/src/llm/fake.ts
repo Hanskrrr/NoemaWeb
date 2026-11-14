@@ -219,6 +219,17 @@ export class FakeProvider implements ModelProvider {
       yield { type: 'finish', reason: 'stop' };
       return;
     }
+    if (req.purpose === 'brief') {
+      // A predictable brief: the room's name and how many things; one question open in the first thing.
+      if (question.includes('[[fail-brief]]')) throw new ProviderError('unavailable', 'fake failure: unavailable');
+      const room = /^The room “(.*)”:/m.exec(question)?.[1] ?? '';
+      const n = [...question.matchAll(/^(\d+)\. /gm)].length;
+      const first = /^1\. \w+ “(.*?)”/m.exec(question)?.[1] ?? '';
+      await sleep(this.delayMs, req.signal);
+      yield { type: 'text', text: JSON.stringify({ brief: `Fake brief of “${room}”: ${n} things, read in order.`, open: [{ question: `What is still unclear about ${first}?`, from: 1 }] }) };
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
     if (req.purpose === 'link-kind') {
       // A line the learner drew: "builds on", turned around if a title asks for it ([[flip-link]]).
       if (question.includes('[[fail-link-kind]]')) throw new ProviderError('unavailable', 'fake failure: unavailable');

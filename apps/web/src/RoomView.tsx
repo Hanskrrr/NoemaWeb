@@ -90,9 +90,12 @@ export function RoomView({
   notes,
   onOpen,
   onOpenTarget,
+  onAddSource,
   onDeleted,
 }: {
   roomId: string;
+  /** Add a source, which goes in this room (ADR 0030). */
+  onAddSource: () => void;
   /** A key point's words, where they are in the original. */
   onOpenTarget: (target: VaultTarget) => void;
   notebookId: string;
@@ -500,7 +503,7 @@ export function RoomView({
     return (
       // biome-ignore lint/a11y/noStaticElementInteractions: right-click is a shortcut; its button opens the thing, the menu key works on it
       <div
-        className={`room-card${head ? ' is-head' : ''} kind-${c.kind}${pickable || connecting?.over === key ? ' is-target' : ''}${linking?.key === key || connecting?.from === key ? ' is-linking' : ''}${pressing === key ? ' is-pressing' : ''}`}
+        className={`room-card${head ? ' is-head' : ''} kind-${c.kind}${pickable || connecting?.over === key ? ' is-target' : ''}${linking?.key === key || connecting?.from === key ? ' is-linking' : ''}${pressing === key ? ' is-pressing' : ''}${reading?.current.includes(key) ? ' is-reading' : ''}`}
         style={{ '--heat': Math.min(1, c.marks.questions / 12) } as CSSProperties}
         onMouseEnter={() => setFocusKey(key)}
         onMouseLeave={() => setFocusKey((k) => (k === key ? null : k))}
@@ -640,32 +643,6 @@ export function RoomView({
           </p>
         </div>
         <div className="room-actions">
-          {view.clusters.length > 0 && (
-            <button
-              type="button"
-              className={view.unread > 0 || busy ? `ai-button is-strong${busy ? ' is-busy' : ''}` : 'ai-button'}
-              onClick={() => void startReading()}
-              disabled={busy}
-              title="The AI writes each thing a short summary, its points linked to the words they come from, then suggests links between them for you to keep or dismiss. It uses your model."
-              data-testid="room-read"
-            >
-              <Orb size="small" />
-              {busy ? 'Reading…' : view.unread > 0 ? `Read with AI · ${view.unread} new` : 'Read again'}
-            </button>
-          )}
-          {suggested.length > 0 && (
-            <button
-              type="button"
-              className={`ai-button${reviewing ? ' is-on' : ''}`}
-              onClick={() => setReviewing((r) => !r)}
-              aria-expanded={reviewing}
-              title="Links the AI suggested: keep, change or dismiss each"
-              data-testid="room-review-open"
-            >
-              <Orb size="small" />
-              Review {suggested.length}
-            </button>
-          )}
           <button
             type="button"
             className={picking ? 'active' : 'quiet'}
@@ -799,16 +776,17 @@ export function RoomView({
           {status}
         </p>
       )}
-      {reading && (
-        <p className={`hint room-status${reading.phase === 'failed' ? ' is-error' : ''}`} role="status" data-testid="room-reading">
-          {reading.phase === 'summaries'
-            ? `Summarizing ${Math.min(reading.done + 1, reading.total)} of ${reading.total}…`
-            : reading.phase === 'links'
-              ? 'Looking for links between them…'
-              : reading.phase === 'failed'
-                ? reading.error
-                : `Read. ${reading.total ? `${reading.total === 1 ? '1 summary' : `${reading.total} summaries`} written` : 'Nothing new to summarize'}; ${plural(reading.suggested, 'link')} suggested${reading.suggested ? ': in Review, to keep or dismiss' : ''}.${reading.error ? ` ${reading.error}` : ''}`}
-        </p>
+      {view.clusters.length > 0 && (
+        <RoomBrief
+          view={view}
+          busy={busy}
+          suggested={suggested.length}
+          reviewing={reviewing}
+          onRead={() => void startReading()}
+          onReview={() => setReviewing((r) => !r)}
+          onOpen={(item) => onOpen(item.kind, item.id)}
+          titles={cards}
+        />
       )}
       {linking && (
         <p className="room-linking" role="status" data-testid="room-linking">
@@ -972,7 +950,211 @@ export function RoomView({
         })}
       </div>
       </div>
+      <CreateHere
+        title={room.title}
+        onAsk={async (question) => {
+          const threadId = ulid();
+          await api.createThread(notebookId, threadId);
+          // In the room before the question, so its first answer knows the room.
+          await api.addToRoom(roomId, [{ kind: 'thread', id: threadId }]);
+          await api.ask(threadId, ulid(), question);
+          await rooms.refresh();
+          onOpen('thread', threadId);
+        }}
+        onNote={async () => {
+          const noteId = ulid();
+          await api.createNote(notebookId, noteId);
+          await api.addToRoom(roomId, [{ kind: 'note', id: noteId }]);
+          await rooms.refresh();
+          onOpen('note', noteId);
+        }}
+        onSource={onAddSource}
+      />
     </section>
+  );
+}
+
+/**
+ * The room's brief (ADR 0030), the first thing in a room: what the AI made of it (what it adds up to, what is
+ * still open, what waits for review), or an invitation to read it; while it reads, how far it is.
+ */
+function RoomBrief({
+  view,
+  busy,
+  suggested,
+  reviewing,
+  onRead,
+  onReview,
+  onOpen,
+  titles,
+}: {
+  view: RoomViewData;
+  busy: boolean;
+  suggested: number;
+  reviewing: boolean;
+  onRead: () => void;
+  onReview: () => void;
+  onOpen: (item: { kind: RoomKind; id: string }) => void;
+  titles: Map<string, RoomCard>;
+}) {
+  const { brief, reading, unread } = view;
+  const things = view.clusters.reduce((n, c) => n + c.cards.length, 0);
+  const status = !reading
+    ? null
+    : reading.phase === 'summaries'
+      ? `Summarizing ${Math.min(reading.done + 1, reading.total)} of ${reading.total}…`
+      : reading.phase === 'links'
+        ? 'Looking for links between them…'
+        : reading.phase === 'brief'
+          ? 'Writing the brief: what the room adds up to…'
+          : reading.phase === 'failed'
+            ? reading.error
+            : `Read. ${reading.total ? `${reading.total === 1 ? '1 summary' : `${reading.total} summaries`} written` : 'Nothing new to summarize'}; ${plural(reading.suggested, 'link')} suggested${reading.suggested ? ': in Review, to keep or dismiss' : ''}.${reading.error ? ` ${reading.error}` : ''}`;
+  const progress = reading && busy ? (reading.phase === 'summaries' && reading.total > 0 ? reading.done / reading.total : reading.phase === 'links' ? 0.8 : 0.92) : null;
+  const readButton = (
+    <button type="button" className={`ai-button${unread > 0 || !brief ? ' is-strong' : ''}${busy ? ' is-busy' : ''}`} onClick={onRead} disabled={busy} data-testid="room-read">
+      <Orb size="small" />
+      {busy ? 'Reading…' : unread > 0 ? `Read with AI · ${unread} new` : 'Read again'}
+    </button>
+  );
+  return (
+    <section className={`room-brief${busy ? ' is-reading' : ''}${brief ? '' : ' is-empty'}`} aria-label="What the AI made of this room" data-testid="room-brief">
+      <div className="room-brief-main">
+        <div className="room-brief-head">
+          <Orb size="normal" />
+          <div>
+            <p className="room-brief-label">
+              {brief ? `AI · read ${day(brief.at)} · ${plural(things, 'thing')}${brief.fresh ? '' : ' · older: things changed since'}` : 'AI · not read yet'}
+            </p>
+            <h2>{brief ? 'What this room adds up to' : 'Read this room'}</h2>
+          </div>
+        </div>
+        {brief ? (
+          <p className={`room-brief-text${brief.fresh ? '' : ' is-stale'}`} data-testid="room-brief-text">
+            {brief.text}
+          </p>
+        ) : (
+          <p className="room-brief-text is-invite">
+            The AI writes each thing here a short summary, its points linked to the words they come from; then it
+            suggests links between them, and writes the room a brief: what it adds up to, and what is still open. It
+            uses your model: about {things + 2} calls.
+          </p>
+        )}
+        {status && (
+          <p className={`hint room-status${reading?.phase === 'failed' ? ' is-error' : ''}`} role="status" data-testid="room-reading">
+            {status}
+          </p>
+        )}
+        {progress !== null && (
+          <div className="room-brief-progress" aria-hidden>
+            <span style={{ width: `${Math.round(progress * 100)}%` }} />
+          </div>
+        )}
+      </div>
+      {brief && brief.open.length > 0 && (
+        <div className="room-brief-col" data-testid="room-open">
+          <p className="room-brief-label">Still open</p>
+          <ul>
+            {brief.open.map((o, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list
+              <li key={i}>
+                {o.item ? (
+                  <button
+                    type="button"
+                    className="room-open-q"
+                    onClick={() => o.item && onOpen(o.item)}
+                    title={`Open “${titles.get(`${o.item.kind}:${o.item.id}`)?.title ?? ''}”`}
+                    data-testid="room-open-q"
+                  >
+                    {o.question} <span aria-hidden>↗</span>
+                  </button>
+                ) : (
+                  <span>{o.question}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className="room-brief-col room-brief-actions">
+        {suggested > 0 && (
+          <>
+            <p className="room-brief-label">To review</p>
+            <p className="room-brief-count">⟷ {plural(suggested, 'link')} suggested</p>
+            <button type="button" className={`ai-button is-strong${reviewing ? ' is-on' : ''}`} onClick={onReview} aria-expanded={reviewing} data-testid="room-review-open">
+              <Orb size="small" />
+              Review {suggested}
+            </button>
+          </>
+        )}
+        {readButton}
+      </div>
+    </section>
+  );
+}
+
+/** Making things in the room (ADR 0030): a question starts a thread here; a note or a source goes in it. */
+function CreateHere({
+  title,
+  onAsk,
+  onNote,
+  onSource,
+}: {
+  title: string;
+  onAsk: (question: string) => Promise<void>;
+  onNote: () => Promise<void>;
+  onSource: () => void;
+}) {
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const run = async (what: () => Promise<void>) => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      await what();
+    } catch (err) {
+      setProblem(err instanceof ApiFailure ? err.message : 'It could not be made.');
+      setBusy(false);
+    }
+  };
+  const ask = () => {
+    const q = text.trim();
+    if (q && !busy) void run(() => onAsk(q));
+  };
+  return (
+    <div className="room-create" data-testid="room-create">
+      {problem && (
+        <p className="hint is-error" role="alert">
+          {problem}
+        </p>
+      )}
+      <div className="room-create-bar">
+        <button type="button" className="quiet" onClick={() => void run(onNote)} disabled={busy} data-testid="room-note-here">
+          ▤ Note here
+        </button>
+        <button type="button" className="quiet" onClick={onSource} disabled={busy} data-testid="room-source-here">
+          ❡ Source here
+        </button>
+        <textarea
+          value={text}
+          rows={1}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              ask();
+            }
+          }}
+          placeholder={`Ask in “${title}”: a new thread here, answered with what this room holds…`}
+          aria-label={`Ask in the room “${title}”`}
+          data-testid="room-ask"
+        />
+        <button type="button" className="primary" onClick={ask} disabled={busy || !text.trim()} data-testid="room-ask-send">
+          Ask
+        </button>
+      </div>
+    </div>
   );
 }
 

@@ -34,7 +34,7 @@ import { ConnectScreen, ModelDialog } from './ModelSettings.tsx';
 import { NoteView } from './NoteView.tsx';
 import { sourceFamily } from './reading.ts';
 import { RoomView } from './RoomView.tsx';
-import { type RoomsApi, RoomsContext, unitOf } from './Rooms.tsx';
+import { RoomTrail, type RoomsApi, RoomsContext, unitOf } from './Rooms.tsx';
 import { parseHash, type Route, toHash, useRoute } from './route.ts';
 import { ComeBack, isTyping, SearchDialog, searchShortcut } from './Search.tsx';
 import { Sidebar } from './Sidebar.tsx';
@@ -105,6 +105,8 @@ function NotebookView({
   const [roomNotice, setRoomNotice] = useState<string | null>(null);
   const [trash, setTrash] = useState<Trash>({ threads: [], notes: [], sources: [] });
   const [adding, setAdding] = useState(false);
+  /** A source added from a room goes in that room (ADR 0030). */
+  const [addingTo, setAddingTo] = useState<string | null>(null);
   const [contextFor, setContextFor] = useState<{ messageId: string; revisionId?: string | undefined } | null>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -582,6 +584,10 @@ function NotebookView({
         notes={notes}
         onOpen={(kind, id) => (kind === 'thread' ? open(id) : kind === 'source' ? openSource(id) : openNote(id))}
         onOpenTarget={openTarget}
+        onAddSource={() => {
+          setAddingTo(route.id);
+          setAdding(true);
+        }}
         onDeleted={() => {
           void refreshRooms();
           go({ kind: 'new' });
@@ -866,9 +872,19 @@ function NotebookView({
       {adding && (
         <AddSourceDialog
           notebookId={notebook.id}
-          onClose={() => setAdding(false)}
+          onClose={() => {
+            setAdding(false);
+            setAddingTo(null);
+          }}
           onAdded={(x) => {
             setAdding(false);
+            const room = addingTo;
+            setAddingTo(null);
+            if (room) {
+              // Added from a room: it goes in the room, and the room stays open.
+              void api.addToRoom(room, [{ kind: 'source', id: x.id }]).then(() => refresh(), () => refresh());
+              return;
+            }
             void refresh();
             openSource(x.id);
           }}
@@ -927,6 +943,9 @@ function NotebookView({
               onHide={() => setComeBack(null)}
               onSearch={() => setSearching(true)}
             />
+          )}
+          {route && (route.kind === 'thread' || route.kind === 'source' || route.kind === 'note') && (
+            <RoomTrail threads={threads ?? []} item={{ kind: route.kind, id: route.id }} />
           )}
           {route?.kind === 'assistant' && assistantId ? assistantChat('page') : main}
         </div>

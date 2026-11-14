@@ -77,6 +77,12 @@ type Row = Record<string, unknown>;
 
 const now = () => new Date().toISOString();
 
+/** What a brief is written from: each thing in the room as it is now, as one hash. A thing changed, added or taken out makes it older. */
+function briefBasis(members: string[], bases: Map<string, string>): string {
+  const parts = [...members].sort().map((k) => `${k}@${bases.get(k) ?? ''}`);
+  return createHash('sha256').update(parts.join('|')).digest('hex').slice(0, 32);
+}
+
 function toItemLink(r: Row): ItemLink {
   return {
     id: r.id as string,
@@ -308,6 +314,7 @@ export interface ModelCallEnd {
 export interface RoomSnapshot {
   room: Record<string, unknown>;
   items: Array<Record<string, unknown>>;
+  brief?: Record<string, unknown> | null;
 }
 
 export class Repo {
@@ -1042,7 +1049,60 @@ export class Repo {
     const itemLinks = this.listItemLinks(notebookId).filter(
       (l) => l.status !== 'dismissed' && inRoom.has(roomKey(l.from.kind, l.from.id)) && inRoom.has(roomKey(l.to.kind, l.to.id)),
     );
-    return { room: this.toRoom(r, graph), clusters, links, gists, itemLinks, unread };
+    const b = this.db.sql.prepare('SELECT * FROM room_brief WHERE room_id = ?').get(id) as Row | undefined;
+    const brief = b
+      ? {
+          text: b.text as string,
+          open: JSON.parse(b.open as string) as NonNullable<RoomView['brief']>['open'],
+          model: b.model as string,
+          at: b.created_at as string,
+          fresh: b.basis === briefBasis(members, bases),
+        }
+      : null;
+    return { room: this.toRoom(r, graph), clusters, links, gists, itemLinks, unread, brief };
+  }
+
+  /** Which summaries a room's brief is written from, as one hash: a brief from other summaries is older. */
+  roomBriefBasis(id: string): string | null {
+    const room = this.roomMembersOf(id);
+    if (!room) return null;
+    return briefBasis(
+      room.members.map((x) => roomKey(x.kind, x.id)),
+      this.itemBases(room.notebookId),
+    );
+  }
+
+  saveRoomBrief(id: string, basis: string, text: string, open: NonNullable<RoomView['brief']>['open'], model: string): void {
+    this.db.sql
+      .prepare(
+        `INSERT INTO room_brief (room_id, text, open, basis, model, created_at) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(room_id) DO UPDATE SET text = excluded.text, open = excluded.open, basis = excluded.basis, model = excluded.model, created_at = excluded.created_at`,
+      )
+      .run(id, text, JSON.stringify(open), basis, model, now());
+  }
+
+  /**
+   * The room a thread is in, for its questions (ADR 0030): of the rooms holding it (or the thread a side question
+   * is part of), the one whose brief was written last. Null if none has a brief.
+   */
+  roomOfThread(threadId: string): { title: string; brief: string; open: string[] } | null {
+    const t = this.getThread(threadId);
+    if (!t) return null;
+    const byId = new Map(this.roomGraph(t.notebookId).threads.map((x) => [x.id, x]));
+    const key = roomKey('thread', threadOf(threadId, byId));
+    const ids = this.listRooms(t.notebookId)
+      .filter((r) => (r.members as string[]).includes(key))
+      .map((r) => r.id);
+    if (ids.length === 0) return null;
+    const row = this.db.sql
+      .prepare(
+        `SELECT b.text, b.open, r.title FROM room_brief b JOIN room r ON r.id = b.room_id
+         WHERE b.room_id IN (${ids.map(() => '?').join(', ')}) ORDER BY b.created_at DESC LIMIT 1`,
+      )
+      .get(...ids) as Row | undefined;
+    if (!row) return null;
+    const open = (JSON.parse(row.open as string) as Array<{ question: string }>).map((o) => o.question);
+    return { title: row.title as string, brief: row.text as string, open };
   }
 
   /** The things in a room, as "kind:id", and its notebook. */
@@ -1269,7 +1329,8 @@ export class Repo {
     const room = this.db.sql.prepare('SELECT * FROM room WHERE id = ?').get(id) as Row | undefined;
     if (!room) return null;
     const items = this.db.sql.prepare('SELECT * FROM room_item WHERE room_id = ?').all(id) as Row[];
-    return { room: { ...room }, items: items.map((r) => ({ ...r })) };
+    const brief = this.db.sql.prepare('SELECT * FROM room_brief WHERE room_id = ?').get(id) as Row | undefined;
+    return { room: { ...room }, items: items.map((r) => ({ ...r })), brief: brief ? { ...brief } : null };
   }
 
   /** A room put back as it was in a snapshot: its title, what was in and out of it, where things were. */
@@ -1284,6 +1345,7 @@ export class Repo {
       put('room', snap.room);
       this.db.sql.prepare('DELETE FROM room_item WHERE room_id = ?').run(snap.room.id as string);
       for (const r of snap.items) put('room_item', r);
+      if (snap.brief) put('room_brief', snap.brief);
     });
     this.logEvent('room.restored', snap.room.id as string);
     return this.getRoom(snap.room.id as string) as Room;

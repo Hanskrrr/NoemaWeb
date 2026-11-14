@@ -358,6 +358,71 @@ test('drag from one card to another to link them: the line glows while the AI ch
   await expect(page).toHaveURL(new RegExp(`#/s/${a}`));
 });
 
+test('a room you work in: its brief and what is still open; asked, written and added from the room, each lands in it', async ({
+  page,
+  request,
+}) => {
+  await freshThread(request);
+  const a = await addSource(request, 'Activation memory');
+  const b = await addNote(request, 'Checkpointing');
+  const nb = await notebookId(request);
+  await request.post(`/api/notes/${b}/blocks`, { data: { id: ulidish(), after: null, content: 'Recompute some activations in the backward pass.' }, headers: H });
+  const room = ulidish();
+  await request.post(`/api/notebooks/${nb}/rooms`, {
+    data: { id: room, title: 'ML systems', items: [{ kind: 'source', id: a }, { kind: 'note', id: b }] },
+    headers: H,
+  });
+  await page.goto(`/#/room/${room}`);
+  // Not read yet: the brief invites reading, and says what it costs.
+  const brief = page.getByTestId('room-brief');
+  await expect(brief).toContainText('Read this room');
+  await expect(brief).toContainText('about 4 calls');
+  await brief.getByTestId('room-read').click();
+  await expect(page.getByTestId('room-brief-text')).toHaveText('Fake brief of “ML systems”: 2 things, read in order.');
+  await expect(brief).toContainText('What this room adds up to');
+  // What is still open opens the thing it is open in.
+  const open = page.getByTestId('room-open-q');
+  await expect(open).toContainText('What is still unclear about');
+  await open.first().click();
+  await expect(page).toHaveURL(/#\/(s|note)\/[0-9A-Z]{26}/);
+  await expect(page.getByTestId('room-trail-room')).toHaveText('⌂ ML systems');
+  await page.getByTestId('room-trail-room').click();
+  await expect(page).toHaveURL(new RegExp(`#/room/${room}`));
+
+  // Asked in the room: a thread in it, its question answered with the room's brief.
+  await page.getByTestId('room-ask').fill('Why is backprop memory-bound?');
+  await page.getByTestId('room-ask').press('Enter');
+  await expect(page).toHaveURL(/#\/t\/[0-9A-Z]{26}$/);
+  await expect(page.getByTestId('room-trail-room')).toHaveText('⌂ ML systems');
+  const answer = page.locator('.main [data-testid=message][data-role=assistant]').first();
+  await expect(answer).toHaveAttribute('data-status', 'done', { timeout: 15_000 });
+  await answer.getByTestId('show-context').click();
+  const part = page.getByTestId('context-part').filter({ hasText: 'The room it is in' });
+  await expect(part).toHaveCount(1);
+  await expect(part).toContainText('Fake brief of “ML systems”');
+  await page.keyboard.press('Escape');
+  await page.getByTestId('room-trail-room').click();
+  await expect(page.locator('[data-testid=room-card][data-kind=thread]')).toHaveCount(1);
+
+  // A note here: made, in the room, opened.
+  await page.getByTestId('room-note-here').click();
+  await expect(page).toHaveURL(/#\/note\/[0-9A-Z]{26}/);
+  await expect(page.getByTestId('room-trail-room')).toHaveText('⌂ ML systems');
+  await page.getByTestId('room-trail-room').click();
+  await expect(page.locator('[data-testid=room-card][data-kind=note]')).toHaveCount(2);
+
+  // A source here: added, in the room, and the room stays open.
+  await page.getByTestId('room-source-here').click();
+  await page.getByTestId('source-mode-paste').click();
+  await page.getByTestId('source-text-input').fill('# Mixed precision\n\nHalf precision halves activation memory.');
+  await page.getByTestId('source-add').click();
+  await expect(page.getByTestId('room-card').filter({ hasText: 'Mixed precision' })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`#/room/${room}`));
+  // Something new: the brief is older, and Read with AI says how many are new.
+  await expect(brief).toContainText('older: things changed since');
+  await expect(brief.getByTestId('room-read')).toContainText('new');
+});
+
 /** What covers what on the map of a room. */
 async function coverings(page: Page) {
   return page.evaluate(() => {

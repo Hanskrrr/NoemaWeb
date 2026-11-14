@@ -5823,3 +5823,207 @@ body.moving * {
   padding: 0.18rem 0.6rem;
   font-size: 0.82rem;
 }
+
+/* The room's brief (ADR 0030): the first thing in a room, in the AI's colours. */
+.room-brief {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr) auto;
+  gap: 0 1.2rem;
+  margin: 0 0 0.9rem;
+  padding: 0.9rem 1rem;
+  border-radius: 16px;
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient(var(--sheet), var(--sheet)) padding-box,
+    linear-gradient(120deg, var(--lf-a), var(--lf-b), var(--lf-c), var(--lf-d)) border-box;
+  box-shadow:
+    0 0 50px -20px color-mix(in srgb, var(--lf-b) 85%, transparent),
+    0 0 22px -14px color-mix(in srgb, var(--lf-c) 90%, transparent);
+}
+.room-brief.is-empty {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.room-brief-main {
+  min-width: 0;
+}
+.room-brief-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.room-brief-head .orb {
+  width: 2rem;
+  height: 2rem;
+}
+.room-brief-head h2 {
+  margin: 0;
+  font: 600 1.15rem / 1.25 var(--serif);
+}
+.room-brief-label {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.room-brief-text {
+  margin: 0.55rem 0 0;
+  font: 1rem / 1.55 var(--serif);
+  max-width: 62ch;
+  text-wrap: pretty;
+}
+.room-brief-text.is-invite {
+  font: 0.92rem / 1.5 var(--sans);
+  color: var(--ink-soft);
+}
+.room-brief-text.is-stale {
+  color: var(--ink-soft);
+}
+.room-brief .room-status {
+  margin: 0.45rem 0 0;
+}
+.room-brief-progress {
+  height: 4px;
+  margin-top: 0.5rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--rule) 70%, transparent);
+  overflow: hidden;
+}
+.room-brief-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--lf-a), var(--lf-b), var(--lf-c));
+  transition: width 0.5s ease;
+}
+.room-brief-col {
+  min-width: 0;
+  padding-left: 1.1rem;
+  border-left: 1px solid var(--rule);
+}
+.room-brief-col ul {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.room-open-q {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  text-align: left;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+.room-open-q span {
+  color: var(--accent);
+}
+.room-open-q:hover {
+  color: var(--accent);
+}
+.room-brief-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+.room-brief.is-empty .room-brief-actions {
+  justify-content: center;
+}
+.room-brief-count {
+  margin: 0;
+  font-size: 0.88rem;
+}
+@media (max-width: 900px) {
+  .room-brief {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.7rem;
+  }
+  .room-brief-col {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+/* A card being read: the AI's light passes over it. */
+.room-card.is-reading {
+  animation: card-reading 1.1s ease-in-out infinite alternate;
+}
+@keyframes card-reading {
+  from {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--lf-a) 70%, transparent),
+      0 0 10px -6px var(--lf-c);
+  }
+  to {
+    box-shadow:
+      0 0 0 2px var(--lf-b),
+      0 0 26px -4px var(--lf-c);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .room-card.is-reading {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--lf-b);
+  }
+}
+/* Making things in the room: at the foot of it, always at hand. */
+.room-create {
+  position: sticky;
+  bottom: 0.9rem;
+  z-index: 6;
+  margin-top: 0.8rem;
+}
+.room-create-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.4rem;
+  padding: 0.45rem 0.5rem 0.45rem 0.6rem;
+  border-radius: 16px;
+  border: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--sheet) 90%, transparent);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 16px 40px -18px rgba(0, 0, 0, 0.55);
+}
+.room-create-bar textarea {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  max-height: 8rem;
+  padding: 0.45rem 0.6rem;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  outline: none;
+}
+.room-create .is-error {
+  margin: 0 0 0.3rem;
+  color: var(--bad);
+}
+/* The rooms a thing lives in, above it. */
+.room-trail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.2rem 0 0.4rem;
+}
+.room-trail-room {
+  padding: 0.12rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--k-room) 40%, var(--rule));
+  background: color-mix(in srgb, var(--k-room) 12%, transparent);
+  color: color-mix(in srgb, var(--k-room) 75%, var(--ink));
+  font-size: 0.8rem;
+}
+.room-trail-room:hover {
+  border-color: var(--k-room);
+}
+/* Clear of the Assistant's orb in the corner. */
+.room-create {
+  margin-right: 4.4rem;
+}

@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
-import { type AskResponse, type AssistantAction, type ItemLink, type RoomView, type Source, ulid } from '@noema/core';
+import { type AskResponse, type AssistantAction, type ItemLink, type MessageContext, type RoomView, type Source, ulid } from '@noema/core';
 import { Db } from '../src/store/db.ts';
 import { Repo } from '../src/store/repo.ts';
 import { api, readEvents, startServer, type TestServer } from './helpers.ts';
@@ -184,6 +184,35 @@ test('a line the learner draws: the AI chooses what it means and why, turning it
   } finally {
     noModel.close();
   }
+});
+
+test("a room's brief: written after the summaries, older when a thing changes; a thread in the room is answered with it", async () => {
+  const src = (await api<Source>(s, 'POST', `/api/notebooks/${notebookId}/sources`, { id: ulid(), text: '# Activation memory\n\nSaved activations fill memory during training.' })).json;
+  const t = ulid();
+  await api(s, 'POST', `/api/notebooks/${notebookId}/threads`, { id: t });
+  const first = await api<AskResponse>(s, 'POST', `/api/threads/${t}/messages`, { id: ulid(), content: 'Why is backprop memory-bound?' });
+  await readEvents(`${s.base}/api/messages/${first.json.assistant.id}/events`);
+  const id = ulid();
+  await api(s, 'POST', `/api/notebooks/${notebookId}/rooms`, { id, title: 'ML systems', items: [{ kind: 'source', id: src.id }, { kind: 'thread', id: t }] });
+  assert.equal((await room(id)).brief, null);
+  const v = await read(id);
+  assert.equal(v.reading?.phase, 'done');
+  assert.deepEqual(v.reading?.current, []);
+  assert.equal(v.brief?.text, 'Fake brief of “ML systems”: 2 things, read in order.');
+  assert.equal(v.brief?.fresh, true);
+  assert.equal(v.brief?.open.length, 1);
+  assert.ok(v.brief?.open[0]?.item, 'the open question is tied to a thing in the room');
+
+  // Asked again in the thread: the room goes with the question, as its own part.
+  const next = await api<AskResponse>(s, 'POST', `/api/threads/${t}/messages`, { id: ulid(), content: 'And with checkpointing?' });
+  await readEvents(`${s.base}/api/messages/${next.json.assistant.id}/events`);
+  const sent = (await api<MessageContext>(s, 'GET', `/api/messages/${next.json.assistant.id}/context`)).json;
+  assert.ok(sent.manifest.parts.some((p) => p.kind === 'room'));
+  assert.match(sent.request?.[0]?.content ?? '', /## The room this conversation is in[\s\S]*room "ML systems"[\s\S]*Fake brief of “ML systems”[\s\S]*Still open in the room:\n- What is still unclear about/);
+
+  // The thread changed: its summary is older, and so is the brief; read again, fresh.
+  assert.equal((await room(id)).brief?.fresh, false);
+  assert.equal((await read(id)).brief?.fresh, true);
 });
 
 test('reading fails in words: without a model, or when the model fails', async () => {

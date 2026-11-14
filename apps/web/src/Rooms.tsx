@@ -116,6 +116,24 @@ function RoomRow({ room, active, onOpen }: { room: Room; active: boolean; onOpen
   );
 }
 
+/** The rooms a thread, source or note lives in (ADR 0030), above it: one click back to each. */
+export function RoomTrail({ threads, item }: { threads: Thread[]; item: { kind: DragItem['kind']; id: string } }) {
+  const rooms = useRooms();
+  const unit = unitOf(threads, item);
+  const key = `${unit.kind}:${unit.id}`;
+  const homes = rooms.rooms.filter((r) => (r.members as string[]).includes(key));
+  if (homes.length === 0) return null;
+  return (
+    <nav className="room-trail" aria-label="Rooms it is in" data-testid="room-trail">
+      {homes.map((r) => (
+        <button key={r.id} type="button" className="room-trail-room" onClick={() => rooms.openRoom(r.id)} data-testid="room-trail-room">
+          ⌂ {r.title}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
 export function RoomsPanel({
   threads,
   sources,

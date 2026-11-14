@@ -294,6 +294,7 @@ export class Generations {
             label: `Page ${page} of “${reading.title || 'Untitled'}”`,
           }))
         : [];
+    const room = this.repo.roomOfThread(args.threadId);
     const assemble = (withImages: SentImage[]) =>
       assembleContext({
         system: SYSTEM_PROMPT,
@@ -305,6 +306,8 @@ export class Generations {
           from: p.source ? ('source' as const) : ('conversation' as const),
           title: p.source ? p.source.title : (p.message?.threadTitle ?? ''),
         })),
+        // The room it is in, with what it adds up to and what is still open (ADR 0030).
+        ...(room ? { room } : {}),
         inherited: this.repo.inheritedHistory(args.threadId),
         ...(origin
           ? { origin: { quote: origin.anchor.exact } }

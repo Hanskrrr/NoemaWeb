@@ -195,3 +195,42 @@ export function readChosenLink(raw: string): ChosenLink | null {
   if (!parsed || typeof parsed.kind !== 'string' || !(LINK_KINDS as readonly string[]).includes(parsed.kind)) return null;
   return { kind: parsed.kind as LinkKind, why: clean(parsed.why, 240), flip: parsed.flip === true };
 }
+
+/** What a room adds up to (ADR 0030): a few sentences, and the questions still open in it. */
+export interface RoomBriefDraft {
+  text: string;
+  open: Array<{ question: string; /** The thing (its number in the list) it is open in, if one. */ from: number | null }>;
+}
+
+export const BRIEF_PROMPT = [
+  "You write the brief of one room in a learner's study notebook: the room holds what they read, asked and wrote on one subject. You get its things numbered, each with a short summary.",
+  'Write in the language of the things. Plain text, no Markdown.',
+  'Reply with one JSON object and nothing else:',
+  '{"brief": "three or four sentences: what the room adds up to, in the order a learner would follow it, naming what builds on what",',
+  ' "open": [{"question": "a question still open in the room, short", "from": n}]}',
+  'Open questions are ones the summaries say stayed unclear or were not answered; give at most 4, each with the number of the thing it is open in, and none if nothing is open. Never invent.',
+].join('\n');
+
+export function briefRequest(title: string, items: LinkCandidate[]): ChatMessage[] {
+  const list = items.map((x, i) => `${i + 1}. ${x.kind} “${clean(x.title, 120) || 'Untitled'}”: ${clean(x.gist, 400)}`).join('\n');
+  return [
+    { role: 'system', content: BRIEF_PROMPT },
+    { role: 'user', content: `The room “${clean(title, 120) || 'Untitled'}”:\n${list}` },
+  ];
+}
+
+/** The brief in the model's reply, its open questions tied to things in the list; null if it cannot be read. */
+export function readBrief(raw: string, count: number): RoomBriefDraft | null {
+  const parsed = jsonIn(raw) as { brief?: unknown; open?: unknown } | null;
+  if (!parsed) return null;
+  const text = clean(parsed.brief, 1200);
+  if (!text) return null;
+  const open: RoomBriefDraft['open'] = [];
+  for (const o of Array.isArray(parsed.open) ? parsed.open.slice(0, 4) : []) {
+    const question = clean((o as { question?: unknown })?.question, 200);
+    if (!question) continue;
+    const n = Number((o as { from?: unknown })?.from);
+    open.push({ question, from: Number.isInteger(n) && n >= 1 && n <= count ? n : null });
+  }
+  return { text, open };
+}

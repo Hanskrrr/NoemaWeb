@@ -28,6 +28,7 @@ import {
   CreateLinkRequest,
   CreateRoomRequest,
   UpdateLinkRequest,
+  MergeRoomRequest,
   RenameRoomRequest,
   RoomItemRef,
   RoomPlacesRequest,
@@ -303,15 +304,42 @@ export function createApp(deps: AppDeps): App {
     if (same) repo.deleteItemLink(same.id);
     sendJson(ctx.res, 201, repo.createItemLink(body.id, notebookId, body, 'you', 'accepted'));
   });
+  router.on('GET', '/api/links/:id', ({ res, params }) => {
+    const link = repo.getItemLink(params.id as string);
+    if (!link) throw notFound('link');
+    const { notebookId: _nb, ...view } = link;
+    sendJson(res, 200, view);
+  });
+  // A line the learner drew: the AI says what it means (ADR 0029).
+  router.on('POST', '/api/links/:id/choose', async ({ res, params }) => {
+    if (!repo.getItemLink(params.id as string)) throw notFound('link');
+    try {
+      sendJson(res, 200, await roomReader.chooseKind(params.id as string));
+    } catch (err) {
+      if (err instanceof ProviderError) throw new HttpError(409, err.kind, describeError(err.kind));
+      log.warn('the kind of a link could not be chosen', { err });
+      throw new HttpError(409, 'unavailable', 'The AI could not choose this time. Pick the kind yourself.');
+    }
+  });
   router.on('PATCH', '/api/links/:id', async (ctx) => {
     const body = await ctx.body(UpdateLinkRequest);
-    const link = repo.updateItemLink(ctx.params.id as string, body);
+    const was = repo.getItemLink(ctx.params.id as string);
+    // A line the learner drew and then changed: the AI's reason no longer says it.
+    const why = was && was.by === 'you' && (body.kind || body.flip || body.label !== undefined) ? { why: null } : {};
+    const link = repo.updateItemLink(ctx.params.id as string, { ...body, ...why });
     if (!link) throw notFound('link');
     sendJson(ctx.res, 200, link);
   });
   router.on('DELETE', '/api/links/:id', ({ res, params }) => {
     if (!repo.deleteItemLink(params.id as string)) throw notFound('link');
     sendJson(res, 200, { ok: true });
+  });
+  // One room into another (ADR 0029): what was put in the first is put in the second; the first goes.
+  router.on('POST', '/api/rooms/:id/merge', async (ctx) => {
+    const body = await ctx.body(MergeRoomRequest);
+    if (!repo.getRoom(ctx.params.id as string) || !repo.getRoom(body.into)) throw notFound('room');
+    if (body.into === ctx.params.id) throw new HttpError(400, 'invalid', 'A room cannot be merged into itself.');
+    sendJson(ctx.res, 200, repo.mergeRooms(ctx.params.id as string, body.into, 'you'));
   });
   router.on('PATCH', '/api/rooms/:id', async (ctx) => {
     const body = await ctx.body(RenameRoomRequest);

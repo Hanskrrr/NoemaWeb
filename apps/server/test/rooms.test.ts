@@ -6,6 +6,7 @@ import { after, before, test } from 'node:test';
 import {
   type AskResponse,
   type AssistantAction,
+  type ItemLink,
   type MessageContext,
   type Room,
   type RoomView,
@@ -191,6 +192,80 @@ test('the Assistant sees the rooms and what is in them, and puts things in one o
   assert.ok((await rooms()).some((r) => r.title === 'Systems reading'));
   await act(ran, 'undo');
   assert.ok(!(await rooms()).some((r) => r.title === 'Systems reading'));
+});
+
+test('the Assistant renames, deletes and merges rooms, and keeps, changes or removes links: each on Do it, with Undo', async () => {
+  const a = await thread('What is pipeline parallelism?');
+  const b = await thread('What is a pipeline bubble?');
+  const alpha = ulid();
+  const beta = ulid();
+  await api(s, 'POST', `/api/notebooks/${notebookId}/rooms`, { id: alpha, title: 'Alpha', items: [{ kind: 'thread', id: a.thread.id }] });
+  await api(s, 'POST', `/api/notebooks/${notebookId}/rooms`, { id: beta, title: 'Beta', items: [{ kind: 'thread', id: b.thread.id }] });
+  const titleOf = async (id: string) => (await rooms()).find((r) => r.id === id)?.title ?? null;
+
+  const renamed = await askAssistant('[[call:rename_room:{"room":"alpha","title":"Pipelines"}]]');
+  assert.equal(renamed.actions[0]?.summary, 'Rename the room “Alpha” to “Pipelines”');
+  const r1 = await act(renamed.actions[0] as AssistantAction, 'run');
+  assert.equal(await titleOf(alpha), 'Pipelines');
+  await act(r1, 'undo');
+  assert.equal(await titleOf(alpha), 'Alpha');
+
+  // Merged: what was put in Beta is in Alpha, and Beta is gone; Undo brings both back as they were.
+  const merged = await askAssistant('[[call:merge_rooms:{"from":"Beta","into":"Alpha"}]]');
+  assert.equal(merged.actions[0]?.summary, 'Merge the room “Beta” into “Alpha”');
+  const m1 = await act(merged.actions[0] as AssistantAction, 'run');
+  assert.equal(m1.status, 'done');
+  assert.equal(await titleOf(beta), null);
+  assert.ok((await rooms()).find((r) => r.id === alpha)?.members.includes(`thread:${b.thread.id}`));
+  await act(m1, 'undo');
+  assert.equal(await titleOf(beta), 'Beta');
+  assert.ok(!(await rooms()).find((r) => r.id === alpha)?.members.includes(`thread:${b.thread.id}`));
+  assert.ok((await rooms()).find((r) => r.id === beta)?.members.includes(`thread:${b.thread.id}`));
+
+  // Deleted: the room goes, what was in it stays; Undo brings the room back with it.
+  const deleted = await askAssistant('[[call:delete_room:{"room":"Beta"}]]');
+  assert.equal(deleted.actions[0]?.summary, 'Delete the room “Beta” (the thing in it stays in the notebook)');
+  const d1 = await act(deleted.actions[0] as AssistantAction, 'run');
+  assert.equal(await titleOf(beta), null);
+  assert.equal((await api(s, 'GET', `/api/threads/${b.thread.id}`)).status, 200);
+  await act(d1, 'undo');
+  assert.ok((await rooms()).find((r) => r.id === beta)?.members.includes(`thread:${b.thread.id}`));
+
+  // A link: kept, then removed; Undo puts each back.
+  const linkId = ulid();
+  await api(s, 'POST', `/api/notebooks/${notebookId}/links`, { id: linkId, from: { kind: 'thread', id: b.thread.id }, to: { kind: 'thread', id: a.thread.id }, kind: 'builds-on' });
+  const list = await askAssistant('[[list:threads]]');
+  const label = (title: string) => new RegExp(`\\[(\\d+)\\] “${title}”`).exec(list.tools[0] ?? '')?.[1];
+  const la = label('About What is pipeline parallelism') ?? label('What is pipeline parallelism?');
+  const lb = label('About What is a pipeline bubble') ?? label('What is a pipeline bubble?');
+  assert.ok(la && lb, list.tools[0]);
+  const turned = await askAssistant(`[[list:threads]] [[call:change_link:{"from":${la},"to":${lb},"kind":"explains","turn_around":true}]]`);
+  assert.match(turned.actions[0]?.summary ?? '', /^The link “.*” → “.*”: builds on: make it “explains”, turn it around$/);
+  const t1 = await act(turned.actions[0] as AssistantAction, 'run');
+  let link = (await api<ItemLink>(s, 'GET', `/api/links/${linkId}`)).json;
+  assert.deepEqual([link.kind, link.from.id], ['explains', a.thread.id]);
+  await act(t1, 'undo');
+  link = (await api<ItemLink>(s, 'GET', `/api/links/${linkId}`)).json;
+  assert.deepEqual([link.kind, link.from.id], ['builds-on', b.thread.id]);
+  const gone = await askAssistant(`[[list:threads]] [[call:unlink:{"from":${la},"to":${lb}}]]`);
+  const u1 = await act(gone.actions[0] as AssistantAction, 'run');
+  assert.equal((await api(s, 'GET', `/api/links/${linkId}`)).status, 404);
+  await act(u1, 'undo');
+  assert.equal((await api(s, 'GET', `/api/links/${linkId}`)).status, 200);
+});
+
+test('a room merged into another by hand: what was put in it is in the other, and it is gone', async () => {
+  const x = await thread('What is tensor parallelism?');
+  const one = ulid();
+  const two = ulid();
+  await api(s, 'POST', `/api/notebooks/${notebookId}/rooms`, { id: one, title: 'One', items: [{ kind: 'thread', id: x.thread.id }] });
+  await api(s, 'POST', `/api/notebooks/${notebookId}/rooms`, { id: two, title: 'Two' });
+  const merged = await api<Room>(s, 'POST', `/api/rooms/${one}/merge`, { into: two });
+  assert.equal(merged.status, 200);
+  assert.ok(merged.json.members.includes(`thread:${x.thread.id}`));
+  assert.equal((await api(s, 'GET', `/api/rooms/${one}`)).status, 404);
+  assert.equal((await api(s, 'POST', `/api/rooms/${two}/merge`, { into: two })).status, 400);
+  assert.equal((await api(s, 'POST', `/api/rooms/${two}/merge`, { into: ulid() })).status, 404);
 });
 
 test('a notebook from before rooms upgrades in place, with no rooms', () => {

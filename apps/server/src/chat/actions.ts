@@ -25,7 +25,7 @@ import {
 import { FileProblem, type Folders } from '../files/folders.ts';
 import { HttpError } from '../http/router.ts';
 import type { Logger } from '../log.ts';
-import { type AskPair, ConflictError, InvalidError, NotFoundError, type Repo, type StoredAction } from '../store/repo.ts';
+import { type AskPair, ConflictError, InvalidError, NotFoundError, type Repo, type RoomSnapshot, type StoredAction } from '../store/repo.ts';
 import type { Passage, VaultLookup } from './assistant.ts';
 import { fullTranscript } from './merges.ts';
 
@@ -70,6 +70,7 @@ export async function planAction(
   } catch {
     return { refused: 'The arguments were not valid JSON.' };
   }
+  const roomNamed = (name: string) => repo.listRooms(vault.notebook).find((r) => r.title.trim().toLowerCase() === name.trim().toLowerCase()) ?? null;
   const target = (ref: number): VaultTarget | string => vault.target(String(ref)) ?? `There is no label [${ref}] in this answer.`;
   const thread = (ref: number): (VaultTarget & { kind: 'thread' }) | string => {
     const t = target(ref);
@@ -221,6 +222,65 @@ export async function planAction(
         payload: { from: { kind: from.kind, id: from.id }, to: { kind: to.kind, id: to.id }, linkKind, words },
         open: null,
       };
+    }
+    case 'rename_room': {
+      const room = roomNamed(args.room as string);
+      if (!room) return { refused: `No room is called “${args.room as string}”. List rooms to see them.` };
+      const to = (args.title as string).trim();
+      return { kind, summary: `Rename the room ${q(room.title)} to ${q(to)}`, payload: { roomId: room.id, from: room.title, to }, open: null };
+    }
+    case 'delete_room': {
+      const room = roomNamed(args.room as string);
+      if (!room) return { refused: `No room is called “${args.room as string}”. List rooms to see them.` };
+      const n = room.members.length;
+      return {
+        kind,
+        summary: `Delete the room ${q(room.title)}${n ? ` (${n === 1 ? 'the thing in it stays' : `the ${n} things in it stay`} in the notebook)` : ''}`,
+        payload: { roomId: room.id },
+        open: null,
+      };
+    }
+    case 'merge_rooms': {
+      const from = roomNamed(args.from as string);
+      if (!from) return { refused: `No room is called “${args.from as string}”. List rooms to see them.` };
+      const into = roomNamed(args.into as string);
+      if (!into) return { refused: `No room is called “${args.into as string}”. List rooms to see them.` };
+      if (from.id === into.id) return { refused: 'That is the same room.' };
+      return { kind, summary: `Merge the room ${q(from.title)} into ${q(into.title)}`, payload: { fromId: from.id, intoId: into.id }, open: null };
+    }
+    case 'change_link':
+    case 'unlink': {
+      const a = target(args.from as number);
+      if (typeof a === 'string') return { refused: a };
+      const b = target(args.to as number);
+      if (typeof b === 'string') return { refused: b };
+      const link = repo.linkBetween(vault.notebook, itemOf(a), itemOf(b));
+      if (!link) return { refused: 'Those two are not linked.' };
+      const ends = link.from.id === itemOf(a).id ? [a, b] : [b, a];
+      const says = `${q(ends[0]?.title ?? '')} → ${q(ends[1]?.title ?? '')}: ${link.label ?? LINK_WORDS[link.kind]}`;
+      if (kind === 'unlink') return { kind, summary: `Remove the link ${says}`, payload: { linkId: link.id }, open: null };
+      const patch: { status?: 'accepted' | 'dismissed'; kind?: LinkKind; label?: string; flip?: boolean } = {};
+      const what: string[] = [];
+      if (args.dismiss) {
+        patch.status = 'dismissed';
+        what.push('dismiss it');
+      } else if (args.keep) {
+        patch.status = 'accepted';
+        what.push('keep it');
+      }
+      if (args.kind) {
+        patch.kind = args.kind as LinkKind;
+        what.push(`make it “${LINK_WORDS[args.kind as LinkKind]}”`);
+      }
+      if (args.words) {
+        patch.label = args.words as string;
+        what.push(`call it “${args.words as string}”`);
+      }
+      if (args.turn_around) {
+        patch.flip = true;
+        what.push('turn it around');
+      }
+      return { kind, summary: `The link ${says}: ${what.join(', ')}`, payload: { linkId: link.id, patch }, open: null };
     }
     case 'rename': {
       const t = target(args.ref as number);
@@ -433,7 +493,10 @@ type Undo =
   | { merge: { mergeId: string } }
   | { file: { backupId: string } }
   | { link: { linkId: string } }
-  | { room: { roomId: string; made: boolean; before: Array<{ kind: 'thread' | 'source' | 'note'; id: string; state: 'in' | 'out' | 'placed' | null }> } };
+  | { room: { roomId: string; made: boolean; before: Array<{ kind: 'thread' | 'source' | 'note'; id: string; state: 'in' | 'out' | 'placed' | null }> } }
+  | { roomTitle: { roomId: string; title: string } }
+  | { rooms: RoomSnapshot[] }
+  | { linkRow: Record<string, unknown> };
 
 /** Runs, cancels and undoes what the Assistant proposed. */
 export class AssistantActions {
@@ -605,6 +668,36 @@ export class AssistantActions {
         repo.createItemLink(id, notebookId, { from, to, kind: p.linkKind as LinkKind, label: (p.words as string | null) ?? null }, 'assistant', 'accepted');
         return { open: null, undo: { link: { linkId: id } } };
       }
+      case 'rename_room': {
+        const roomId = p.roomId as string;
+        if (!repo.renameRoom(roomId, p.to as string)) throw new InvalidError('that room is not there any more');
+        return { open: null, undo: { roomTitle: { roomId, title: p.from as string } } };
+      }
+      case 'delete_room': {
+        const snap = repo.roomSnapshot(p.roomId as string);
+        if (!snap) throw new InvalidError('that room is not there any more');
+        repo.deleteRoom(snap.room.id as string);
+        return { open: null, undo: { rooms: [snap] } };
+      }
+      case 'merge_rooms': {
+        const from = repo.roomSnapshot(p.fromId as string);
+        const into = repo.roomSnapshot(p.intoId as string);
+        if (!from || !into) throw new InvalidError('one of those rooms is not there any more');
+        repo.mergeRooms(from.room.id as string, into.room.id as string, 'assistant');
+        return { open: null, undo: { rooms: [from, into] } };
+      }
+      case 'change_link': {
+        const before = repo.itemLinkRow(p.linkId as string);
+        if (!before) throw new InvalidError('that link is not there any more');
+        repo.updateItemLink(p.linkId as string, p.patch as Parameters<Repo['updateItemLink']>[1]);
+        return { open: null, undo: { linkRow: before } };
+      }
+      case 'unlink': {
+        const before = repo.itemLinkRow(p.linkId as string);
+        if (!before) throw new InvalidError('that link is not there any more');
+        repo.deleteItemLink(p.linkId as string);
+        return { open: null, undo: { linkRow: before } };
+      }
       case 'rename': {
         const what = p.what as 'thread' | 'note' | 'source';
         rename(repo, what, p.id as string, p.to as string);
@@ -696,6 +789,9 @@ export class AssistantActions {
     else if ('proposal' in undo) repo.discardProposal(undo.proposal.noteId, undo.proposal.blockId);
     else if ('rename' in undo) rename(repo, undo.rename.what, undo.rename.id, undo.rename.title);
     else if ('link' in undo) repo.deleteItemLink(undo.link.linkId);
+    else if ('roomTitle' in undo) repo.renameRoom(undo.roomTitle.roomId, undo.roomTitle.title);
+    else if ('rooms' in undo) for (const snap of undo.rooms) repo.restoreRoom(snap);
+    else if ('linkRow' in undo) repo.putItemLinkRow(undo.linkRow);
     else if ('room' in undo) {
       if (undo.room.made) repo.deleteRoom(undo.room.roomId);
       else for (const x of undo.room.before) repo.setRoomItemState(undo.room.roomId, x, x.state);

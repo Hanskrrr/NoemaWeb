@@ -109,6 +109,22 @@ export const ActionArgs = {
   take_out_of_room: z.object({ refs: z.array(Ref).min(1).max(30), room: Title }),
   // Links between things (ADR 0027), read "from <kind> to".
   link: z.object({ from: Ref, to: Ref, kind: z.enum(LINK_KINDS), words: Title.optional() }),
+  // All it can do with rooms and links (ADR 0029): each still waits for Do it, with Undo.
+  rename_room: z.object({ room: Title, title: Title }),
+  delete_room: z.object({ room: Title }),
+  merge_rooms: z.object({ from: Title, into: Title }),
+  change_link: z
+    .object({
+      from: Ref,
+      to: Ref,
+      keep: z.boolean().optional(),
+      dismiss: z.boolean().optional(),
+      kind: z.enum(LINK_KINDS).optional(),
+      words: Title.optional(),
+      turn_around: z.boolean().optional(),
+    })
+    .refine((v) => v.keep || v.dismiss || v.kind || v.words || v.turn_around, 'say what to change'),
+  unlink: z.object({ from: Ref, to: Ref }),
 } as const;
 export type ActionKind = keyof typeof ActionArgs;
 export const ACTION_KINDS = Object.keys(ActionArgs) as ActionKind[];
@@ -357,6 +373,42 @@ function actionTools(): ToolSpec[] {
         },
         ['from', 'to', 'kind'],
       ),
+    },
+    {
+      name: 'rename_room',
+      description: `Give a room a new name.${proposed}`,
+      parameters: object({ room: str('The room\'s name now.'), title: str('Its new name.') }, ['room', 'title']),
+    },
+    {
+      name: 'delete_room',
+      description: `Take a room down. What was in it stays in the notebook; only the room goes.${proposed}`,
+      parameters: object({ room: str('The room\'s name.') }, ['room']),
+    },
+    {
+      name: 'merge_rooms',
+      description: `Merge one room into another: what was put in the first is put in the second, and the first is gone.${proposed}`,
+      parameters: object({ from: str('The room that goes.'), into: str('The room it goes into.') }, ['from', 'into']),
+    },
+    {
+      name: 'change_link',
+      description: `Change the link between two things (their labels, in either order): keep a suggested link, dismiss it (it is not suggested again), change its kind or words, or turn it around.${proposed}`,
+      parameters: object(
+        {
+          from: { type: 'integer', description: 'The label at one end.' },
+          to: { type: 'integer', description: 'The label at the other end.' },
+          keep: { type: 'boolean', description: 'Keep a suggested link.' },
+          dismiss: { type: 'boolean', description: 'Dismiss it.' },
+          kind: { type: 'string', enum: [...LINK_KINDS] },
+          words: str('Your own words for it.'),
+          turn_around: { type: 'boolean', description: 'Turn its direction around.' },
+        },
+        ['from', 'to'],
+      ),
+    },
+    {
+      name: 'unlink',
+      description: `Remove the link between two things (their labels).${proposed}`,
+      parameters: object({ from: { type: 'integer', description: 'One end.' }, to: { type: 'integer', description: 'The other end.' } }, ['from', 'to']),
     },
     {
       name: 'add_source',

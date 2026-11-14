@@ -105,7 +105,7 @@ test('right-click puts a note in a room, or in a new one; in the room, it is tak
   await expect(page.getByTestId('room-link').filter({ hasText: 'Exam prep' })).toContainText('1');
 });
 
-test('in a room, you choose what is in it; clusters stay where they are moved, after a reload too', async ({ page, request }) => {
+test('in a room, you choose what is in it; a card held a moment lifts its cluster to move it, kept after a reload', async ({ page, request }) => {
   await freshThread(request);
   const a = await addSource(request, 'Attention paper');
   const b = await addNote(request, 'Softmax note');
@@ -124,8 +124,11 @@ test('in a room, you choose what is in it; clusters stay where they are moved, a
   const box = before as { x: number; y: number; width: number; height: number };
   await page.mouse.move(box.x + 30, box.y + 12);
   await page.mouse.down();
+  // Held still a moment, it lifts; then it moves with the pointer.
+  await expect(first).toHaveClass(/is-lifted/);
   await page.mouse.move(box.x + 130, box.y + 152, { steps: 6 });
   await page.mouse.up();
+  await expect(first).not.toHaveClass(/is-lifted/);
   // Alt+arrow moves it on from the keyboard.
   await first.getByTestId('room-card-open').first().focus();
   await page.keyboard.press('Alt+ArrowRight');
@@ -207,19 +210,29 @@ test('read with AI: summaries whose points open the words they quote; suggested 
   await expect.poll(() => highlighted(page, 'noema-found')).toContain('Ring all-reduce');
   await page.goBack();
 
-  // The suggested link: dashed until kept; then its kind changed, and it is deleted.
+  // The suggested link waits in Review, not on the map; kept, it is drawn in its kind's colour.
   const label = page.getByTestId('link-label');
+  await expect(label).toHaveCount(0);
+  await page.getByTestId('room-review-open').click();
+  const row = page.getByTestId('review-row');
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText('“Parameter server” explains “Ring all-reduce”');
+  await expect(row).toContainText('Fake: 2 bears on 1.');
+  await row.getByTestId('link-keep').click();
+  await expect(page.getByTestId('room-review-open')).toHaveCount(0);
   await expect(label).toHaveCount(1);
-  await expect(label).toHaveAttribute('data-status', 'suggested');
-  await expect(label).toHaveText('explains?');
+  await expect(label).toHaveAttribute('data-status', 'accepted');
+  await expect(page.getByTestId('item-line')).toHaveAttribute('data-kind', 'explains');
+  await expect(page.getByTestId('room-legend')).toContainText('explains');
+  // At rest a dot; pointing at one of its cards shows its words.
+  await expect(label).toHaveClass(/is-dot/);
+  await page.locator(`[data-testid=room-card][data-id="${b}"]`).hover();
+  await expect(label).toHaveText('explains');
   // Nothing covers anything: a link's words are on no card, key points stay in their card, clusters apart.
   await expect.poll(() => coverings(page)).toEqual({ wordsOnCards: 0, pointsOut: 0, clustersOnClusters: 0 });
   await label.click();
   const editor = page.getByTestId('link-editor');
   await expect(editor).toContainText('“Parameter server” explains “Ring all-reduce”');
-  await expect(editor).toContainText('Suggested by the AI, not kept yet');
-  await editor.getByTestId('link-keep').click();
-  await expect(label).toHaveAttribute('data-status', 'accepted');
   await editor.getByTestId('link-kind').selectOption('contrasts-with');
   await expect(label).toHaveText('contrasts with');
   await editor.getByTestId('link-words').fill('central vs ring');
@@ -228,7 +241,7 @@ test('read with AI: summaries whose points open the words they quote; suggested 
   await editor.getByTestId('link-delete').click();
   await expect(label).toHaveCount(0);
 
-  // Drawn by hand: right-click, Link to…, pick the other card, then say what kind.
+  // Drawn from the menu: right-click, Link to…, pick the other card; the AI chooses what it means.
   await page.getByTestId('room-pick').click();
   await page.locator(`[data-testid=room-picker-row][data-id="${c}"] input`).check();
   const noteCard = page.locator(`[data-testid=room-card][data-id="${c}"]`);
@@ -237,8 +250,8 @@ test('read with AI: summaries whose points open the words they quote; suggested 
   await page.getByTestId('context-menu').getByTestId('menu-link-to').click();
   await expect(page.getByTestId('room-linking')).toContainText('Pick the card “Bandwidth note” links to');
   await card.getByTestId('room-card-open').click();
-  await expect(editor).toContainText('“Bandwidth note” is related to “Ring all-reduce”');
-  await expect(editor).toContainText('Drawn by you');
+  await expect(editor).toContainText('“Bandwidth note” builds on “Ring all-reduce”');
+  await expect(editor.getByTestId('link-by')).toHaveText('Drawn by you; the AI chose what it means: Fake: the AI chose builds on.');
   await editor.getByTestId('link-kind').selectOption('example-of');
   await expect(page.getByTestId('link-label')).toHaveText('is an example of');
   // Still on the room: picking a card in link mode did not open it.
@@ -296,6 +309,53 @@ test('with the Assistant open on a room, nothing of the room is drawn over it: f
   await last.scrollIntoViewIfNeeded();
   const [b, d] = [await last.boundingBox(), await dock.boundingBox()];
   expect(b && d && b.x + b.width <= d.x + 1).toBe(true);
+});
+
+test('drag from one card to another to link them: the line glows while the AI chooses what it means, then takes its colour', async ({
+  page,
+  request,
+}) => {
+  await freshThread(request);
+  const a = await addSource(request, 'Activation memory');
+  const b = await addSource(request, 'Checkpointing');
+  const nb = await notebookId(request);
+  const room = ulidish();
+  await request.post(`/api/notebooks/${nb}/rooms`, {
+    data: { id: room, title: 'Memory', items: [{ kind: 'source', id: a }, { kind: 'source', id: b }] },
+    headers: H,
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/#/room/${room}`);
+  await expect(page.getByTestId('room-cluster')).toHaveCount(2);
+  const from = page.locator(`[data-testid=room-card][data-id="${b}"]`);
+  const to = page.locator(`[data-testid=room-card][data-id="${a}"]`);
+  const fb = (await from.boundingBox()) as { x: number; y: number; width: number; height: number };
+  const tb = (await to.boundingBox()) as typeof fb;
+  // Pressed and moved at once: a line follows the pointer; the card under it is the target.
+  await page.mouse.move(fb.x + 40, fb.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(fb.x + 80, fb.y + 40, { steps: 3 });
+  await page.mouse.move(tb.x + 60, tb.y + 30, { steps: 8 });
+  await expect(to).toHaveClass(/is-target/);
+  await page.mouse.up();
+  // The AI chose; the line is kept, in its kind's colour, and its editor says why.
+  const editor = page.getByTestId('link-editor');
+  await expect(editor.getByTestId('link-by')).toHaveText('Drawn by you; the AI chose what it means: Fake: the AI chose builds on.');
+  await expect(editor).toContainText('“Checkpointing” builds on “Activation memory”');
+  await expect(page.getByTestId('item-line')).toHaveAttribute('data-kind', 'builds-on');
+  // Dragging did not open either card.
+  await expect(page.getByTestId('room')).toBeVisible();
+  // Drawn again between the same two: that link is shown, not a second one.
+  await page.keyboard.press('Escape');
+  await page.mouse.move(fb.x + 40, fb.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(tb.x + 60, tb.y + 30, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.getByTestId('room-status')).toContainText('Those two are linked already');
+  await expect(page.getByTestId('item-line')).toHaveCount(1);
+  // A click still opens the card.
+  await to.getByTestId('room-card-open').click();
+  await expect(page).toHaveURL(new RegExp(`#/s/${a}`));
 });
 
 /** What covers what on the map of a room. */

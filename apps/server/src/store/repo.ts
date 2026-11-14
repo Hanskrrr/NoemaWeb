@@ -304,6 +304,12 @@ export interface ModelCallEnd {
   errorKind?: ErrorKind | null | undefined;
 }
 
+/** A room and its rows, as stored (see Repo.roomSnapshot). */
+export interface RoomSnapshot {
+  room: Record<string, unknown>;
+  items: Array<Record<string, unknown>>;
+}
+
 export class Repo {
   readonly db: Db;
 
@@ -1199,7 +1205,10 @@ export class Repo {
     });
   }
 
-  updateItemLink(id: string, patch: { kind?: LinkKind; label?: string | null; status?: 'accepted' | 'dismissed'; flip?: boolean }): ItemLink | null {
+  updateItemLink(
+    id: string,
+    patch: { kind?: LinkKind; label?: string | null; status?: 'accepted' | 'dismissed'; flip?: boolean; why?: string | null },
+  ): ItemLink | null {
     const l = this.getItemLink(id);
     if (!l) return null;
     const from = patch.flip ? l.to : l.from;
@@ -1208,7 +1217,7 @@ export class Repo {
     const status = patch.status ?? (l.status === 'suggested' && (patch.kind || patch.label !== undefined || patch.flip) ? 'accepted' : l.status);
     this.db.sql
       .prepare(
-        `UPDATE item_link SET from_kind = ?, from_id = ?, to_kind = ?, to_id = ?, kind = ?, label = ?, status = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE item_link SET from_kind = ?, from_id = ?, to_kind = ?, to_id = ?, kind = ?, label = ?, why = ?, status = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         from.kind,
@@ -1217,6 +1226,7 @@ export class Repo {
         to.id,
         patch.kind ?? l.kind,
         patch.label === undefined ? l.label : patch.label?.trim() || null,
+        patch.why === undefined ? l.why : patch.why,
         status,
         now(),
         id,
@@ -1252,6 +1262,59 @@ export class Repo {
   renameRoom(id: string, title: string): Room | null {
     const r = this.db.sql.prepare('UPDATE room SET title = ?, updated_at = ? WHERE id = ?').run(title.trim(), now(), id);
     return Number(r.changes) > 0 ? this.getRoom(id) : null;
+  }
+
+  /** Everything a room is, as rows: to bring it back after it was deleted or merged (the Assistant's Undo). */
+  roomSnapshot(id: string): RoomSnapshot | null {
+    const room = this.db.sql.prepare('SELECT * FROM room WHERE id = ?').get(id) as Row | undefined;
+    if (!room) return null;
+    const items = this.db.sql.prepare('SELECT * FROM room_item WHERE room_id = ?').all(id) as Row[];
+    return { room: { ...room }, items: items.map((r) => ({ ...r })) };
+  }
+
+  /** A room put back as it was in a snapshot: its title, what was in and out of it, where things were. */
+  restoreRoom(snap: RoomSnapshot): Room {
+    const put = (table: string, row: Record<string, unknown>) => {
+      const cols = Object.keys(row);
+      this.db.sql
+        .prepare(`INSERT OR REPLACE INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`)
+        .run(...(cols.map((c) => row[c]) as Array<string | number | null>));
+    };
+    this.db.tx(() => {
+      put('room', snap.room);
+      this.db.sql.prepare('DELETE FROM room_item WHERE room_id = ?').run(snap.room.id as string);
+      for (const r of snap.items) put('room_item', r);
+    });
+    this.logEvent('room.restored', snap.room.id as string);
+    return this.getRoom(snap.room.id as string) as Room;
+  }
+
+  /** One room taken into another: what was put in the first is put in the second, and the first is gone. */
+  mergeRooms(fromId: string, intoId: string, by: 'you' | 'assistant' = 'you'): Room {
+    const from = this.getRoom(fromId);
+    const into = this.getRoom(intoId);
+    if (!from || !into) throw new NotFoundError('room');
+    if (from.id === into.id) throw new InvalidError('a room cannot be merged into itself');
+    const rows = this.db.sql.prepare("SELECT kind, item_id FROM room_item WHERE room_id = ? AND state = 'in'").all(fromId) as Row[];
+    this.db.tx(() => {
+      if (rows.length) this.addRoomItems(intoId, rows.map((r) => ({ kind: r.kind as RoomItemRef['kind'], id: r.item_id as string })), by);
+      this.db.sql.prepare('DELETE FROM room WHERE id = ?').run(fromId);
+    });
+    this.logEvent('room.merged', intoId, { from: fromId, items: rows.length });
+    return this.getRoom(intoId) as Room;
+  }
+
+  /** A link's row as it is, to put it back after a change (the Assistant's Undo). */
+  itemLinkRow(id: string): Record<string, unknown> | null {
+    const r = this.db.sql.prepare('SELECT * FROM item_link WHERE id = ?').get(id) as Row | undefined;
+    return r ? { ...r } : null;
+  }
+
+  putItemLinkRow(row: Record<string, unknown>): void {
+    const cols = Object.keys(row);
+    this.db.sql
+      .prepare(`INSERT OR REPLACE INTO item_link (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`)
+      .run(...(cols.map((c) => row[c]) as Array<string | number | null>));
   }
 
   /** A room is taken down; what was in it stays where it is. */

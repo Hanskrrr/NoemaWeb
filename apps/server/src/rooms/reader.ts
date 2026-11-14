@@ -6,10 +6,14 @@
 // progress is kept here for the room to show.
 
 import {
+  type ChosenLink,
+  chooseLinkRequest,
   describeError,
   gistRequest,
+  type ItemLink,
   LINKS_MAX_ITEMS,
   linksRequest,
+  readChosenLink,
   readGist,
   readLinks,
   type RoomItemRef,
@@ -155,6 +159,40 @@ export class RoomReader {
       suggested,
       error: failed > 0 ? `${failed} of ${todo.length} could not be summarized${firstError ? `: ${firstError}` : '.'}` : null,
     });
+  }
+
+  /**
+   * A line the learner drew (ADR 0029): the model reads both ends (their
+   * summaries, or the start of their text) and says what the line means and
+   * why, turning it around if it reads better the other way. The link stays
+   * the learner's; its kind and reason are the AI's until they change them.
+   */
+  async chooseKind(linkId: string): Promise<ItemLink> {
+    const link = this.repo.getItemLink(linkId);
+    if (!link) throw new Error('no such link');
+    const provider = this.models.current();
+    if (!provider.configured) throw new ProviderError('not_configured', 'no model');
+    const titles = this.titles(link.notebookId);
+    const gists = this.repo.gists([roomKey(link.from.kind, link.from.id), roomKey(link.to.kind, link.to.id)]);
+    const end = (x: RoomItemRef) => ({
+      kind: x.kind as 'thread' | 'source' | 'note',
+      title: titles.get(roomKey(x.kind, x.id)) ?? '',
+      text: gists.get(roomKey(x.kind, x.id))?.text ?? this.repo.itemText(x)?.text ?? '',
+    });
+    let raw = '';
+    for await (const ev of provider.stream({
+      messages: chooseLinkRequest(end(link.from), end(link.to)),
+      maxTokens: 300,
+      light: true,
+      purpose: 'link-kind',
+      signal: AbortSignal.timeout(60_000),
+    })) {
+      if (ev.type === 'text') raw += ev.text;
+    }
+    const chosen: ChosenLink | null = readChosenLink(raw);
+    if (!chosen) throw new Error('the kind could not be read');
+    this.repo.logEvent('link.chosen', linkId, { kind: chosen.kind, flip: chosen.flip, model: provider.model });
+    return this.repo.updateItemLink(linkId, { kind: chosen.kind, flip: chosen.flip, why: chosen.why || null }) as ItemLink;
   }
 
   private async summarize(item: RoomItemRef, basis: string): Promise<void> {

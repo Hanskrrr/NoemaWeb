@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { gistRequest, type ItemText, linksRequest, readGist, readLinks } from '../src/index.ts';
+import { CHOOSE_PROMPT, chooseLinkRequest, gistRequest, type ItemText, linksRequest, readChosenLink, readGist, readLinks } from '../src/index.ts';
 
 // A conversation of two exchanges, as the AI reads it for a summary.
 const q1 = 'Q: What does an all-reduce do?\nA: It sums the gradients of every worker and gives each worker the result.';
@@ -82,4 +82,21 @@ test('links are suggested over the summaries; only numbers in the list, known ki
     { from: 3, to: 2, kind: 'part-of', why: '' },
   ]);
   assert.equal(readLinks('{"nope": 1}', 3), null);
+});
+
+test('a line the learner drew: the AI is asked what it means from A to B, and its answer is read with care', () => {
+  const req = chooseLinkRequest(
+    { kind: 'thread', title: 'Why is backprop memory-bound?', text: 'Saved activations fill memory.' },
+    { kind: 'note', title: 'Computational graphs', text: 'x'.repeat(5000) },
+  );
+  assert.equal(req[0]?.content, CHOOSE_PROMPT);
+  assert.match(req[1]?.content ?? '', /^A\. thread “Why is backprop memory-bound\?”:\nSaved activations fill memory\.\n\nB\. note “Computational graphs”:\nx{1500}$/);
+  assert.deepEqual(readChosenLink('Sure: {"kind":"builds-on","flip":false,"why":"It needs the graph first."}'), {
+    kind: 'builds-on',
+    why: 'It needs the graph first.',
+    flip: false,
+  });
+  assert.deepEqual(readChosenLink('{"kind":"explains","flip":true,"why":"B explains A."}')?.flip, true);
+  assert.equal(readChosenLink('{"kind":"causes","why":"?"}'), null);
+  assert.equal(readChosenLink('no json'), null);
 });

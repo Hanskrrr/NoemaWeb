@@ -151,6 +151,41 @@ test('links are accepted, changed, turned around, dismissed (and stay away), del
   assert.equal((await room(roomId)).itemLinks.length, 1);
 });
 
+test('a line the learner draws: the AI chooses what it means and why, turning it around if it reads better so; changed by hand, the reason goes', async () => {
+  const a = (await api<Source>(s, 'POST', `/api/notebooks/${notebookId}/sources`, { id: ulid(), text: '# Ring all-reduce\n\nEach worker sends to the next.' })).json;
+  const b = (await api<Source>(s, 'POST', `/api/notebooks/${notebookId}/sources`, { id: ulid(), text: '# Collectives\n\nAll-reduce, all-gather, broadcast.' })).json;
+  const drawn = await api<ItemLink>(s, 'POST', `/api/notebooks/${notebookId}/links`, { id: ulid(), from: { kind: 'source', id: a.id }, to: { kind: 'source', id: b.id }, kind: 'related' });
+  assert.equal(drawn.status, 201);
+  const chosen = await api<ItemLink>(s, 'POST', `/api/links/${drawn.json.id}/choose`, {});
+  assert.equal(chosen.status, 200);
+  assert.deepEqual([chosen.json.kind, chosen.json.from.id, chosen.json.by, chosen.json.status], ['builds-on', a.id, 'you', 'accepted']);
+  assert.equal(chosen.json.why, 'Fake: the AI chose builds on.');
+  // Changed by hand: the AI's reason no longer says it.
+  const mine = await api<ItemLink>(s, 'PATCH', `/api/links/${drawn.json.id}`, { kind: 'part-of' });
+  assert.deepEqual([mine.json.kind, mine.json.why], ['part-of', null]);
+
+  // A title that asks for it: turned around.
+  const c = (await api<Source>(s, 'POST', `/api/notebooks/${notebookId}/sources`, { id: ulid(), text: '# Flip me [[flip-link]]\n\nText.' })).json;
+  const other = await api<ItemLink>(s, 'POST', `/api/notebooks/${notebookId}/links`, { id: ulid(), from: { kind: 'source', id: c.id }, to: { kind: 'source', id: b.id }, kind: 'related' });
+  const flipped = (await api<ItemLink>(s, 'POST', `/api/links/${other.json.id}/choose`, {})).json;
+  assert.deepEqual([flipped.kind, flipped.from.id, flipped.to.id], ['explains', b.id, c.id]);
+  assert.equal((await api(s, 'POST', `/api/links/${ulid()}/choose`, {})).status, 404);
+
+  // Without a model: said in words; the line stays as drawn.
+  const noModel = await startServer({ models: { fake: () => ({ name: 'none', model: 'none', configured: false, stream: () => { throw new Error('no'); } }) } });
+  try {
+    const nb = (await api<{ notebooks: Array<{ id: string }> }>(noModel, 'GET', '/api/notebooks')).json.notebooks[0]?.id as string;
+    const x = (await api<Source>(noModel, 'POST', `/api/notebooks/${nb}/sources`, { id: ulid(), text: '# X\n\nx' })).json;
+    const y = (await api<Source>(noModel, 'POST', `/api/notebooks/${nb}/sources`, { id: ulid(), text: '# Y\n\ny' })).json;
+    const l = (await api<ItemLink>(noModel, 'POST', `/api/notebooks/${nb}/links`, { id: ulid(), from: { kind: 'source', id: x.id }, to: { kind: 'source', id: y.id }, kind: 'related' })).json;
+    const r = await api<{ error: { message: string } }>(noModel, 'POST', `/api/links/${l.id}/choose`, {});
+    assert.equal(r.status, 409);
+    assert.equal((await api<ItemLink>(noModel, 'GET', `/api/links/${l.id}`)).json.kind, 'related');
+  } finally {
+    noModel.close();
+  }
+});
+
 test('reading fails in words: without a model, or when the model fails', async () => {
   const noModel = await startServer({ models: { fake: () => ({ name: 'none', model: 'none', configured: false, stream: () => { throw new Error('no'); } }) } });
   try {

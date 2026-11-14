@@ -219,6 +219,15 @@ export class FakeProvider implements ModelProvider {
       yield { type: 'finish', reason: 'stop' };
       return;
     }
+    if (req.purpose === 'link-kind') {
+      // A line the learner drew: "builds on", turned around if a title asks for it ([[flip-link]]).
+      if (question.includes('[[fail-link-kind]]')) throw new ProviderError('unavailable', 'fake failure: unavailable');
+      const flip = question.includes('[[flip-link]]');
+      await sleep(this.delayMs, req.signal);
+      yield { type: 'text', text: JSON.stringify({ kind: flip ? 'explains' : 'builds-on', flip, why: `Fake: the AI chose ${flip ? 'explains, turned around' : 'builds on'}.` }) };
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
     if (req.purpose === 'assistant') {
       yield* this.assistant(req);
       return;

@@ -149,3 +149,49 @@ export function readLinks(raw: string, count: number): LinkDraft[] | null {
   }
   return out;
 }
+
+/** One end of a line the learner drew, as the AI reads it to choose the line's kind. */
+export interface LinkEnd {
+  kind: 'source' | 'thread' | 'note';
+  title: string;
+  /** Its summary if it has one, else the start of its text. */
+  text: string;
+}
+export interface ChosenLink {
+  kind: LinkKind;
+  why: string;
+  /** It reads better the other way round. */
+  flip: boolean;
+}
+
+export const CHOOSE_PROMPT = [
+  "The learner drew a line between two things in their study notebook. Say what the line means, read from the first (A) to the second (B):",
+  '- explains: A makes B understandable',
+  '- example-of: A is a case or an example of B',
+  '- builds-on: A needs B first, or takes it further',
+  '- contrasts-with: A differs from B in a way worth noticing',
+  '- same-question: A asks the same question as B',
+  '- part-of: A is a part of B',
+  '- related: A bears on B in some other way (only if none of the above fits)',
+  'If the link reads better from B to A (B explains A, B builds on A…), set "flip" to true and give the kind read from B to A.',
+  'Write in the language of the things. Reply with one JSON object and nothing else: {"kind": "...", "flip": false, "why": "one short sentence"}',
+].join('\n');
+
+/** The text an end is read by: its summary, else its first words. */
+export const END_CHARS = 1500;
+
+export function chooseLinkRequest(a: LinkEnd, b: LinkEnd): ChatMessage[] {
+  const end = (label: string, x: LinkEnd) =>
+    `${label}. ${x.kind} “${clean(x.title, 160) || 'Untitled'}”:\n${Array.from(x.text.trim()).slice(0, END_CHARS).join('')}`;
+  return [
+    { role: 'system', content: CHOOSE_PROMPT },
+    { role: 'user', content: `${end('A', a)}\n\n${end('B', b)}` },
+  ];
+}
+
+/** The kind the model chose: one it knows, with its reason; null if the reply cannot be read. */
+export function readChosenLink(raw: string): ChosenLink | null {
+  const parsed = jsonIn(raw) as { kind?: unknown; why?: unknown; flip?: unknown } | null;
+  if (!parsed || typeof parsed.kind !== 'string' || !(LINK_KINDS as readonly string[]).includes(parsed.kind)) return null;
+  return { kind: parsed.kind as LinkKind, why: clean(parsed.why, 240), flip: parsed.flip === true };
+}

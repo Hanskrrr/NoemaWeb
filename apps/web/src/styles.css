@@ -5554,3 +5554,272 @@ body.moving * {
   font-size: 0.8rem;
   padding: 0.2rem 0.65rem;
 }
+
+/* ------------------------------------------------------------------------ */
+/* Colours that tell things apart (ADR 0029): each kind of thing, and each   */
+/* kind of link, has its own, in light and dark.                             */
+:root {
+  --k-thread: #3b6fb6;
+  --k-source: #b07a2a;
+  --k-note: #3f8a57;
+  --k-room: #7a5cc9;
+  --lk-explains: #1f9e8f;
+  --lk-example-of: #4f9d3a;
+  --lk-builds-on: #3b6fd8;
+  --lk-contrasts-with: #d0702a;
+  --lk-same-question: #c2459b;
+  --lk-part-of: #7a5cc9;
+  --lk-related: #7b838c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --k-thread: #8fb4e0;
+    --k-source: #e0b45c;
+    --k-note: #7fd19a;
+    --k-room: #b59cff;
+    --lk-explains: #4fd1c0;
+    --lk-example-of: #8fd46f;
+    --lk-builds-on: #86a8ff;
+    --lk-contrasts-with: #ffa25e;
+    --lk-same-question: #f383c8;
+    --lk-part-of: #b59cff;
+    --lk-related: #a9b0b8;
+  }
+}
+.kind-explains { --lk: var(--lk-explains); }
+.kind-example-of { --lk: var(--lk-example-of); }
+.kind-builds-on { --lk: var(--lk-builds-on); }
+.kind-contrasts-with { --lk: var(--lk-contrasts-with); }
+.kind-same-question { --lk: var(--lk-same-question); }
+.kind-part-of { --lk: var(--lk-part-of); }
+.kind-related { --lk: var(--lk-related); }
+.room-card.kind-thread { --k: var(--k-thread); }
+.room-card.kind-source { --k: var(--k-source); }
+.room-card.kind-note { --k: var(--k-note); }
+
+/* Each card wears its kind's colour; more asked about, stronger. */
+.room-card {
+  border-left-color: color-mix(in srgb, var(--k, var(--accent)) calc(55% + var(--heat) * 45%), transparent);
+}
+.room-card.is-head {
+  border-left: 4px solid color-mix(in srgb, var(--k, var(--accent)) calc(60% + var(--heat) * 40%), var(--rule));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--k, var(--accent)) 7%, var(--sheet)), var(--sheet) 44px);
+}
+.room-card-kind {
+  color: color-mix(in srgb, var(--k, var(--accent)) 80%, var(--ink-soft));
+}
+.room-cluster {
+  cursor: default;
+}
+.room-card-open {
+  cursor: pointer;
+}
+/* A press on a card: held, a ring fills, then the cluster lifts to be moved. */
+.room-card.is-pressing {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--k, var(--accent)) 55%, transparent);
+  transition: box-shadow 0.7s linear;
+}
+.room-cluster.is-lifted {
+  cursor: grabbing;
+  z-index: 5;
+  box-shadow:
+    0 18px 40px -12px rgba(0, 0, 0, 0.45),
+    0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent);
+  transform: scale(1.015);
+}
+.room-card.is-target {
+  outline: 2px solid color-mix(in srgb, var(--lf-b, var(--accent)) 80%, transparent);
+  outline-offset: 2px;
+  cursor: crosshair;
+}
+/* The line being drawn, from the card to the pointer. */
+.connect-line {
+  position: absolute;
+  inset: 0 auto auto 0;
+  z-index: 4;
+  pointer-events: none;
+  overflow: visible;
+}
+.connect-line path {
+  fill: none;
+  stroke: var(--lf-b, var(--accent));
+  stroke-width: 2.2;
+  stroke-dasharray: 7 5;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--lf-b, var(--accent)) 70%, transparent));
+}
+/* Kept links in their kind's colour. */
+.item-line {
+  stroke: var(--lk, var(--accent));
+  stroke-width: 1.8;
+  opacity: 0.7;
+}
+.item-line.is-faded {
+  opacity: 0.1;
+}
+.item-lines marker path {
+  stroke: var(--lk, var(--accent));
+}
+/* The AI choosing what a line means: it glows in the Assistant's colours. */
+.item-line.is-choosing {
+  stroke: var(--lf-b, var(--accent));
+  stroke-width: 2.4;
+  stroke-dasharray: 8 6;
+  opacity: 1;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--lf-c, var(--accent)) 80%, transparent));
+  animation: line-choosing 0.9s linear infinite;
+}
+@keyframes line-choosing {
+  to {
+    stroke-dashoffset: -28;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .item-line.is-choosing {
+    animation: none;
+  }
+}
+.link-label {
+  border-color: color-mix(in srgb, var(--lk, var(--accent)) 60%, var(--rule));
+  color: color-mix(in srgb, var(--lk, var(--accent)) 85%, var(--ink));
+}
+.link-label.is-open,
+.link-label:hover {
+  background: var(--lk, var(--accent));
+  border-color: var(--lk, var(--accent));
+  color: var(--paper);
+}
+.link-label.is-choosing {
+  border-color: var(--lf-b, var(--accent));
+  color: var(--ink);
+  background: color-mix(in srgb, var(--lf-a, var(--accent)) 16%, var(--paper));
+}
+/* At rest, a link is a dot in its colour; pointing at a card shows its links' words. */
+.link-label.is-dot {
+  width: 12px;
+  height: 12px;
+  min-width: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--paper);
+  background: var(--lk, var(--accent));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--lk, var(--accent)) 60%, transparent);
+}
+.link-label.is-dot:hover {
+  transform: translate(-50%, -50%) scale(1.3);
+}
+.link-editor-by.is-choosing {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--ink-soft);
+}
+/* What kinds of link the room has, in their colours; and how to draw one. */
+.room-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  margin: 0 0 0.6rem;
+  font-size: 0.78rem;
+}
+.legend-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.05rem 0.5rem 0.05rem 0.4rem;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--lk, var(--accent)) 85%, var(--ink));
+  background: color-mix(in srgb, var(--lk, var(--accent)) 12%, transparent);
+}
+.legend-kind::before {
+  content: '';
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--lk, var(--accent));
+}
+.room-gesture-hint {
+  margin-left: auto;
+  font-size: 0.78rem;
+}
+/* What the AI does on your word wears its colours (ADR 0029). */
+.ai-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.8rem 0.3rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--lf-b) 45%, var(--rule));
+  background: color-mix(in srgb, var(--lf-a) 10%, var(--sheet));
+  color: var(--ink);
+  font-weight: 500;
+}
+.ai-button:hover,
+.ai-button.is-on {
+  border-color: var(--lf-b);
+  box-shadow: 0 0 22px -8px color-mix(in srgb, var(--lf-b) 90%, transparent);
+}
+.ai-button.is-strong {
+  color: #fff;
+  border-color: transparent;
+  background: linear-gradient(120deg, #6f8dff, #9b7bff 55%, #4fc6d8);
+  box-shadow: 0 6px 22px -8px color-mix(in srgb, var(--lf-b) 90%, transparent);
+}
+.ai-button.is-busy {
+  opacity: 0.85;
+}
+/* The links the AI suggested, to review. */
+.room-review {
+  margin: 0 0 0.8rem;
+  padding: 0.6rem 0.8rem 0.4rem;
+  border-radius: 14px;
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient(var(--sheet), var(--sheet)) padding-box,
+    linear-gradient(120deg, var(--lf-a), var(--lf-b), var(--lf-c)) border-box;
+  box-shadow: 0 0 40px -18px color-mix(in srgb, var(--lf-b) 80%, transparent);
+}
+.room-review-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+.room-review-head .hint {
+  flex: 1;
+  font-size: 0.8rem;
+}
+.room-review ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 0.5rem;
+}
+.review-row {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--paper);
+}
+.review-says {
+  margin: 0;
+  font-size: 0.9rem;
+}
+.review-why {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+}
+.review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+.review-actions button,
+.review-actions select {
+  padding: 0.18rem 0.6rem;
+  font-size: 0.82rem;
+}

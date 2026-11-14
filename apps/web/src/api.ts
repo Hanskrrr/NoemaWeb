@@ -306,6 +306,9 @@ export const api = {
   updateLink: (id: string, patch: { kind?: LinkKind; label?: string | null; status?: 'accepted' | 'dismissed'; flip?: boolean }) =>
     call(ItemLink, 'PATCH', `/api/links/${id}`, patch),
   deleteLink: (id: string) => call(Ok, 'DELETE', `/api/links/${id}`),
+  /** A line the learner drew: the AI says what it means, and why (ADR 0029). */
+  chooseLink: (id: string) => call(ItemLink, 'POST', `/api/links/${id}/choose`, {}),
+  mergeRoom: (id: string, into: string) => call(Room, 'POST', `/api/rooms/${id}/merge`, { into }),
   // Folders on this computer (ADR 0025): read in place, written only when asked.
   folders: (notebookId: string) => call(FolderList, 'GET', `/api/notebooks/${notebookId}/folders`),
   linkFolder: (notebookId: string, id: string, path: string) =>

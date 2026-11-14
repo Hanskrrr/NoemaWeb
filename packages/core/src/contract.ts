@@ -976,6 +976,7 @@ export const CreateRoomRequest = z.object({
   items: z.array(RoomItemRef).max(500).optional(),
 });
 export const RenameRoomRequest = z.object({ title: z.string().trim().min(1).max(200) });
+export const MergeRoomRequest = z.object({ into: z.string().min(1).max(64) });
 export const AddRoomItemsRequest = z.object({
   items: z
     .array(RoomItemRef.extend({ x: z.number().finite().optional(), y: z.number().finite().optional() }))

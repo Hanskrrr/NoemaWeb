@@ -91,7 +91,8 @@ React 19 and Vite, no router or state library. One stylesheet with light and dar
 | `src/Rooms.tsx`, `RoomView.tsx` | Rooms (ADR 0026): the list in the sidebar with what is in no room yet, the shared room actions and right-click menu; a room's map of clusters, its picker, moving clusters; Read with AI, summaries and their points on cards, links drawn card to card and their editor, Link to… (ADR 0027) |
 | `src/ContextMenu.tsx`, `drag.ts` | The right-click menu (one for the app); dragging things onto rooms, and files and links from outside read as sources |
 | `src/ThreadView.tsx` | A thread: messages, the composer, select to ask a side question, Back, split-off, delete, drafts of new threads |
-| `src/Assistant.tsx` | The Assistant, beside what is open or on its own page: questions with where the learner is, answers with their lookups, cards for what they cite, the quote preview, the changes to confirm |
+| `src/Assistant.tsx` | The Assistant, floating over what is open (folded to a bar, or open on the conversation), pinned beside it, or on its own page: questions with where the learner is, answers with their lookups, cards for what they cite, the quote preview, the changes to confirm |
+| `src/assistantFloat.ts` | The floating Assistant's window (where it is, its size, kept inside the browser) and the questions it offers for the place (ADR 0028) |
 | `src/LivingFrame.tsx`, `presence.ts` | The light around the window while the Assistant is open, and its orb; what it is doing (a small store the Assistant sets) |
 | `src/MessageView.tsx`, `Composer.tsx` | One question or answer (Ask again, and the ‹ 1 / 2 › switch between answers); the box to ask in |
 | `src/Pinned.tsx` | The pinned passages at the top of a thread |

@@ -52,3 +52,26 @@ The work goes in rounds; this file grows with each.
   - 331 unit tests. New: the room part sent and split back; the brief read; the brief written, older when a thing changes, and sent with a thread's next question.
   - 81 e2e. New: a room you work in (brief, still open, ask here and What was sent, note here, source here, older).
   - Screenshots of the brief in dark.
+
+## Round 3 (ADR 0031): sources from the web
+
+- **Core** (`web.ts`): `webPlanRequest`, `readWebPlan`, `formatWeb`. Context: a `web` part before the question (`withWeb` in What was sent). `WebFind`; `Message.web`; `Room.web`; `RoomView.webFinds` / `webAvailable`. Lookup steps get `web`.
+- **Server.**
+  - `web/search.ts`: `DeepSeekSearch` and `FakeSearch`; `ModelSettings.search()` (DeepSeek or the fake model only).
+  - Migration 023: `web_find`, `room.web`.
+  - `generation.ts` `searchWeb` for threads in a room with the web on.
+  - Routes: `PUT /api/rooms/:id/web`, `POST /api/rooms/:id/find-sources`, `POST /api/web/:id/add`, `POST /api/web/:id/dismiss`.
+  - Fake model: purpose `web-plan`, searching only for `[[web]]` / `[[web2]]`.
+- **Web.**
+  - `WebFinds` cards under answers and in a room's Review.
+  - "◎ Web on/off" in the room's create bar; Find sources for these in the brief.
+- **Verified.**
+  - 338 unit tests. New:
+    - the plan read;
+    - the web part sent and split back;
+    - DeepSeek's request and reply read with a stand-in fetch;
+    - which providers can search;
+    - a room thread searching (and not, with the web off);
+    - finding sources for what is open;
+    - Add to room reading a real local page.
+  - 82 e2e (one new). One full run had `branch.spec` "a double-clicked word" fail once; it passed alone three times and in every other run.

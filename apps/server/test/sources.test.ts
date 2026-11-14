@@ -328,3 +328,28 @@ test('a source in the Trash: gone from the list and search, nothing new asked ab
   assert.equal((await api<Source>(s, 'POST', `/api/sources/${src.id}/restore`)).json.deletedAt, null);
   assert.equal((await api<SearchResponse>(s, 'GET', '/api/search?q=tapirs')).json.hits.filter((h) => h.sourceId === src.id).length, 1);
 });
+
+test('a page found on the web, added to its room: read like any web page, a source in the room; added twice, still one', async () => {
+  pages.set('/found-page', { type: 'text/html', body: blog });
+  const nb = (await api<{ notebooks: Array<{ id: string }> }>(s, 'GET', '/api/notebooks')).json.notebooks[0]?.id as string;
+  const roomId = ulid();
+  await api(s, 'POST', `/api/notebooks/${nb}/rooms`, { id: roomId, title: 'Found' });
+  const findId = ulid();
+  s.repo.saveWebFinds(nb, { revisionId: null, roomId }, [
+    { id: findId, n: 1, query: 'q', title: 'A found page', url: `${base}/found-page`, snippet: 's', summary: 's', site: 'local', date: null, score: 2 },
+  ]);
+  const added = await api<{ find: { status: string; sourceId: string }; source: Source }>(s, 'POST', `/api/web/${findId}/add`, {});
+  assert.equal(added.status, 200);
+  assert.equal(added.json.find.status, 'added');
+  assert.equal(added.json.source.url, `${base}/found-page`);
+  const room = (await api<{ room: { members: string[] } }>(s, 'GET', `/api/rooms/${roomId}`)).json.room;
+  assert.ok(room.members.includes(`source:${added.json.source.id}`));
+  const again = await api<{ source: Source }>(s, 'POST', `/api/web/${findId}/add`, {});
+  assert.equal(again.json.source.id, added.json.source.id);
+  // A page that cannot be read says so, and stays found.
+  const bad = ulid();
+  s.repo.saveWebFinds(nb, { revisionId: null, roomId }, [{ id: bad, n: 2, query: 'q', title: 'Gone', url: `${base}/not-here`, snippet: '', summary: '', site: null, date: null, score: null }]);
+  const r = await api<{ error: { message: string } }>(s, 'POST', `/api/web/${bad}/add`, {});
+  assert.equal(r.status, 400);
+  assert.match(r.json.error.message, /could not be read/);
+});

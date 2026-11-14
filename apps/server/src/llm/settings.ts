@@ -10,6 +10,7 @@ import { z } from 'zod';
 import type { Logger } from '../log.ts';
 import { OpenAICompatibleProvider } from './openai-compatible.ts';
 import { type ModelProvider, ProviderError } from './provider.ts';
+import { DeepSeekSearch, FakeSearch, type WebSearch } from '../web/search.ts';
 
 const Saved = z.object({
   version: z.literal(1),
@@ -28,6 +29,8 @@ export interface ProviderSettings {
 /** What the rest of the server needs: the provider to use for the next answer. */
 export interface ModelSource {
   current(): ModelProvider;
+  /** Searching the web with the same account (ADR 0031): DeepSeek's search, the fake one in tests; null otherwise. */
+  search?(): WebSearch | null;
 }
 
 export interface ModelSettingsOptions {
@@ -60,6 +63,19 @@ export class ModelSettings implements ModelSource {
 
   current(): ModelProvider {
     return this.provider;
+  }
+
+  search(): WebSearch | null {
+    const s = this.saved ?? (this.o.env.provider === 'openai-compatible' ? this.o.env : null);
+    if (!s) return this.o.env.provider === 'fake' ? new FakeSearch() : null;
+    if (!s.apiKey) return null;
+    let host = '';
+    try {
+      host = new URL(s.baseUrl).host;
+    } catch {
+      return null;
+    }
+    return host === 'api.deepseek.com' ? new DeepSeekSearch({ baseUrl: s.baseUrl, apiKey: s.apiKey }) : null;
   }
 
   view(): ModelSettingsView {

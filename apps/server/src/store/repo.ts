@@ -68,6 +68,7 @@ import {
   searchText,
   splitBlocks,
   type Thread,
+  type WebFind,
   type ThreadMap,
   ulid,
 } from '@noema/core';
@@ -81,6 +82,21 @@ const now = () => new Date().toISOString();
 function briefBasis(members: string[], bases: Map<string, string>): string {
   const parts = [...members].sort().map((k) => `${k}@${bases.get(k) ?? ''}`);
   return createHash('sha256').update(parts.join('|')).digest('hex').slice(0, 32);
+}
+
+function toWebFind(r: Row): WebFind {
+  return {
+    id: r.id as string,
+    n: r.n as number,
+    query: r.query as string,
+    title: r.title as string,
+    url: r.url as string,
+    snippet: r.snippet as string,
+    site: (r.site as string | null) ?? null,
+    date: (r.date as string | null) ?? null,
+    status: r.status as WebFind['status'],
+    sourceId: (r.source_id as string | null) ?? null,
+  };
 }
 
 function toItemLink(r: Row): ItemLink {
@@ -207,6 +223,7 @@ function toMessage(r: Row): Message {
     model: (r.model as string | null) ?? null,
     headline: (r.headline as string | null | undefined) ?? null,
     lookups: lookupsOf(r.lookups),
+    web: r.web ? (JSON.parse(r.web as string) as WebFind[]) : [],
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };
@@ -255,7 +272,10 @@ function lookupsOf(value: unknown): Lookups | null {
 const MESSAGE_SELECT = `
   SELECT m.id, m.thread_id, m.role, m.seq, m.reply_to, m.created_at,
          r.id AS revision_id, r.n, r.content, r.status, r.error_kind, r.error_message, r.model, r.updated_at,
-         r.headline, r.lookups, (SELECT count(*) FROM message_revision x WHERE x.message_id = m.id) AS revisions
+         r.headline, r.lookups, (SELECT count(*) FROM message_revision x WHERE x.message_id = m.id) AS revisions,
+         (SELECT json_group_array(json_object('id', w.id, 'n', w.n, 'query', w.query, 'title', w.title, 'url', w.url,
+                   'snippet', w.snippet, 'site', w.site, 'date', w.date, 'status', w.status, 'sourceId', w.source_id))
+            FROM (SELECT * FROM web_find WHERE revision_id = r.id ORDER BY n) w) AS web
   FROM message m JOIN message_revision r ON r.id = m.current_revision_id`;
 
 export class ConflictError extends Error {
@@ -1010,7 +1030,54 @@ export class Repo {
       updatedAt: r.updated_at as string,
       members,
       counts,
+      web: r.web === undefined ? true : Number(r.web) === 1,
     };
+  }
+
+  /** Whether questions asked in a room may search the web (ADR 0031). */
+  setRoomWeb(id: string, on: boolean): Room | null {
+    const r = this.db.sql.prepare('UPDATE room SET web = ?, updated_at = ? WHERE id = ?').run(on ? 1 : 0, now(), id);
+    return Number(r.changes) > 0 ? this.getRoom(id) : null;
+  }
+
+  /** What a search of the web found, kept for an answer (its revision) or for a room. */
+  saveWebFinds(
+    notebookId: string,
+    at: { revisionId: string | null; roomId: string | null },
+    finds: Array<{ id: string; n: number; query: string; title: string; url: string; snippet: string; summary: string; site: string | null; date: string | null; score: number | null }>,
+  ): void {
+    const t = now();
+    const put = this.db.sql.prepare(
+      `INSERT OR IGNORE INTO web_find (id, notebook_id, room_id, revision_id, n, query, title, url, snippet, summary, site, date, score, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.db.tx(() => {
+      for (const f of finds) {
+        put.run(f.id, notebookId, at.roomId, at.revisionId, f.n, f.query, f.title, f.url, f.snippet, f.summary, f.site, f.date, f.score, t, t);
+      }
+    });
+  }
+
+  webFind(id: string): (WebFind & { notebookId: string; roomId: string | null; revisionId: string | null }) | null {
+    const r = this.db.sql.prepare('SELECT * FROM web_find WHERE id = ?').get(id) as Row | undefined;
+    if (!r) return null;
+    return { ...toWebFind(r), notebookId: r.notebook_id as string, roomId: (r.room_id as string | null) ?? null, revisionId: (r.revision_id as string | null) ?? null };
+  }
+
+  setWebFind(id: string, status: WebFind['status'], sourceId: string | null = null): WebFind | null {
+    this.db.sql.prepare('UPDATE web_find SET status = ?, source_id = coalesce(?, source_id), updated_at = ? WHERE id = ?').run(status, sourceId, now(), id);
+    const f = this.webFind(id);
+    if (f) this.logEvent('web.find', id, { status });
+    return f;
+  }
+
+  /** Pages found for a room's open questions, not yet added or dismissed (newest first), and the URLs it already has. */
+  roomWebFinds(roomId: string): WebFind[] {
+    return (
+      this.db.sql
+        .prepare("SELECT * FROM web_find WHERE room_id = ? AND revision_id IS NULL AND status = 'found' ORDER BY created_at DESC, n")
+        .all(roomId) as Row[]
+    ).map(toWebFind);
   }
 
   /** The notebook's rooms, in the order they were made: places stay put. */
@@ -1027,7 +1094,7 @@ export class Repo {
   }
 
   /** A room drawn: clusters of what belongs together, the lines between them, summaries and links (ADR 0027). */
-  roomView(id: string): Omit<RoomView, 'reading'> | null {
+  roomView(id: string): Omit<RoomView, 'reading' | 'webAvailable'> | null {
     const r = this.db.sql.prepare('SELECT * FROM room WHERE id = ?').get(id) as Row | undefined;
     if (!r) return null;
     const notebookId = r.notebook_id as string;
@@ -1059,7 +1126,7 @@ export class Repo {
           fresh: b.basis === briefBasis(members, bases),
         }
       : null;
-    return { room: this.toRoom(r, graph), clusters, links, gists, itemLinks, unread, brief };
+    return { room: this.toRoom(r, graph), clusters, links, gists, itemLinks, unread, brief, webFinds: this.roomWebFinds(id) };
   }
 
   /** Which summaries a room's brief is written from, as one hash: a brief from other summaries is older. */
@@ -1081,18 +1148,21 @@ export class Repo {
       .run(id, text, JSON.stringify(open), basis, model, now());
   }
 
+  /** The rooms holding a thread (or the thread a side question is part of). */
+  roomsOfThread(threadId: string): Room[] {
+    const t = this.getThread(threadId);
+    if (!t) return [];
+    const byId = new Map(this.roomGraph(t.notebookId).threads.map((x) => [x.id, x]));
+    const key = roomKey('thread', threadOf(threadId, byId));
+    return this.listRooms(t.notebookId).filter((r) => (r.members as string[]).includes(key));
+  }
+
   /**
    * The room a thread is in, for its questions (ADR 0030): of the rooms holding it (or the thread a side question
    * is part of), the one whose brief was written last. Null if none has a brief.
    */
   roomOfThread(threadId: string): { title: string; brief: string; open: string[] } | null {
-    const t = this.getThread(threadId);
-    if (!t) return null;
-    const byId = new Map(this.roomGraph(t.notebookId).threads.map((x) => [x.id, x]));
-    const key = roomKey('thread', threadOf(threadId, byId));
-    const ids = this.listRooms(t.notebookId)
-      .filter((r) => (r.members as string[]).includes(key))
-      .map((r) => r.id);
+    const ids = this.roomsOfThread(threadId).map((r) => r.id);
     if (ids.length === 0) return null;
     const row = this.db.sql
       .prepare(

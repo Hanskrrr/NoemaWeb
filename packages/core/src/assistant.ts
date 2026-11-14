@@ -43,7 +43,7 @@ export type VaultTarget = z.infer<typeof VaultTarget>;
 
 /** One lookup, as the learner is shown it under the answer. */
 export const LookupStep = z.object({
-  tool: z.enum(['search', 'open', 'list']),
+  tool: z.enum(['search', 'open', 'list', 'web']),
   /** "Searched “variance”", "Opened “Week 4”". */
   label: z.string(),
   /** How many labelled items it brought back. */

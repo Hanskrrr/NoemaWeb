@@ -159,3 +159,19 @@ test('a thread in a room is told what the room adds up to and what is still open
   const none = assembleContext({ system: 'S', room: { title: 'R', brief: '  ', open: [] }, history: [], question: { id: 'q', content: 'Q' }, budgetTokens: 1000 });
   assert.deepEqual(none.manifest.parts.map((p) => p.kind), ['system', 'question']);
 });
+
+test('what a search of the web found goes before the question, labelled to be cited; What was sent says so', () => {
+  const sent = assembleContext({
+    system: 'S',
+    history: [],
+    web: [{ n: 1, title: 'Training Deep Nets with Sublinear Memory Cost', url: 'https://arxiv.org/abs/1604.06174', site: 'arxiv.org', date: '2016-04-21T00:00:00Z', summary: 'Recompute activations to save memory.' }],
+    question: { id: 'q', content: 'How does recomputation choose what to drop?' },
+    budgetTokens: 2000,
+  });
+  const q = sent.messages.at(-1)?.content ?? '';
+  assert.match(q, /^## Found on the web for this question\n\n[\s\S]*\[web 1\] “Training Deep Nets with Sublinear Memory Cost” \(arxiv\.org, 2016-04-21\), https:\/\/arxiv\.org\/abs\/1604\.06174\nRecompute activations to save memory\.\n\nHow does recomputation choose what to drop\?$/);
+  assert.deepEqual(sent.manifest.parts.map((p) => p.kind), ['system', 'web', 'question']);
+  const parts = describeSent(sent.manifest, sent.messages);
+  assert.equal(parts.at(-1)?.withWeb, true);
+  assert.equal(parts.at(-1)?.text, q);
+});

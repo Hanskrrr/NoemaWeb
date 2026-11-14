@@ -51,6 +51,7 @@ import {
   type SearchOpenedRequest,
   SearchResponse,
   Source,
+  WebFind,
   SourceDetail,
   SourceList,
   StopResponse,
@@ -309,6 +310,11 @@ export const api = {
   /** A line the learner drew: the AI says what it means, and why (ADR 0029). */
   chooseLink: (id: string) => call(ItemLink, 'POST', `/api/links/${id}/choose`, {}),
   mergeRoom: (id: string, into: string) => call(Room, 'POST', `/api/rooms/${id}/merge`, { into }),
+  /** Sources from the web (ADR 0031): a page found, added to its room, or left; a room's web on or off; pages for what is open. */
+  addWebFind: (id: string) => call(z.object({ find: WebFind, source: Source }), 'POST', `/api/web/${id}/add`, {}),
+  dismissWebFind: (id: string) => call(z.object({ find: WebFind }), 'POST', `/api/web/${id}/dismiss`, {}),
+  setRoomWeb: (id: string, on: boolean) => call(Room, 'PUT', `/api/rooms/${id}/web`, { on }),
+  findSources: (roomId: string) => call(z.object({ finds: z.array(WebFind) }), 'POST', `/api/rooms/${roomId}/find-sources`, {}),
   // Folders on this computer (ADR 0025): read in place, written only when asked.
   folders: (notebookId: string) => call(FolderList, 'GET', `/api/notebooks/${notebookId}/folders`),
   linkFolder: (notebookId: string, id: string, path: string) =>

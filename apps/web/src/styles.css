@@ -6027,3 +6027,120 @@ body.moving * {
 .room-create {
   margin-right: 4.4rem;
 }
+
+/* Pages found on the web (ADR 0031): under an answer, and in a room's Review. */
+.web-finds {
+  margin: 0.8rem 0 0.4rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 14px;
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient(var(--sheet), var(--sheet)) padding-box,
+    linear-gradient(120deg, var(--lf-a), var(--lf-b), var(--lf-c)) border-box;
+  box-shadow: 0 0 36px -18px color-mix(in srgb, var(--lf-b) 85%, transparent);
+}
+.room-review-web .web-finds {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+.web-finds-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.web-finds-head .hint {
+  margin-left: auto;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.web-finds ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  gap: 0.55rem;
+}
+.web-find {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--paper);
+  min-width: 0;
+}
+.web-find[data-status="added"] {
+  border-color: color-mix(in srgb, var(--k-note) 50%, var(--rule));
+}
+.web-find-where {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+}
+.web-find-title {
+  margin: 0;
+  font: 600 0.95rem / 1.3 var(--serif);
+  overflow-wrap: anywhere;
+}
+.web-find-snippet {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.web-find-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: auto;
+  padding-top: 0.35rem;
+}
+.web-find-actions .ai-button {
+  padding: 0.18rem 0.65rem 0.18rem 0.35rem;
+  font-size: 0.82rem;
+}
+.web-find-open {
+  font-size: 0.82rem;
+}
+.web-find-added {
+  font-size: 0.82rem;
+  color: var(--k-note);
+}
+.room-web-toggle {
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+.room-web-toggle.is-on {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--lf-c) 55%, var(--rule));
+  background: color-mix(in srgb, var(--lf-c) 12%, transparent);
+}
+.room-find-sources {
+  margin-top: 0.55rem;
+  font-size: 0.85rem;
+}
+.web-find-actions .quiet {
+  padding: 0.15rem 0.4rem;
+  font-size: 0.82rem;
+}

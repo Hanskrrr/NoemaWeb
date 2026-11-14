@@ -43,6 +43,7 @@ export function partLabel(p: SentPart): string {
       p.merged > 0 ? 'a merged thread' : '',
     ].filter(Boolean);
     if (p.withOverview) extras.unshift('an overview of your notebook');
+    if (p.withWeb) extras.unshift('what was found on the web');
     return extras.length > 0 ? `${KIND_LABELS.question}, with ${extras.join(' and ')}` : KIND_LABELS.question;
   }
   if (p.kind === 'lookup' && p.call) return `${TOOL_LABELS[p.call.name] ?? `It used ${p.call.name}`} ${lookupWhat(p.call)}: what came back`;

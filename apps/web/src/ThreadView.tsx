@@ -125,6 +125,7 @@ function optimisticUser(threadId: string, id: string, content: string, seq: numb
     model: null,
     headline: null,
     lookups: null,
+    web: [],
     createdAt: t,
     updatedAt: t,
   };
@@ -935,6 +936,7 @@ export function ThreadView({
                     : undefined
                 }
                 onAskAgain={canAskAgain ? () => void askAgain(m.id) : undefined}
+                onSourceAdded={onChanged}
                 versions={
                   m.role === 'assistant' && m.revisions > 1 && inUse
                     ? {

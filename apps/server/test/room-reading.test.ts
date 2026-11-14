@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
-import { type AskResponse, type AssistantAction, type ItemLink, type MessageContext, type RoomView, type Source, ulid } from '@noema/core';
+import { type AskResponse, type AssistantAction, type ItemLink, type Message, type MessageContext, type RoomView, type Source, ulid } from '@noema/core';
 import { Db } from '../src/store/db.ts';
 import { Repo } from '../src/store/repo.ts';
 import { api, readEvents, startServer, type TestServer } from './helpers.ts';
@@ -213,6 +213,57 @@ test("a room's brief: written after the summaries, older when a thing changes; a
   // The thread changed: its summary is older, and so is the brief; read again, fresh.
   assert.equal((await room(id)).brief?.fresh, false);
   assert.equal((await read(id)).brief?.fresh, true);
+});
+
+test('asked in a room, the web is searched when the question needs it: shown, sent labelled, kept to add; never with the room\'s web off', async () => {
+  const t = ulid();
+  await api(s, 'POST', `/api/notebooks/${notebookId}/threads`, { id: t });
+  const id = ulid();
+  await api(s, 'POST', `/api/notebooks/${notebookId}/rooms`, { id, title: 'Memory', items: [{ kind: 'thread', id: t }] });
+  const r = await api<AskResponse>(s, 'POST', `/api/threads/${t}/messages`, { id: ulid(), content: 'Gradient checkpointing tradeoffs today [[web]]' });
+  await readEvents(`${s.base}/api/messages/${r.json.assistant.id}/events`);
+  const answer = (await api<{ messages: Message[] }>(s, 'GET', `/api/threads/${t}`)).json.messages.find((m) => m.id === r.json.assistant.id) as Message;
+  assert.deepEqual(answer.lookups?.steps, [{ tool: 'web', label: 'Searched the web “Gradient checkpointing tradeoffs today”', found: 3 }]);
+  assert.equal(answer.web.length, 3);
+  assert.deepEqual(answer.web.map((w) => [w.n, w.status, w.site]), [[1, 'found', 'example.org'], [2, 'found', 'example.org'], [3, 'found', 'example.org']]);
+  const sent = (await api<MessageContext>(s, 'GET', `/api/messages/${r.json.assistant.id}/context`)).json;
+  assert.ok(sent.manifest.parts.some((p) => p.kind === 'web'));
+  assert.match(sent.request?.at(-1)?.content ?? '', /^## Found on the web for this question[\s\S]*\[web 1\] “Fake page 1 on Gradient checkpointing tradeoffs today” \(example\.org, 2026-01-01\)/);
+
+  // Left: dismissed.
+  const left = await api<{ find: { status: string } }>(s, 'POST', `/api/web/${answer.web[2]?.id}/dismiss`, {});
+  assert.equal(left.json.find.status, 'dismissed');
+
+  // A question that needs nothing from the web: no search.
+  const plain = await api<AskResponse>(s, 'POST', `/api/threads/${t}/messages`, { id: ulid(), content: 'What is a gradient?' });
+  await readEvents(`${s.base}/api/messages/${plain.json.assistant.id}/events`);
+  const quiet = (await api<{ messages: Message[] }>(s, 'GET', `/api/threads/${t}`)).json.messages.find((m) => m.id === plain.json.assistant.id) as Message;
+  assert.deepEqual([quiet.web.length, quiet.lookups], [0, null]);
+
+  // The room's web off: no search, whatever the question.
+  assert.equal((await api<{ web: boolean }>(s, 'PUT', `/api/rooms/${id}/web`, { on: false })).json.web, false);
+  const off = await api<AskResponse>(s, 'POST', `/api/threads/${t}/messages`, { id: ulid(), content: 'Newest papers on this [[web]]' });
+  await readEvents(`${s.base}/api/messages/${off.json.assistant.id}/events`);
+  const none = (await api<{ messages: Message[] }>(s, 'GET', `/api/threads/${t}`)).json.messages.find((m) => m.id === off.json.assistant.id) as Message;
+  assert.equal(none.web.length, 0);
+  assert.equal((await room(id)).webAvailable, true);
+});
+
+test('pages for what is still open in a room: one search for each open question, new pages only; dismissed ones go', async () => {
+  const src = (await api<Source>(s, 'POST', `/api/notebooks/${notebookId}/sources`, { id: ulid(), text: '# Recomputation\n\nKeep some activations, recompute the rest.' })).json;
+  const id = ulid();
+  await api(s, 'POST', `/api/notebooks/${notebookId}/rooms`, { id, title: 'Recompute', items: [{ kind: 'source', id: src.id }] });
+  assert.equal((await api(s, 'POST', `/api/rooms/${id}/find-sources`, {})).status, 409, 'nothing open before it is read');
+  await read(id);
+  const found = await api<{ finds: Array<{ id: string; query: string; url: string }> }>(s, 'POST', `/api/rooms/${id}/find-sources`, {});
+  assert.equal(found.status, 200);
+  assert.equal(found.json.finds.length, 3);
+  assert.match(found.json.finds[0]?.query ?? '', /^What is still unclear about/);
+  // Asked again: the same pages are not found twice.
+  assert.equal((await api<{ finds: unknown[] }>(s, 'POST', `/api/rooms/${id}/find-sources`, {})).json.finds.length, 3);
+  await api(s, 'POST', `/api/web/${found.json.finds[0]?.id}/dismiss`, {});
+  assert.equal((await room(id)).webFinds.length, 2);
+  assert.equal((await api(s, 'POST', `/api/web/${ulid()}/add`, {})).status, 404);
 });
 
 test('reading fails in words: without a model, or when the model fails', async () => {

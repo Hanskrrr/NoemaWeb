@@ -1,4 +1,6 @@
-import { type AssistantPhase, type BranchSummary, type LookupStep, type Message, readableQuote, type VaultTarget } from '@noema/core';
+import { type AssistantPhase, type BranchSummary, type LookupStep, type Message, readableQuote, type VaultTarget, type WebFind } from '@noema/core';
+import { useState } from 'react';
+import { ApiFailure, api } from './api.ts';
 import { Orb } from './LivingFrame.tsx';
 import { CiteContext, Markdown, type Slot } from './markdown/Markdown.tsx';
 
@@ -20,6 +22,8 @@ export interface MessageActions {
   onOpenTarget?: ((target: VaultTarget) => void) | undefined;
   /** An Assistant answer still being written: what it is doing. */
   phase?: AssistantPhase | null | undefined;
+  /** A page found on the web was added to the room as a source (ADR 0031). */
+  onSourceAdded?: (() => void) | undefined;
 }
 
 export interface Versions {
@@ -45,6 +49,7 @@ export function MessageView({
   slots,
   onOpenTarget,
   phase,
+  onSourceAdded,
 }: { message: Message; branches: BranchSummary[]; slots?: Slot[] } & MessageActions) {
   const { role, status } = message;
   const refs = message.lookups?.refs;
@@ -100,6 +105,7 @@ export function MessageView({
         {role === 'assistant' && status === 'streaming' && <span className="caret" aria-hidden />}
       </div>
       <StatusLine message={message} onStop={onStop} onOpenSettings={onOpenSettings} />
+      {role === 'assistant' && message.web.length > 0 && <WebFinds finds={message.web} onAdded={onSourceAdded} />}
       {(sent || onAskAgain || versions) && (
         <div className={`message-actions${versions ? ' has-versions' : ''}`}>
           {versions && <VersionSwitch versions={versions} />}
@@ -161,7 +167,7 @@ export function MessageView({
   );
 }
 
-const GLYPH: Record<LookupStep['tool'], string> = { search: '⌕', open: '❐', list: '≡' };
+const GLYPH: Record<LookupStep['tool'], string> = { search: '⌕', open: '❐', list: '≡', web: '◎' };
 
 /** What the Assistant looked up for an answer, in order; the newest arrives with a small motion while it works. */
 function LookupTrail({ steps, live }: { steps: LookupStep[]; live: boolean }) {
@@ -256,4 +262,81 @@ function StatusLine({
     default:
       return null;
   }
+}
+
+/**
+ * Pages a search of the web found for an answer (ADR 0031), as cards: where each is from, what it says, and
+ * Add to room (it becomes a source in the room) or leave it. Nothing is added on its own.
+ */
+export function WebFinds({ finds, onAdded, title = 'Found on the web' }: { finds: WebFind[]; onAdded?: (() => void) | undefined; title?: string }) {
+  const [state, setState] = useState<Record<string, WebFind['status'] | 'adding'>>({});
+  const [problem, setProblem] = useState<string | null>(null);
+  const shown = finds.filter((f) => (state[f.id] ?? f.status) !== 'dismissed');
+  if (shown.length === 0) return null;
+  const act = async (f: WebFind, what: 'add' | 'dismiss') => {
+    setProblem(null);
+    setState((m) => ({ ...m, [f.id]: what === 'add' ? 'adding' : 'dismissed' }));
+    try {
+      if (what === 'add') {
+        await api.addWebFind(f.id);
+        setState((m) => ({ ...m, [f.id]: 'added' }));
+        onAdded?.();
+      } else {
+        await api.dismissWebFind(f.id);
+      }
+    } catch (err) {
+      setState((m) => ({ ...m, [f.id]: f.status }));
+      setProblem(err instanceof ApiFailure ? err.message : 'It could not be done.');
+    }
+  };
+  return (
+    <section className="web-finds" aria-label={title} data-testid="web-finds">
+      <p className="web-finds-head">
+        <Orb size="small" />
+        <span>{title}</span>
+        <span className="hint">nothing is added until you add it</span>
+      </p>
+      {problem && (
+        <p className="hint is-error" role="alert">
+          {problem}
+        </p>
+      )}
+      <ul>
+        {shown.map((f) => {
+          const now = state[f.id] ?? f.status;
+          const where = [f.site, f.date ? f.date.slice(0, 10) : null].filter(Boolean).join(' · ');
+          return (
+            <li key={f.id} className="web-find" data-testid="web-find" data-status={now}>
+              <p className="web-find-where">
+                web {f.n}
+                {where ? ` · ${where}` : ''}
+              </p>
+              <p className="web-find-title">{f.title || f.url}</p>
+              {f.snippet && <p className="web-find-snippet">{f.snippet}</p>}
+              <div className="web-find-actions">
+                {now === 'added' ? (
+                  <span className="web-find-added" data-testid="web-find-added">
+                    ✓ In the room
+                  </span>
+                ) : (
+                  <button type="button" className="ai-button is-strong" onClick={() => void act(f, 'add')} disabled={now === 'adding'} data-testid="web-find-add">
+                    <Orb size="small" />
+                    {now === 'adding' ? 'Reading it…' : 'Add to room'}
+                  </button>
+                )}
+                <a className="web-find-open" href={f.url} target="_blank" rel="noreferrer noopener">
+                  Open ↗
+                </a>
+                {now !== 'added' && (
+                  <button type="button" className="quiet" onClick={() => void act(f, 'dismiss')} data-testid="web-find-dismiss">
+                    Leave it
+                  </button>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
 }

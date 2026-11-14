@@ -29,6 +29,7 @@ import {
   CreateRoomRequest,
   UpdateLinkRequest,
   MergeRoomRequest,
+  RoomWebRequest,
   RenameRoomRequest,
   RoomItemRef,
   RoomPlacesRequest,
@@ -283,7 +284,63 @@ export function createApp(deps: AppDeps): App {
   router.on('GET', '/api/rooms/:id', ({ res, params }) => {
     const view = repo.roomView(params.id as string);
     if (!view) throw notFound('room');
-    sendJson(res, 200, { ...view, reading: roomReader.status(params.id as string) });
+    const webAvailable = models.current().configured && (models.search?.() ?? null) !== null;
+    sendJson(res, 200, { ...view, reading: roomReader.status(params.id as string), webAvailable });
+  });
+  // Whether questions asked in a room may search the web (ADR 0031).
+  router.on('PUT', '/api/rooms/:id/web', async (ctx) => {
+    const body = await ctx.body(RoomWebRequest);
+    const room = repo.setRoomWeb(ctx.params.id as string, body.on);
+    if (!room) throw notFound('room');
+    sendJson(ctx.res, 200, room);
+  });
+  // Pages for what is still open in a room: one search for each open question (ADR 0031).
+  router.on('POST', '/api/rooms/:id/find-sources', async ({ res, params }) => {
+    const roomId = params.id as string;
+    const view = repo.roomView(roomId);
+    if (!view) throw notFound('room');
+    const search = models.current().configured ? (models.search?.() ?? null) : null;
+    if (!search) throw new HttpError(409, 'not_configured', 'Searching the web needs a DeepSeek model: Model, at the top right.');
+    const open = (view.brief?.open ?? []).map((o) => o.question).slice(0, 4);
+    if (open.length === 0) throw new HttpError(409, 'invalid', 'Nothing is open in this room yet: read it first.');
+    const known = new Set([...repo.listSources(view.room.notebookId).map((x) => x.url), ...view.webFinds.map((f) => f.url)]);
+    let n = view.webFinds.reduce((m, f) => Math.max(m, f.n), 0);
+    const finds = [];
+    for (const question of open) {
+      let results: Awaited<ReturnType<typeof search.search>> = [];
+      try {
+        results = await search.search(question, 3);
+      } catch (err) {
+        if (err instanceof ProviderError && ['auth', 'quota'].includes(err.kind)) throw new HttpError(409, err.kind, describeError(err.kind));
+        log.warn('a web search failed', { service: search.name, err });
+      }
+      for (const r of results) {
+        if (known.has(r.url)) continue;
+        known.add(r.url);
+        n += 1;
+        finds.push({ id: ulid(), n, query: question, ...r });
+      }
+    }
+    repo.saveWebFinds(view.room.notebookId, { revisionId: null, roomId }, finds);
+    repo.logEvent('web.searched', roomId, { searches: open.length, found: finds.length, service: search.name });
+    sendJson(res, 200, { finds: repo.roomWebFinds(roomId) });
+  });
+  // A page found on the web, added to its room as a source; or left (ADR 0031).
+  router.on('POST', '/api/web/:id/add', async ({ res, params }) => {
+    const find = repo.webFind(params.id as string);
+    if (!find) throw notFound('page');
+    if (find.status === 'added' && find.sourceId && repo.getSource(find.sourceId)) {
+      sendJson(res, 200, { find, source: repo.getSource(find.sourceId) });
+      return;
+    }
+    const source = await addSource(find.notebookId, ulid(), { url: find.url, title: find.title || null });
+    if (find.roomId && repo.getRoom(find.roomId)) repo.addRoomItems(find.roomId, [{ kind: 'source', id: source.id }], 'you');
+    sendJson(res, 200, { find: repo.setWebFind(find.id, 'added', source.id), source });
+  });
+  router.on('POST', '/api/web/:id/dismiss', ({ res, params }) => {
+    const find = repo.setWebFind(params.id as string, 'dismissed');
+    if (!find) throw notFound('page');
+    sendJson(res, 200, { find });
   });
   // Read a room (ADR 0027): summaries of what has none, then suggested links. Watched by asking for the room again.
   router.on('POST', '/api/rooms/:id/read', ({ res, params }) => {

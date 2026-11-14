@@ -423,6 +423,54 @@ test('a room you work in: its brief and what is still open; asked, written and a
   await expect(brief.getByTestId('room-read')).toContainText('new');
 });
 
+test('sources from the web: asked in a room, it searches when the question needs it and offers pages; for what is still open too; the web can be off', async ({
+  page,
+  request,
+}) => {
+  await freshThread(request);
+  const a = await addSource(request, 'Activation memory');
+  const nb = await notebookId(request);
+  const room = ulidish();
+  await request.post(`/api/notebooks/${nb}/rooms`, { data: { id: room, title: 'Memory', items: [{ kind: 'source', id: a }] }, headers: H });
+  await page.goto(`/#/room/${room}`);
+  await expect(page.getByTestId('room-web')).toHaveText('◎ Web on');
+
+  // Asked in the room: it searched, shows what it searched, and offers the pages.
+  await page.getByTestId('room-ask').fill('Checkpointing papers this year [[web]]');
+  await page.getByTestId('room-ask').press('Enter');
+  await expect(page).toHaveURL(/#\/t\/[0-9A-Z]{26}$/);
+  const answer = page.locator('.main [data-testid=message][data-role=assistant]').first();
+  await expect(answer).toHaveAttribute('data-status', 'done', { timeout: 15_000 });
+  await expect(page.getByTestId('lookup-step')).toHaveText(['◎Searched the web “Checkpointing papers this year”· 3']);
+  const finds = page.getByTestId('web-find');
+  await expect(finds).toHaveCount(3);
+  await expect(finds.first()).toContainText('Fake page 1 on Checkpointing papers this year');
+  await expect(finds.first()).toContainText('web 1 · example.org · 2026-01-01');
+  await finds.nth(2).getByTestId('web-find-dismiss').click();
+  await expect(finds).toHaveCount(2);
+  // What was sent says the question went with what was found.
+  await answer.getByTestId('show-context').click();
+  await expect(page.getByTestId('context-part').filter({ hasText: 'Your question, with what was found on the web' })).toHaveCount(1);
+  await page.keyboard.press('Escape');
+
+  // Back in the room: read it, then find sources for what is still open; they wait in Review.
+  await page.getByTestId('room-trail-room').click();
+  await page.getByTestId('room-read').click();
+  await expect(page.getByTestId('room-brief-text')).toContainText('Fake brief');
+  await page.getByTestId('room-find-sources').click();
+  const review = page.getByTestId('room-review-web');
+  await expect(review.getByTestId('web-find')).toHaveCount(3);
+  await expect(review).toContainText('Sources for what is still open');
+  await review.getByTestId('web-find-dismiss').first().click();
+  await expect(review.getByTestId('web-find')).toHaveCount(2);
+
+  // The web off: the room says so, and keeps it.
+  await page.getByTestId('room-web').click();
+  await expect(page.getByTestId('room-web')).toHaveText('◎ Web off');
+  await page.reload();
+  await expect(page.getByTestId('room-web')).toHaveText('◎ Web off');
+});
+
 /** What covers what on the map of a room. */
 async function coverings(page: Page) {
   return page.evaluate(() => {

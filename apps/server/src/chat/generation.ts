@@ -28,6 +28,10 @@ import {
   type ToolCall,
   ulid,
   withoutLabels,
+  readWebPlan,
+  WEB_RESULTS,
+  type WebItem,
+  webPlanRequest,
 } from '@noema/core';
 import type { Config } from '../config.ts';
 import { type ModelProvider, ProviderError, type StreamEvent, type Usage } from '../llm/provider.ts';
@@ -40,6 +44,7 @@ import { ASSISTANT_PROMPT, VaultLookup } from './assistant.ts';
 import { SYSTEM_PROMPT } from './prompt.ts';
 import type { Headliner } from './headlines.ts';
 import type { Titler } from './titles.ts';
+import type { WebResult } from '../web/search.ts';
 
 export const FLUSH_MS = 200;
 
@@ -295,6 +300,9 @@ export class Generations {
           }))
         : [];
     const room = this.repo.roomOfThread(args.threadId);
+    // In a room that may search: what the web has for this question (ADR 0031).
+    const searchIn = this.repo.roomsOfThread(args.threadId).find((r) => r.web) ?? null;
+    const web = searchIn ? await this.searchWeb(entry, args, provider, searchIn, room?.title === searchIn.title ? room.brief : '') : [];
     const assemble = (withImages: SentImage[]) =>
       assembleContext({
         system: SYSTEM_PROMPT,
@@ -308,6 +316,7 @@ export class Generations {
         })),
         // The room it is in, with what it adds up to and what is still open (ADR 0030).
         ...(room ? { room } : {}),
+        ...(web.length > 0 ? { web } : {}),
         inherited: this.repo.inheritedHistory(args.threadId),
         ...(origin
           ? { origin: { quote: origin.anchor.exact } }
@@ -359,6 +368,54 @@ export class Generations {
       else if (ev.type === 'text') this.write(entry, provider.model, rec, ev.text);
       if (entry.controller.signal.aborted) break;
     }
+  }
+
+  /**
+   * Before answering in a room that may search (ADR 0031): a light call says whether the question needs the web,
+   * and with which words (two searches at most); the best five pages found go with the question, labelled
+   * [web n], and are kept with the answer for the learner to add to the room or leave. A search that fails is
+   * skipped: the answer goes on without it.
+   */
+  private async searchWeb(entry: Live, args: StartArgs, provider: ModelProvider, room: { id: string; title: string }, brief: string): Promise<WebItem[]> {
+    const search = this.models.search?.() ?? null;
+    if (!search) return [];
+    let raw = '';
+    try {
+      for await (const ev of provider.stream({
+        messages: webPlanRequest(args.question.content, { title: room.title, brief }),
+        maxTokens: 200,
+        light: true,
+        purpose: 'web-plan',
+        signal: entry.controller.signal,
+      })) {
+        if (ev.type === 'text') raw += ev.text;
+      }
+    } catch (err) {
+      if (entry.controller.signal.aborted) throw err;
+      this.log.warn('could not decide whether to search the web', { err });
+      return [];
+    }
+    const queries = readWebPlan(raw);
+    if (queries.length === 0) return [];
+    const found: Array<WebResult & { query: string }> = [];
+    for (const query of queries) {
+      let results: WebResult[] = [];
+      try {
+        results = await search.search(query, WEB_RESULTS, entry.controller.signal);
+      } catch (err) {
+        if (entry.controller.signal.aborted) throw err;
+        this.log.warn('a web search failed', { service: search.name, err });
+      }
+      const step: LookupStep = { tool: 'web', label: `Searched the web “${query}”`, found: results.length };
+      entry.steps.push(step);
+      this.emit(entry, (w) => w.step?.(step));
+      for (const r of results) if (!found.some((f) => f.url === r.url)) found.push({ ...r, query });
+    }
+    const top = found.sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, WEB_RESULTS);
+    const items = top.map((r, i) => ({ id: ulid(), n: i + 1, ...r }));
+    this.repo.saveWebFinds(args.notebookId, { revisionId: entry.revisionId, roomId: room.id }, items);
+    this.repo.logEvent('web.searched', entry.messageId, { searches: queries.length, found: items.length, service: search.name });
+    return items.map(({ n, title, url, site, date, summary }) => ({ n, title, url, site, date, summary }));
   }
 
   /**

@@ -2,6 +2,7 @@ export * from './anchor.ts';
 export * from './blocks.ts';
 export * from './cite.ts';
 export * from './context.ts';
+export * from './web.ts';
 export * from './contract.ts';
 export * from './errors.ts';
 export * from './ids.ts';

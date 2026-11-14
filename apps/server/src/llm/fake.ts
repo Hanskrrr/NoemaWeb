@@ -219,6 +219,15 @@ export class FakeProvider implements ModelProvider {
       yield { type: 'finish', reason: 'stop' };
       return;
     }
+    if (req.purpose === 'web-plan') {
+      // Searches only when a question asks for it: [[web]] one search, [[web2]] two; nothing otherwise.
+      const words = (/The question:\n([\s\S]*)$/.exec(question)?.[1] ?? '').replace(/\[\[[^\]]*\]\]/g, '').trim().split(/\s+/).slice(0, 4).join(' ');
+      const queries = question.includes('[[web2]]') ? [words, `${words} explained`] : question.includes('[[web]]') ? [words] : [];
+      await sleep(this.delayMs, req.signal);
+      yield { type: 'text', text: JSON.stringify({ queries }) };
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
     if (req.purpose === 'brief') {
       // A predictable brief: the room's name and how many things; one question open in the first thing.
       if (question.includes('[[fail-brief]]')) throw new ProviderError('unavailable', 'fake failure: unavailable');

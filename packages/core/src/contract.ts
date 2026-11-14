@@ -80,6 +80,23 @@ export type Thread = z.infer<typeof Thread>;
 export const MessageError = z.object({ kind: ErrorKind, message: z.string() });
 export type MessageError = z.infer<typeof MessageError>;
 
+/** A page a search of the web found (ADR 0031): offered as a source, kept only when the learner adds it. */
+export const WebFind = z.object({
+  id: Id,
+  /** Its label: cited as [web n]. */
+  n: z.number().int().positive(),
+  query: z.string(),
+  title: z.string(),
+  url: z.string(),
+  snippet: z.string(),
+  site: z.string().nullable(),
+  date: z.string().nullable(),
+  status: z.enum(['found', 'added', 'dismissed']),
+  /** The source it became, once added. */
+  sourceId: z.string().nullable(),
+});
+export type WebFind = z.infer<typeof WebFind>;
+
 export const Message = z.object({
   id: Id,
   threadId: Id,
@@ -103,6 +120,8 @@ export const Message = z.object({
   headline: z.string().nullable(),
   /** For an answer of the Assistant: the lookups it made, and where the labels it cites point. */
   lookups: Lookups.nullable(),
+  /** For an answer in a room: what a search of the web found for it (ADR 0031). */
+  web: z.array(WebFind).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -594,6 +613,7 @@ export const MessageContext = z.object({
           'image',
           'merged',
           'overview',
+          'web',
           'question',
           'lookup',
         ]),
@@ -967,6 +987,8 @@ export const Room = z.object({
   /** Everything in it, as "kind:id": what was put in and what came with it. */
   members: z.array(RoomKeySchema),
   counts: z.object({ sources: z.number().int(), threads: z.number().int(), notes: z.number().int() }),
+  /** Questions asked in it may search the web (ADR 0031). */
+  web: z.boolean().default(true),
 });
 export type Room = z.infer<typeof Room>;
 export const RoomList = z.object({ rooms: z.array(Room) });
@@ -978,6 +1000,7 @@ export const CreateRoomRequest = z.object({
 });
 export const RenameRoomRequest = z.object({ title: z.string().trim().min(1).max(200) });
 export const MergeRoomRequest = z.object({ into: z.string().min(1).max(64) });
+export const RoomWebRequest = z.object({ on: z.boolean() });
 export const AddRoomItemsRequest = z.object({
   items: z
     .array(RoomItemRef.extend({ x: z.number().finite().optional(), y: z.number().finite().optional() }))
@@ -1070,6 +1093,10 @@ export const RoomView = z.object({
   unread: z.number().int(),
   /** The last or current reading of the room, while the server remembers it. */
   reading: RoomReading.nullable(),
+  /** Pages found on the web for what is still open, waiting to be added or dismissed (ADR 0031). */
+  webFinds: z.array(WebFind).default([]),
+  /** Whether the web can be searched with the model in use (DeepSeek, or the fake one). */
+  webAvailable: z.boolean().default(false),
   /** What the room adds up to, and what is still open in it (ADR 0030); null until the room is read. */
   brief: z
     .object({

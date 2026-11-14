@@ -8,6 +8,8 @@
 // question and never About me. The manifest is stored with every model call
 // so "what did the model see?" always has an answer.
 
+import { formatWeb, type WebItem } from './web.ts';
+
 export type Role = 'system' | 'user' | 'assistant' | 'tool';
 
 export interface ChatMessage {
@@ -90,6 +92,8 @@ export interface ContextInput {
   pinned?: PinnedText[];
   /** The room this thread is in, with what it adds up to and what is still open (ADR 0030). */
   room?: RoomContext;
+  /** What a search of the web found for this question (ADR 0031), put before it. */
+  web?: WebItem[];
   history: HistoryItem[];
   /** Threads merged in since the last question: they go in front of this one. */
   mergedNow?: MergedText[];
@@ -141,6 +145,7 @@ export type ManifestPart =
   | { kind: 'image'; ref: string; tokens: number }
   | { kind: 'merged'; id: string; tokens: number }
   | { kind: 'overview'; tokens: number }
+  | { kind: 'web'; tokens: number }
   | { kind: 'question'; id: string; tokens: number }
   /** The Assistant: one lookup, asked for after the question, with what came back. */
   | { kind: 'lookup'; tokens: number };
@@ -294,6 +299,8 @@ export function assembleContext(input: ContextInput): AssembledContext {
   const originTokens = originText ? estimateTokens(originText) : 0;
   const overviewText = input.overview?.trim() ? input.overview.trim() : null;
   const overviewTokens = overviewText ? estimateTokens(overviewText) : 0;
+  const webText = input.web && input.web.length > 0 ? formatWeb(input.web) : null;
+  const webTokens = webText ? estimateTokens(webText) : 0;
   const mergedNow = (input.mergedNow ?? []).map((m) => ({ id: m.id, tokens: estimateTokens(formatMerged(m)) }));
   const mergedTokens = mergedNow.reduce((n, m) => n + m.tokens, 0);
   const questionTokens = estimateTokens(input.question.content);
@@ -307,6 +314,7 @@ export function assembleContext(input: ContextInput): AssembledContext {
     roomTokens +
     originTokens +
     overviewTokens +
+    webTokens +
     mergedTokens +
     questionTokens +
     imageTokens;
@@ -342,7 +350,7 @@ export function assembleContext(input: ContextInput): AssembledContext {
 
   // The origin goes with the question, not before the history, so the
   // history prefix stays identical across a branch's turns (prompt cache).
-  const before = [overviewText, originText].filter((t): t is string => t !== null);
+  const before = [overviewText, webText, originText].filter((t): t is string => t !== null);
   const asked = before.length > 0 ? `${before.join('\n\n')}\n\n${input.question.content}` : input.question.content;
   const question = withMerged(asked, input.mergedNow);
   const messages: ChatMessage[] = [
@@ -366,6 +374,7 @@ export function assembleContext(input: ContextInput): AssembledContext {
   }
   for (const m of mergedNow) parts.push({ kind: 'merged', id: m.id, tokens: m.tokens });
   if (overviewText) parts.push({ kind: 'overview', tokens: overviewTokens });
+  if (webText) parts.push({ kind: 'web', tokens: webTokens });
   if (originText) parts.push({ kind: 'origin', tokens: originTokens });
   for (const image of images) parts.push({ kind: 'image', ref: image.ref, tokens: IMAGE_TOKENS });
   parts.push({ kind: 'question', id: input.question.id, tokens: questionTokens });
@@ -388,6 +397,8 @@ export interface SentPart {
   withPassage: boolean;
   /** The question carries the Assistant's overview of the notebook. */
   withOverview?: boolean;
+  /** The question carries what a search of the web found (ADR 0031). */
+  withWeb?: boolean;
   /** Pictures sent with the question. */
   images?: SentImage[];
   /** For a lookup: what the model asked for (the text is what came back). */
@@ -497,11 +508,12 @@ export function describeSent(manifest: { parts: SentManifestPart[] }, request: C
       kind: 'question',
       role: question.role,
       text: question.content,
-      tokens: tokensOf('question') + tokensOf('origin') + tokensOf('image') + tokensOf('overview') + pending.tokens,
+      tokens: tokensOf('question') + tokensOf('origin') + tokensOf('image') + tokensOf('overview') + tokensOf('web') + pending.tokens,
       id: manifest.parts.find((p) => p.kind === 'question')?.id ?? '',
       merged: pending.merged,
       withPassage: has('origin'),
       ...(has('overview') ? { withOverview: true } : {}),
+      ...(has('web') ? { withWeb: true } : {}),
       ...(question.images && question.images.length > 0 ? { images: question.images } : {}),
     });
   }

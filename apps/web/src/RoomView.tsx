@@ -40,6 +40,7 @@ import { openMenu } from './ContextMenu.tsx';
 import { addDropped, droppedItem, isItemDrag, isOutsideDrag, takeOutsideDrop } from './drag.ts';
 import { EditableTitle } from './EditableTitle.tsx';
 import { Orb } from './LivingFrame.tsx';
+import { WebFinds } from './MessageView.tsx';
 import { roomMenu, useRooms } from './Rooms.tsx';
 
 const WIDTH = 264;
@@ -780,7 +781,12 @@ export function RoomView({
         <RoomBrief
           view={view}
           busy={busy}
-          suggested={suggested.length}
+          suggested={suggested.length + view.webFinds.length}
+          onFindSources={async () => {
+            await api.findSources(roomId);
+            await load();
+            setReviewing(true);
+          }}
           reviewing={reviewing}
           onRead={() => void startReading()}
           onReview={() => setReviewing((r) => !r)}
@@ -804,6 +810,11 @@ export function RoomView({
           onKeepAll={() => void Promise.all(suggested.map((l) => api.updateLink(l.id, { status: 'accepted' }))).then(load, load)}
           onClose={() => setReviewing(false)}
         />
+      )}
+      {reviewing && view.webFinds.length > 0 && (
+        <div className="room-review room-review-web" data-testid="room-review-web">
+          <WebFinds key={view.webFinds.map((f) => f.id).join()} finds={view.webFinds} title="Sources for what is still open" onAdded={() => void rooms.refresh()} />
+        </div>
       )}
       {view.clusters.length > 0 && (
         <div className="room-legend" data-testid="room-legend">
@@ -952,6 +963,11 @@ export function RoomView({
       </div>
       <CreateHere
         title={room.title}
+        web={view.webAvailable ? room.web : null}
+        onToggleWeb={async () => {
+          await api.setRoomWeb(roomId, !room.web);
+          await rooms.refresh();
+        }}
         onAsk={async (question) => {
           const threadId = ulid();
           await api.createThread(notebookId, threadId);
@@ -982,6 +998,7 @@ function RoomBrief({
   view,
   busy,
   suggested,
+  onFindSources,
   reviewing,
   onRead,
   onReview,
@@ -991,6 +1008,7 @@ function RoomBrief({
   view: RoomViewData;
   busy: boolean;
   suggested: number;
+  onFindSources: () => Promise<void>;
   reviewing: boolean;
   onRead: () => void;
   onReview: () => void;
@@ -998,6 +1016,7 @@ function RoomBrief({
   titles: Map<string, RoomCard>;
 }) {
   const { brief, reading, unread } = view;
+  const [finding, setFinding] = useState<string | null>(null);
   const things = view.clusters.reduce((n, c) => n + c.cards.length, 0);
   const status = !reading
     ? null
@@ -1074,13 +1093,41 @@ function RoomBrief({
               </li>
             ))}
           </ul>
+          {view.webAvailable && (
+            <button
+              type="button"
+              className="ai-button room-find-sources"
+              disabled={finding === 'busy'}
+              onClick={() => {
+                setFinding('busy');
+                onFindSources().then(
+                  () => setFinding(null),
+                  (err: unknown) => setFinding(err instanceof ApiFailure ? err.message : 'The web could not be searched.'),
+                );
+              }}
+              title="One search of the web for each open question; what it finds waits in Review"
+              data-testid="room-find-sources"
+            >
+              <Orb size="small" />
+              {finding === 'busy' ? 'Searching the web…' : 'Find sources for these'}
+            </button>
+          )}
+          {finding && finding !== 'busy' && (
+            <p className="hint is-error" role="alert">
+              {finding}
+            </p>
+          )}
         </div>
       )}
       <div className="room-brief-col room-brief-actions">
         {suggested > 0 && (
           <>
             <p className="room-brief-label">To review</p>
-            <p className="room-brief-count">⟷ {plural(suggested, 'link')} suggested</p>
+            <p className="room-brief-count">
+              {suggested - view.webFinds.length > 0 && <>⟷ {plural(suggested - view.webFinds.length, 'link')} suggested</>}
+              {suggested - view.webFinds.length > 0 && view.webFinds.length > 0 && <br />}
+              {view.webFinds.length > 0 && <>❡ {plural(view.webFinds.length, 'source')} from the web</>}
+            </p>
             <button type="button" className={`ai-button is-strong${reviewing ? ' is-on' : ''}`} onClick={onReview} aria-expanded={reviewing} data-testid="room-review-open">
               <Orb size="small" />
               Review {suggested}
@@ -1096,11 +1143,16 @@ function RoomBrief({
 /** Making things in the room (ADR 0030): a question starts a thread here; a note or a source goes in it. */
 function CreateHere({
   title,
+  web,
+  onToggleWeb,
   onAsk,
   onNote,
   onSource,
 }: {
   title: string;
+  /** Whether its questions may search the web; null when the web cannot be searched with this model. */
+  web: boolean | null;
+  onToggleWeb: () => Promise<void>;
   onAsk: (question: string) => Promise<void>;
   onNote: () => Promise<void>;
   onSource: () => void;
@@ -1136,6 +1188,18 @@ function CreateHere({
         <button type="button" className="quiet" onClick={onSource} disabled={busy} data-testid="room-source-here">
           ❡ Source here
         </button>
+        {web !== null && (
+          <button
+            type="button"
+            className={`room-web-toggle${web ? ' is-on' : ''}`}
+            onClick={() => void onToggleWeb()}
+            aria-pressed={web}
+            title={web ? 'Questions asked here may search the web (DeepSeek search). Click to stop.' : 'Questions asked here do not search the web. Click to let them.'}
+            data-testid="room-web"
+          >
+            ◎ Web {web ? 'on' : 'off'}
+          </button>
+        )}
         <textarea
           value={text}
           rows={1}

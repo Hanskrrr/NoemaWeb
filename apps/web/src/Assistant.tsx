@@ -2,8 +2,9 @@
 // floating over whatever is open (folded to a bar, or open on the
 // conversation), pinned beside it, or on a page of its own. It knows where
 // the learner is and what they selected; it looks things up as it answers;
-// what it cites becomes cards that open a preview of the very words, and the
-// changes it proposes wait here for Do it, with Open and Undo after.
+// what it cites becomes cards that open a preview of the very words (one card
+// a thing, the first few shown). It makes changes itself, each with Open and
+// Undo, and Undo all (ADR 0033); asked to ask first, they wait for Do it.
 
 import {
   type AssistantAction,
@@ -87,6 +88,8 @@ export function AssistantChat({
   onPin,
   onFloat,
   onGrab,
+  asksFirst = false,
+  onAsksFirst,
 }: {
   threadId: string;
   /** With what is open (floating or pinned beside it), or a page of its own. */
@@ -114,6 +117,9 @@ export function AssistantChat({
   onFloat?: () => void;
   /** Floating: a pointer pressed on its header, to move it. */
   onGrab?: (e: ReactPointerEvent<HTMLElement>) => void;
+  /** It proposes changes for Do it, instead of making them itself (ADR 0033); and how to switch. */
+  asksFirst?: boolean;
+  onAsksFirst?: (asks: boolean) => void;
 }) {
   const [messages, dispatch] = useReducer(reducer, []);
   const [loaded, setLoaded] = useState(false);
@@ -132,6 +138,15 @@ export function AssistantChat({
   opener.current = onOpenTarget;
   const changed = useRef(onChanged);
   changed.current = onChanged;
+  // Changes it makes as it answers (ADR 0033): what is open is drawn again, once for a burst of them.
+  const acted = useRef(onActed);
+  acted.current = onActed;
+  const actedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const actedSoon = useCallback(() => {
+    clearTimeout(actedTimer.current);
+    actedTimer.current = setTimeout(() => acted.current(), 300);
+  }, []);
+  useEffect(() => () => clearTimeout(actedTimer.current), []);
 
   const hold = useCallback(() => {
     setLooked(true);
@@ -178,6 +193,7 @@ export function AssistantChat({
         },
         action: (action) => {
           upsertAction(action);
+          if (action.status === 'done' && action.kind !== 'show') actedSoon();
           // It takes the learner somewhere: once, as it happens.
           if (action.kind === 'show' && action.open && !shown.current.has(action.id)) {
             shown.current.add(action.id);
@@ -201,7 +217,7 @@ export function AssistantChat({
       });
       watchers.current.set(id, close);
     },
-    [threadId, hold, upsertAction],
+    [threadId, hold, upsertAction, actedSoon],
   );
 
   useEffect(() => {
@@ -295,6 +311,19 @@ export function AssistantChat({
     }
   };
 
+  /** Do all the changes of an answer that wait, or Undo all it made (ADR 0033). */
+  const actAll = async (messageId: string, what: 'run' | 'undo') => {
+    try {
+      const r = what === 'run' ? await api.runAllActions(messageId) : await api.undoAllActions(messageId);
+      for (const a of r.actions) upsertAction(a);
+      onActed();
+      const kept = 'kept' in r ? Number(r.kept) : 0;
+      setNotice(kept > 0 ? `${kept === 1 ? 'One change' : `${kept} changes`} could not be undone any more: what it changed was changed again since.` : null);
+    } catch (err) {
+      setNotice(err instanceof ApiFailure ? err.message : 'It could not be done.');
+    }
+  };
+
   const openTarget = (t: VaultTarget) => {
     setPreview(null);
     onOpenTarget(t);
@@ -327,6 +356,22 @@ export function AssistantChat({
           )}
         </div>
         <div className="assistant-bar-actions">
+          {onAsksFirst && (
+            <button
+              type="button"
+              className={`quiet assistant-acts${asksFirst ? '' : ' is-on'}`}
+              onClick={() => onAsksFirst(!asksFirst)}
+              aria-pressed={!asksFirst}
+              title={
+                asksFirst
+                  ? 'It proposes changes and waits for your Do it. Click to let it make them itself, each with Undo.'
+                  : 'It makes the changes you ask for itself, in as many steps as it takes, each with Undo. Click to have it ask first.'
+              }
+              data-testid="assistant-acts"
+            >
+              {asksFirst ? 'Asks first' : 'Acts itself'}
+            </button>
+          )}
           {floating && onFold && (
             <button
               type="button"
@@ -376,7 +421,7 @@ export function AssistantChat({
             <h2>{where ? `Ask about ${where.title ? `“${where.title}”` : 'what is open'}, or anything else.` : 'Ask about anything you have read, asked or written.'}</h2>
             <p>
               It looks through your threads, sources and notes before it answers, and shows where it found things. It can
-              take you there, and propose changes you confirm.
+              take you there, and {asksFirst ? 'propose changes you confirm' : 'make the changes you ask for, each with Undo'}.
             </p>
             <div className="assistant-asks">
               {asks.map((q) => (
@@ -405,7 +450,12 @@ export function AssistantChat({
                 phase={isLive(m.status) ? (looked && m.status === 'pending' ? 'looking' : (phases[m.id] ?? null)) : undefined}
               />
               {m.status !== 'pending' && m.status !== 'streaming' && <Mentioned message={m} onPreview={setPreview} onOpen={openTarget} />}
-              <ActionCards actions={actions.filter((a) => a.messageId === m.id)} onAct={act} onOpen={openTarget} />
+              <ActionCards
+                actions={actions.filter((a) => a.messageId === m.id)}
+                onAct={act}
+                onAll={(what) => void actAll(m.id, what)}
+                onOpen={openTarget}
+              />
             </div>
           ),
         )}
@@ -479,7 +529,18 @@ export function AssistantChat({
   );
 }
 
-/** What an answer cited, as cards: open a preview of the words, or go there. */
+/** One thread, source or note, however many of its places an answer cites. */
+function thingOf(t: VaultTarget): string {
+  return t.kind === 'thread' ? `t:${t.threadId}` : t.kind === 'source' ? `s:${t.sourceId}` : `n:${t.noteId}`;
+}
+
+/** At most this many cards under an answer until the learner asks for more (ADR 0033). */
+const MENTIONS_SHOWN = 3;
+
+/**
+ * What an answer cited, as cards: open a preview of the words, or go there. One card a thing, whichever of its places
+ * were cited (ADR 0033); the first few, and the rest on asking.
+ */
 function Mentioned({
   message,
   onPreview,
@@ -489,16 +550,28 @@ function Mentioned({
   onPreview: (t: VaultTarget) => void;
   onOpen: (t: VaultTarget) => void;
 }) {
+  const [all, setAll] = useState(false);
   const refs = message.lookups?.refs ?? {};
-  const labels = citedLabels(message.content, (l) => l in refs);
-  if (labels.length === 0) return null;
+  const groups: Array<{ key: string; labels: string[]; targets: VaultTarget[] }> = [];
+  for (const label of citedLabels(message.content, (l) => l in refs)) {
+    const t = refs[label] as VaultTarget;
+    const g = groups.find((x) => x.key === thingOf(t));
+    if (g) {
+      g.labels.push(label);
+      g.targets.push(t);
+    } else groups.push({ key: thingOf(t), labels: [label], targets: [t] });
+  }
+  if (groups.length === 0) return null;
+  const shown = all ? groups : groups.slice(0, MENTIONS_SHOWN);
   return (
     <div className="mentioned" data-testid="mentioned" aria-label="From your notebook">
-      {labels.map((label) => {
-        const t = refs[label] as VaultTarget;
+      {shown.map(({ key, labels, targets }) => {
+        // The words shown: a quote of it if the answer has one, else the first place cited.
+        const t = targets.find((x) => x.quote) ?? (targets[0] as VaultTarget);
         const words = t.quote ?? firstWords(t.excerpt ?? '');
+        const label = labels.join(' ');
         return (
-          <div key={label} className={`mention mention-${t.kind}`} data-testid="mention" data-kind={t.kind}>
+          <div key={key} className={`mention mention-${t.kind}`} data-testid="mention" data-kind={t.kind}>
             <button type="button" className="mention-main" onClick={() => onPreview(t)} title="Preview it here">
               <span className="mention-top">
                 <span className="mention-label">{label}</span>
@@ -514,6 +587,11 @@ function Mentioned({
           </div>
         );
       })}
+      {groups.length > MENTIONS_SHOWN && (
+        <button type="button" className="quiet mention-more" onClick={() => setAll((a) => !a)} aria-expanded={all} data-testid="mention-more">
+          {all ? 'Show fewer' : `${groups.length - MENTIONS_SHOWN} more from your notebook`}
+        </button>
+      )}
     </div>
   );
 }
@@ -613,20 +691,62 @@ function ActionDetail({ kind, detail }: { kind: AssistantAction['kind']; detail:
   );
 }
 
-/** The changes an answer proposed: Do it or Cancel; then Open and Undo. */
+/** More changes than this, and the list folds to those that need the learner (ADR 0033). */
+const ACTIONS_SHOWN = 4;
+
+/**
+ * The changes of an answer (ADR 0033): those it made, with Open and Undo, and Undo all; those waiting for the
+ * learner, with Do it or Cancel, and Do all. A long list folds to what needs the learner.
+ */
 function ActionCards({
   actions,
   onAct,
+  onAll,
   onOpen,
 }: {
   actions: AssistantAction[];
   onAct: (a: AssistantAction, what: 'run' | 'cancel' | 'undo') => void;
+  onAll: (what: 'run' | 'undo') => void;
   onOpen: (t: VaultTarget) => void;
 }) {
+  const [all, setAll] = useState(false);
   if (actions.length === 0) return null;
+  const changes = actions.filter((a) => a.kind !== 'show');
+  const done = changes.filter((a) => a.status === 'done').length;
+  const waiting = changes.filter((a) => a.status === 'proposed').length;
+  const undoable = changes.filter((a) => a.undoable).length;
+  const folds = actions.length > ACTIONS_SHOWN && !all;
+  const needs = (a: AssistantAction) => a.status === 'proposed' || a.status === 'running' || a.status === 'failed';
+  const shown = folds ? actions.filter(needs) : actions;
+  const said = [
+    ...(done ? [`Did ${done === 1 ? 'one thing' : `${done} things`}`] : []),
+    ...(waiting ? [`${waiting === 1 ? 'one waits' : `${waiting} wait`} for you`] : []),
+  ].join(' · ');
   return (
-    <ul className="action-cards" aria-label="What it proposes">
-      {actions.map((a) => (
+    <div className="action-group" data-testid="action-group">
+      {(changes.length > 1 || folds) && (
+        <div className="action-head" data-testid="action-head">
+          <span className="action-head-said">{said || `${changes.length} changes`}</span>
+          {waiting > 1 && (
+            <button type="button" onClick={() => onAll('run')} data-testid="action-run-all">
+              Do all
+            </button>
+          )}
+          {undoable > 1 && (
+            <button type="button" className="quiet" onClick={() => onAll('undo')} data-testid="action-undo-all">
+              Undo all
+            </button>
+          )}
+          {actions.length > ACTIONS_SHOWN && (
+            <button type="button" className="quiet" onClick={() => setAll((x) => !x)} aria-expanded={all} data-testid="action-show-all">
+              {all ? 'Fold' : 'Show each'}
+            </button>
+          )}
+        </div>
+      )}
+      {shown.length > 0 && (
+    <ul className="action-cards" aria-label="What it changed">
+      {shown.map((a) => (
         <li key={a.id} className={`action-card is-${a.status}`} data-testid="action-card" data-kind={a.kind} data-status={a.status}>
           <span className="action-glyph" aria-hidden>
             {ACTION_GLYPH[a.kind]}
@@ -672,5 +792,7 @@ function ActionCards({
         </li>
       ))}
     </ul>
+      )}
+    </div>
   );
 }

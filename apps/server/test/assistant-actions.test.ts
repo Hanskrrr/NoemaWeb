@@ -31,6 +31,8 @@ interface World {
 async function world(): Promise<World> {
   const s = await startServer();
   const notebookId = (await api<{ notebooks: Array<{ id: string }> }>(s, 'GET', '/api/notebooks')).json.notebooks[0]?.id as string;
+  // Changes proposed for the learner's Do it (ADR 0024): the Assistant asks first here; acting on its own is in assistant-acts.test.ts.
+  await api(s, 'PATCH', `/api/notebooks/${notebookId}`, { assistantAsks: true });
   const chatId = ulid();
   await api(s, 'POST', `/api/notebooks/${notebookId}/threads`, { id: chatId });
   const r = await api<{ assistant: { id: string } }>(s, 'POST', `/api/threads/${chatId}/messages`, {
@@ -85,7 +87,7 @@ test('a change is proposed, not done: the learner runs it, opens what it made, a
     assert.equal(actions[0]?.status, 'proposed');
     assert.equal(actions[0]?.summary, 'Start a thread: “What is all-reduce?”');
     assert.ok(events.some((e) => e.event === 'action'), 'proposed as the answer is written');
-    assert.match((await toolResults(w, answer.id))[0] ?? '', /^Proposed to the learner; it happens only when they tap Do it/);
+    assert.match((await toolResults(w, answer.id))[0] ?? '', /^Waiting for the learner to tap Do it under your answer: Start a thread/);
     assert.equal((await threads(w)).length, before, 'nothing made yet');
 
     const done = (await run(w, actions[0] as AssistantAction)).json.action;

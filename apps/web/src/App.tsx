@@ -121,6 +121,8 @@ function NotebookView({
   const [searching, setSearching] = useState(false);
   /** Bumped on every jump from search, so the same place opened twice is arrived at again. */
   const [jump, setJump] = useState(0);
+  /** The Assistant proposes changes for Do it instead of making them itself (ADR 0033). */
+  const [assistantAsks, setAssistantAsks] = useState(notebook.assistantAsks);
   /** Opened fresh (nothing in the URL): the side questions left open, until hidden or one is opened. */
   const [comeBack, setComeBack] = useState<OpenBranch[] | null>(null);
   const [freshStart] = useState(() => route === null);
@@ -766,6 +768,11 @@ function NotebookView({
         setJump((n) => n + 1);
       }}
       onOpenSettings={() => setSettingsOpen(true)}
+      asksFirst={assistantAsks}
+      onAsksFirst={(asks) => {
+        setAssistantAsks(asks);
+        void api.updateNotebook(notebook.id, { assistantAsks: asks }).catch(() => setAssistantAsks(!asks));
+      }}
       {...(mode === 'panel'
         ? {
             onExpand: () => go({ kind: 'assistant' }),

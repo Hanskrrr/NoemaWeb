@@ -32,6 +32,8 @@ let folder: Folder;
 before(async () => {
   s = await startServer();
   notebookId = (await api<{ notebooks: Array<{ id: string }> }>(s, 'GET', '/api/notebooks')).json.notebooks[0]?.id as string;
+  // These tests are of changes proposed for the learner's Do it (ADR 0024); acting on its own is in assistant-acts.test.ts.
+  await api(s, 'PATCH', `/api/notebooks/${notebookId}`, { assistantAsks: true });
   root = mkdtempSync(join(tmpdir(), 'noema-folder-'));
   mkdirSync(join(root, 'Course', 'week4'), { recursive: true });
   mkdirSync(join(root, 'Course', 'node_modules', 'x'), { recursive: true });
@@ -244,6 +246,26 @@ test('the Assistant saves a note into a folder and makes a note from a file, on 
   // Undo puts the new note in the trash.
   await act(fromFile, 'undo');
   assert.notEqual((await api<Note>(s, 'GET', `/api/notes/${noteId}`)).json.deletedAt, null);
+});
+
+test('acting on its own (ADR 0033), it still waits for Do it to write a file; a note from a file is done at once', async () => {
+  await api(s, 'PATCH', `/api/notebooks/${notebookId}`, { assistantAsks: false });
+  try {
+    const w = await askAssistant(`Write ${call('write_file', { path: 'Course/acting.md', content: '# Acting\n' })} ${call('note_from_file', { path: 'Course/week4/notes.md' })}`);
+    assert.deepEqual(
+      w.actions.map((a) => [a.kind, a.status]),
+      [
+        ['write_file', 'proposed'],
+        ['note_from_file', 'done'],
+      ],
+    );
+    assert.equal(w.tools[0], 'Waiting for the learner to tap Do it under your answer (it changes a file on their computer): Make the file “Course/acting.md”.');
+    assert.match(w.tools[1] ?? '', /^Done: Make a note from “Course\/week4\/notes\.md”\. What it made is \[\d+\]/);
+    assert.equal(existsSync(join(root, 'Course', 'acting.md')), false);
+    await act(w.actions[1] as AssistantAction, 'undo');
+  } finally {
+    await api(s, 'PATCH', `/api/notebooks/${notebookId}`, { assistantAsks: true });
+  }
 });
 
 test('sources from before folders upgrade in place: none of them is a file', () => {

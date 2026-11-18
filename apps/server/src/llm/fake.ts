@@ -14,7 +14,8 @@
 //   [[no-tools]]       refuse a request with tools (a model without them)
 //   [[no-thinking-tools]]  refuse tools unless thinking is off
 //   [[say-first]]      write a sentence before the first lookup
-//   [[call:NAME:JSON]] any other tool (a change, show), with these arguments
+//   [[call:NAME:JSON]] any other tool (a change, show), with these arguments;
+//                      $made in them is the label of what the last change made (ADR 0033)
 //   [[quote:WORDS|N]]  quote these words and cite label N
 
 import { type ErrorKind, subjectTokens } from '@noema/core';
@@ -276,9 +277,16 @@ export class FakeProvider implements ModelProvider {
       throw new ProviderError('bad_request', 'fake model: image input is not supported');
     }
     const seen = pictures.length > 0 ? `I can see ${pictures.map((p) => p.label).join(' and ')}.\n\n` : '';
+    // Pages found on the web with the question (ADR 0031): it cites them all, or those [[web-cites:2,3]] names (ADR 0033).
+    const pages = [...question.matchAll(/^\[web (\d+)\]/gm)].map((m) => m[1] as string);
+    const chosen = /\[\[web-cites:([\d,]*)\]\]/.exec(question)?.[1];
+    const cites = chosen === undefined ? pages : chosen.split(',').filter((n) => pages.includes(n));
+    const fromWeb = pages.length > 0 ? `\n\nFrom the web: ${cites.length ? cites.map((n) => `[web ${n}]`).join('') : 'nothing I used'}.` : '';
     const slow = question.includes('[[slow]]');
     const again = req.revision && req.revision > 1 ? `\n\nAsked again: this is answer ${req.revision}.` : '';
-    const answer = seen + (question.includes('[[tex]]') ? texAnswer() : fakeAnswer(question)) + again;
+    // With pages from the web before it, the question is what comes after them.
+    const onlyAsked = pages.length > 0 ? question.slice(question.lastIndexOf('\n\n') + 2) : question;
+    const answer = seen + (question.includes('[[tex]]') ? texAnswer() : fakeAnswer(onlyAsked)) + fromWeb + again;
     const parts = chunks(answer, slow ? 2 : 6);
     const delay = slow ? Math.max(this.delayMs, 25) : this.delayMs;
     const breakAt = question.includes('[[error-midway]]') ? Math.floor(parts.length / 2) : -1;
@@ -317,11 +325,13 @@ export class FakeProvider implements ModelProvider {
     const think = slow ? Math.max(this.delayMs, 250) : delay;
     const after = req.messages.slice(at + 1);
     const rounds = after.filter((m) => m.role === 'assistant' && m.toolCalls).length;
+    // The label of what the last change made, as the server told it.
+    const made = [...after.filter((m) => m.role === 'tool').map((m) => m.content).join('\n').matchAll(/What it made is \[(\d+)\]/g)].at(-1)?.[1] ?? '0';
     const lookups = [...question.matchAll(/\[\[(search|open|list|call):(.*?)\]\](?!\])/g)].map((m) => {
       const [name, arg] = [m[1] as string, m[2] as string];
       if (name === 'call') {
         const colon = arg.indexOf(':');
-        return { name: arg.slice(0, colon), arguments: arg.slice(colon + 1) };
+        return { name: arg.slice(0, colon), arguments: arg.slice(colon + 1).replaceAll('$made', made) };
       }
       if (name === 'search') return { name, arguments: JSON.stringify({ query: arg }) };
       if (name === 'list') return { name, arguments: JSON.stringify({ what: arg }) };

@@ -57,6 +57,7 @@ import {
   StopResponse,
   type AssistantAction,
   AssistantActionList,
+  UndoAllResponse,
   type AssistantPhase,
   type AssistantPlace,
   type LookupStep,
@@ -149,7 +150,7 @@ async function call<S extends z.ZodTypeAny>(
 export const api = {
   health: () => call(Health, 'GET', '/api/health'),
   notebooks: () => call(NotebookList, 'GET', '/api/notebooks'),
-  updateNotebook: (id: string, patch: { title?: string; aboutMe?: string }) =>
+  updateNotebook: (id: string, patch: { title?: string; aboutMe?: string; assistantAsks?: boolean }) =>
     call(Notebook, 'PATCH', `/api/notebooks/${id}`, patch),
   threads: (notebookId: string) => call(ThreadList, 'GET', `/api/notebooks/${notebookId}/threads`),
   createThread: (notebookId: string, id: string, title = '') =>
@@ -163,6 +164,9 @@ export const api = {
   assistantActions: (threadId: string) => call(AssistantActionList, 'GET', `/api/threads/${threadId}/actions`),
   actOn: (actionId: string, what: 'run' | 'cancel' | 'undo') =>
     call(StreamAction, 'POST', `/api/assistant/actions/${actionId}/${what}`, {}),
+  /** All the changes of one answer (ADR 0033): Do all that wait, or Undo all that can be. */
+  runAllActions: (messageId: string) => call(AssistantActionList, 'POST', `/api/messages/${messageId}/actions/run-all`, {}),
+  undoAllActions: (messageId: string) => call(UndoAllResponse, 'POST', `/api/messages/${messageId}/actions/undo-all`, {}),
   stop: (messageId: string) => call(StopResponse, 'POST', `/api/messages/${messageId}/stop`, {}),
   createBranch: (parentThreadId: string, body: CreateBranchRequest) =>
     call(CreateBranchResponse, 'POST', `/api/threads/${parentThreadId}/branches`, body),

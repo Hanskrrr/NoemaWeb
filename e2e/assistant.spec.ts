@@ -5,8 +5,9 @@ import { freshThread, ulidish } from './helpers.ts';
 // the header, the rail or its orb in the corner), folded to a bar until
 // something is asked; pinned beside it; or on its own page. It knows what is open and what is
 // selected, looks things up as it answers (the fake model does what the
-// question's markers say), cites with cards that preview the very words,
-// proposes changes that wait for Do it, and the frame shows it working.
+// question's markers say), cites with cards that preview the very words (one
+// a thing, the first few), makes changes itself with Undo and Undo all (ADR
+// 0033) or, asked to, proposes them for Do it; and the frame shows it working.
 
 const H = { 'x-noema-client': 'web' };
 
@@ -18,6 +19,12 @@ async function addPasted(page: Page, text: string): Promise<string> {
 }
 
 const dock = (page: Page) => page.getByTestId('assistant-dock');
+
+/** Whether the Assistant asks before it changes things (ADR 0033), set before the page opens. */
+async function setAsks(page: Page, asks: boolean): Promise<void> {
+  const nb = await (await page.request.get('/api/notebooks')).json();
+  await page.request.patch(`/api/notebooks/${nb.notebooks[0].id}`, { data: { assistantAsks: asks }, headers: H });
+}
 const frame = (page: Page) => page.getByTestId('living-frame');
 const answers = (page: Page) => dock(page).locator('[data-testid=message][data-role=assistant]');
 
@@ -88,16 +95,28 @@ test('beside a source: it knows what is selected, looks things up, and its cards
   await expect(dock(page)).toBeVisible();
 });
 
-test('a change waits for Do it; then Open goes there and Undo takes it back', async ({ page, request }) => {
+test('it acts itself: a change is done as it is made, Open goes there, Undo takes it back; many at once fold, with Undo all', async ({
+  page,
+  request,
+}) => {
   await freshThread(request);
+  await setAsks(page, false);
+  for (const n of [1, 2, 3, 4, 5]) await addPasted(page, `# Reading ${n}\n\nWarps of thirty-two threads, part ${n}.`);
   await page.goto('/');
   await openDock(page);
+  await expect(dock(page).getByTestId('assistant-acts')).toHaveText('Acts itself');
+
+  // Cited five times, five things: three cards, and the rest on asking.
+  await askDock(page, 'Where did I read about warps? [[cite:1, 2, 3, 4, 5]]');
+  const cited = dock(page).locator('.assistant-a').last();
+  await expect(cited.getByTestId('mention')).toHaveCount(3);
+  await cited.getByTestId('mention-more').click();
+  await expect(cited.getByTestId('mention')).toHaveCount(5);
+
   await askDock(page, 'Start one about warps [[call:start_thread:{"question":"What is a warp?"}]]');
   const card = dock(page).getByTestId('action-card').last();
-  await expect(card).toHaveAttribute('data-status', 'proposed');
-  await expect(card).toContainText('Start a thread: “What is a warp?”');
-  await card.getByTestId('action-run').click();
   await expect(card).toHaveAttribute('data-status', 'done');
+  await expect(card).toContainText('Start a thread: “What is a warp?”');
   await card.getByTestId('action-open').click();
   await expect(page).toHaveURL(/#\/t\/[0-9A-Z]{26}$/);
   await expect(page.locator('.main [data-testid=message][data-role=user]').first()).toHaveText('What is a warp?');
@@ -107,9 +126,51 @@ test('a change waits for Do it; then Open goes there and Undo takes it back', as
   await expect(card).toHaveAttribute('data-status', 'undone');
   await expect(page.getByTestId('in-trash')).toBeVisible();
 
+  // Five changes in one answer: a line says so, the list folds, and Undo all takes them all back.
+  const tag = ulidish().slice(-6);
+  const calls = [1, 2, 3, 4, 5].map((n) => `[[call:put_in_room:{"refs":[${n}],"room":"Warps ${tag} ${n}"}]]`).join(' ');
+  await askDock(page, `File these [[together]] ${calls}`);
+  const group = dock(page).getByTestId('action-group').last();
+  await expect(group.getByTestId('action-head')).toContainText('Did 5 things');
+  await expect(group.getByTestId('action-card')).toHaveCount(0);
+  await group.getByTestId('action-show-all').click();
+  await expect(group.getByTestId('action-card')).toHaveCount(5);
+  await group.getByTestId('action-undo-all').click();
+  await expect(group.locator('[data-testid=action-card][data-status=undone]')).toHaveCount(5);
+  const rooms = await (await page.request.get(`/api/notebooks/${(await (await page.request.get('/api/notebooks')).json()).notebooks[0].id}/rooms`)).json();
+  expect(rooms.rooms.filter((r: { title: string }) => r.title.startsWith(`Warps ${tag}`))).toHaveLength(0);
+
   // Show takes the learner there at once.
   await askDock(page, 'Take me to it [[list:threads]] [[call:show:{"ref":1}]]');
   await expect(dock(page).getByTestId('action-card').last()).toHaveAttribute('data-kind', 'show');
+});
+
+test('asked to ask first, a change waits for Do it, and Do all does what waits', async ({ page, request }) => {
+  await freshThread(request);
+  await setAsks(page, false);
+  await page.goto('/');
+  await openDock(page);
+  const acts = dock(page).getByTestId('assistant-acts');
+  await acts.click();
+  await expect(acts).toHaveText('Asks first');
+  try {
+    await askDock(page, 'Start one about lanes [[call:start_thread:{"question":"What is a lane?"}]]');
+    const card = dock(page).getByTestId('action-card').last();
+    await expect(card).toHaveAttribute('data-status', 'proposed');
+    await card.getByTestId('action-run').click();
+    await expect(card).toHaveAttribute('data-status', 'done');
+
+    const tag = ulidish().slice(-6);
+    await askDock(page, `File it twice [[together]] [[call:put_in_room:{"refs":[1],"room":"Lanes ${tag} A"}]] [[call:put_in_room:{"refs":[1],"room":"Lanes ${tag} B"}]]`);
+    const group = dock(page).getByTestId('action-group').last();
+    await expect(group.getByTestId('action-head')).toContainText('2 wait for you');
+    await group.getByTestId('action-run-all').click();
+    await expect(group.locator('[data-testid=action-card][data-status=done]')).toHaveCount(2);
+  } finally {
+    // Back to acting itself, for the tests after.
+    await acts.click();
+    await expect(acts).toHaveText('Acts itself');
+  }
 });
 
 test('the frame shows what the Assistant is doing: listening, thinking, looking, writing, a bloom, then waiting', async ({

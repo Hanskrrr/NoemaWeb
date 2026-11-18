@@ -7,10 +7,17 @@
 import { z } from 'zod';
 import { LINK_KINDS } from './links.ts';
 
-/** At most this many rounds of looking up; then it answers with what it has. */
-export const MAX_LOOKUP_ROUNDS = 6;
-/** At most this many lookups in one round; more are answered with a note to ask fewer. */
-export const MAX_LOOKUPS_PER_ROUND = 4;
+/**
+ * At most this many rounds of looking up and changing things; then it answers with what it has. Enough for a
+ * request of many steps (ADR 0033): look, change, look at what changed, change again.
+ */
+export const MAX_LOOKUP_ROUNDS = 16;
+/** At most this many lookups or changes in one round; more are answered with a note to ask fewer. */
+export const MAX_LOOKUPS_PER_ROUND = 10;
+/** At most this many changes in one answer (ADR 0033). */
+export const MAX_CHANGES = 40;
+/** At most this many changes that start another answer of the model, done on its own in one answer (ADR 0033). */
+export const MAX_NEW_ANSWERS = 3;
 /** What one lookup returns is cut to this many characters. */
 export const MAX_LOOKUP_CHARS = 6000;
 
@@ -132,6 +139,32 @@ export const ActionArgs = {
 export type ActionKind = keyof typeof ActionArgs;
 export const ACTION_KINDS = Object.keys(ActionArgs) as ActionKind[];
 
+/**
+ * The Assistant acts on its own (ADR 0033): its changes are done when it makes them, each with Undo. These still
+ * wait for the learner's Do it: they write files on the learner's computer, which other apps use too.
+ */
+export const WAITING_KINDS: ReadonlySet<ActionKind> = new Set<ActionKind>(['write_file', 'edit_file', 'save_note_to_file']);
+/** Changes that start another answer of the model (and spend a call): at most MAX_NEW_ANSWERS on its own. */
+export const ANSWERING_KINDS: ReadonlySet<ActionKind> = new Set<ActionKind>([
+  'start_thread',
+  'ask_in_thread',
+  'ask_about_passage',
+  'note_from_thread',
+  'merge_threads',
+]);
+const PROPOSED = ' Proposed to the learner, who confirms it; it does not happen until they do.';
+const DONE = ' Done at once when you call it; the learner can undo it.';
+const WAITS = ' It waits for the learner to confirm it: it changes a file on their computer.';
+
+/** Changes that make something new, which it is given a label for, to go on with (ADR 0033). */
+export const MAKING_KINDS: ReadonlySet<ActionKind> = new Set<ActionKind>([
+  'start_thread',
+  'create_note',
+  'note_from_thread',
+  'add_source',
+  'note_from_file',
+]);
+
 export type ToolName = 'search' | 'open' | 'list' | 'show' | 'list_files' | 'find_in_files' | 'open_file' | ActionKind;
 
 export interface ToolSpec {
@@ -140,7 +173,7 @@ export interface ToolSpec {
   parameters: Record<string, unknown>;
 }
 
-export const ASSISTANT_TOOLS: ToolSpec[] = [
+const LOOKUP_TOOLS: ToolSpec[] = [
   {
     name: 'search',
     description:
@@ -218,8 +251,12 @@ export const ASSISTANT_TOOLS: ToolSpec[] = [
       'Take the learner to what a label points at: the thread, the passage in its source (a PDF at a page), or the note. Use it when they ask to go somewhere or see something; it happens at once.',
     parameters: refParams({ page: { type: 'integer', description: 'For a PDF source: the page to show.' } }),
   },
-  ...actionTools(),
 ];
+
+/** The tools when it proposes changes that wait for the learner (ADR 0024). */
+export const ASSISTANT_TOOLS: ToolSpec[] = [...LOOKUP_TOOLS, ...actionTools(false)];
+/** The tools when it acts on its own (ADR 0033): its changes are done at once, each with Undo. */
+export const ACTING_TOOLS: ToolSpec[] = [...LOOKUP_TOOLS, ...actionTools(true)];
 
 function refParams(more: Record<string, unknown> = {}, required: string[] = ['ref']): Record<string, unknown> {
   return {
@@ -234,9 +271,18 @@ function str(description: string): Record<string, unknown> {
   return { type: 'string', description };
 }
 
-/** The changes the Assistant can propose. None happens until the learner confirms it. */
-function actionTools(): ToolSpec[] {
-  const proposed = ' Proposed to the learner, who confirms it; it does not happen until they do.';
+/** The changes the Assistant can make: proposed for the learner to confirm, or (acting on its own) done at once. */
+function actionTools(acts: boolean): ToolSpec[] {
+  const tools = proposedTools();
+  if (!acts) return tools;
+  return tools.map((t) => ({
+    ...t,
+    description: t.description.replace(PROPOSED, WAITING_KINDS.has(t.name as ActionKind) ? WAITS : DONE),
+  }));
+}
+
+function proposedTools(): ToolSpec[] {
+  const proposed = PROPOSED;
   const QUOTE = str('Words copied exactly from what the label points at: the passage meant.');
   const object = (properties: Record<string, unknown>, required: string[]) => ({
     type: 'object',

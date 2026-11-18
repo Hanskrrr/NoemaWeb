@@ -6365,3 +6365,88 @@ button.room-fold:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ------------------------------------------------------------------------ */
+/* The Assistant acts on its own, and says less (ADR 0033).                  */
+/* Acts itself / Asks first, in its header. */
+.assistant-bar-actions button.assistant-acts {
+  font-size: 0.74rem;
+  line-height: 1.2;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--rule);
+  white-space: nowrap;
+}
+.assistant-bar-actions button.assistant-acts.is-on {
+  border-color: color-mix(in srgb, var(--lf-b, var(--accent)) 55%, var(--rule));
+  background: color-mix(in srgb, var(--lf-a, var(--accent)) 12%, transparent);
+  color: var(--ink);
+}
+
+/* Cards of what it cited: one line each, the first few. */
+.mentioned {
+  gap: 0.3rem;
+}
+.mention-main {
+  padding: 0.35rem 0.6rem;
+}
+.mention-words {
+  -webkit-line-clamp: 1;
+  font-size: 0.8rem;
+}
+.mention-open {
+  padding: 0.35rem 0.6rem 0.45rem;
+}
+.mention-more,
+.lookup-trail .lookup-more {
+  align-self: flex-start;
+  padding: 0.12rem 0.55rem;
+  border-radius: 999px;
+  border: 1px dashed var(--rule);
+  background: none;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.mention-more:hover,
+.lookup-trail .lookup-more:hover {
+  color: var(--ink);
+  border-style: solid;
+}
+
+/* What it changed: a line saying how much, Undo all or Do all; each change a compact row. */
+.action-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.7rem;
+}
+.action-group .action-cards {
+  margin: 0;
+  gap: 0.3rem;
+}
+.action-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.84rem;
+  color: var(--ink-soft);
+}
+.action-head-said {
+  font-weight: 600;
+  color: var(--ink);
+  margin-right: auto;
+}
+.action-head button {
+  padding: 0.18rem 0.65rem;
+  font-size: 0.82rem;
+}
+.action-group .action-card.is-done {
+  grid-template-columns: auto 1fr auto;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.86rem;
+}
+.action-group .action-card.is-done .action-buttons {
+  grid-column: 3;
+}

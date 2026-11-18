@@ -198,6 +198,8 @@ export function createApp(deps: AppDeps): App {
     folders,
     noteFromFile,
   });
+  // The Assistant acts on its own (ADR 0033): its changes run as it makes them.
+  generations.useActions(actions);
 
   const notFound = (what: string) => new HttpError(404, 'not_found', `${what} not found`);
 
@@ -515,6 +517,13 @@ export function createApp(deps: AppDeps): App {
     sendJson(res, 200, { action: actions.cancel(params.id as string) });
   });
 
+  // All the changes of one answer at once (ADR 0033): Do all, Undo all.
+  router.on('POST', '/api/messages/:id/actions/run-all', async ({ res, params }) => {
+    sendJson(res, 200, { actions: await actions.runAll(params.id as string) });
+  });
+  router.on('POST', '/api/messages/:id/actions/undo-all', async ({ res, params }) => {
+    sendJson(res, 200, await actions.undoAll(params.id as string));
+  });
   router.on('POST', '/api/assistant/actions/:id/undo', async ({ res, params }) => {
     sendJson(res, 200, { action: await actions.undo(params.id as string) });
   });

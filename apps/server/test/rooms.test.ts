@@ -29,6 +29,8 @@ const TEXT = '# Week 4\n\nData parallel: every worker holds a copy of the model.
 before(async () => {
   s = await startServer();
   notebookId = (await api<{ notebooks: Array<{ id: string }> }>(s, 'GET', '/api/notebooks')).json.notebooks[0]?.id as string;
+  // These tests are of changes proposed for the learner's Do it (ADR 0024); acting on its own is in assistant-acts.test.ts.
+  await api(s, 'PATCH', `/api/notebooks/${notebookId}`, { assistantAsks: true });
 });
 after(() => s.close());
 

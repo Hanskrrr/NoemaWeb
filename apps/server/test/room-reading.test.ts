@@ -20,6 +20,8 @@ const TEXT = '# Week 4\n\nEvery worker holds a full copy of the model and a shar
 before(async () => {
   s = await startServer();
   notebookId = (await api<{ notebooks: Array<{ id: string }> }>(s, 'GET', '/api/notebooks')).json.notebooks[0]?.id as string;
+  // These tests are of changes proposed for the learner's Do it (ADR 0024); acting on its own is in assistant-acts.test.ts.
+  await api(s, 'PATCH', `/api/notebooks/${notebookId}`, { assistantAsks: true });
 });
 after(() => s.close());
 
@@ -233,6 +235,13 @@ test('asked in a room, the web is searched when the question needs it: shown, se
   // Left: dismissed.
   const left = await api<{ find: { status: string } }>(s, 'POST', `/api/web/${answer.web[2]?.id}/dismiss`, {});
   assert.equal(left.json.find.status, 'dismissed');
+
+  // Only the pages the answer cites stay on offer (ADR 0033).
+  const some = await api<AskResponse>(s, 'POST', `/api/threads/${t}/messages`, { id: ulid(), content: 'Checkpointing in practice [[web]] [[web-cites:2]]' });
+  await readEvents(`${s.base}/api/messages/${some.json.assistant.id}/events`);
+  const cited = (await api<{ messages: Message[] }>(s, 'GET', `/api/threads/${t}`)).json.messages.find((m) => m.id === some.json.assistant.id) as Message;
+  assert.match(cited.content, /From the web: \[web 2\]\.$/);
+  assert.deepEqual(cited.web.map((w) => w.n), [2]);
 
   // A question that needs nothing from the web: no search.
   const plain = await api<AskResponse>(s, 'POST', `/api/threads/${t}/messages`, { id: ulid(), content: 'What is a gradient?' });

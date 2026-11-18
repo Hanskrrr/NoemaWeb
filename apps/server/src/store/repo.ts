@@ -122,6 +122,7 @@ function toNotebook(r: Row): Notebook {
     id: r.id as string,
     title: r.title as string,
     aboutMe: r.about_me as string,
+    assistantAsks: Number(r.assistant_asks ?? 0) === 1,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };
@@ -334,6 +335,9 @@ export interface ModelCallEnd {
 }
 
 /** A room and its rows, as stored (see Repo.roomSnapshot). */
+/** At most this many pages found on the web are offered under an answer (ADR 0033). */
+const WEB_OFFERED = 3;
+
 export interface RoomSnapshot {
   /** Its doors both ways (ADR 0032); missing in snapshots from before rooms held rooms. */
   doors?: Array<Record<string, unknown>>;
@@ -360,7 +364,7 @@ export class Repo {
       this.db.sql
         .prepare('INSERT INTO notebook (id, title, about_me, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
         .run(id, 'My notebook', '', t, t);
-      return { id, title: 'My notebook', aboutMe: '', createdAt: t, updatedAt: t };
+      return { id, title: 'My notebook', aboutMe: '', assistantAsks: false, createdAt: t, updatedAt: t };
     });
   }
 
@@ -373,13 +377,16 @@ export class Repo {
     return row ? toNotebook(row) : null;
   }
 
-  updateNotebook(id: string, patch: { title?: string | undefined; aboutMe?: string | undefined }): Notebook | null {
+  updateNotebook(
+    id: string,
+    patch: { title?: string | undefined; aboutMe?: string | undefined; assistantAsks?: boolean | undefined },
+  ): Notebook | null {
     const current = this.getNotebook(id);
     if (!current) return null;
     const next = { ...current, ...stripUndefined(patch), updatedAt: now() };
     this.db.sql
-      .prepare('UPDATE notebook SET title = ?, about_me = ?, updated_at = ? WHERE id = ?')
-      .run(next.title, next.aboutMe, next.updatedAt, id);
+      .prepare('UPDATE notebook SET title = ?, about_me = ?, assistant_asks = ?, updated_at = ? WHERE id = ?')
+      .run(next.title, next.aboutMe, next.assistantAsks ? 1 : 0, next.updatedAt, id);
     this.logEvent('notebook.updated', id, { fields: Object.keys(stripUndefined(patch)) });
     return next;
   }
@@ -1181,6 +1188,19 @@ export class Repo {
   }
 
   /** What a search of the web found, kept for an answer (its revision) or for a room. */
+  /**
+   * Of the pages a search found for an answer, keep on offer only those the answer cites, in the order cited
+   * (ADR 0033): the rest go. Pages already added stay.
+   */
+  keepCitedWebFinds(revisionId: string, cited: number[]): void {
+    const keep = cited.slice(0, WEB_OFFERED);
+    this.db.sql
+      .prepare(
+        `DELETE FROM web_find WHERE revision_id = ? AND status = 'found'${keep.length ? ` AND n NOT IN (${keep.map(() => '?').join(', ')})` : ''}`,
+      )
+      .run(revisionId, ...keep);
+  }
+
   saveWebFinds(
     notebookId: string,
     at: { revisionId: string | null; roomId: string | null },

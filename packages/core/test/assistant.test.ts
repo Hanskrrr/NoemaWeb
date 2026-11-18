@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  ACTING_TOOLS,
   ACTION_KINDS,
   ActionArgs,
   ASSISTANT_TOOLS,
+  WAITING_KINDS,
   assembleContext,
   type ChatMessage,
   citedLabels,
@@ -174,5 +176,18 @@ test('changes the Assistant can propose are checked before anything happens', ()
     const tool = ASSISTANT_TOOLS.find((t) => t.name === kind);
     assert.ok(tool, kind);
     assert.match(tool.description, /confirms it/);
+  }
+});
+
+test('acting on its own (ADR 0033), the tools say a change is done at once, except files on the computer', () => {
+  assert.deepEqual(
+    ACTING_TOOLS.map((t) => t.name),
+    ASSISTANT_TOOLS.map((t) => t.name),
+  );
+  for (const kind of ACTION_KINDS) {
+    const tool = ACTING_TOOLS.find((t) => t.name === kind);
+    assert.ok(tool, kind);
+    if (WAITING_KINDS.has(kind)) assert.match(tool.description, /waits for the learner to confirm it: it changes a file on their computer\.$/, kind);
+    else assert.match(tool.description, /Done at once when you call it; the learner can undo it\.$/, kind);
   }
 });

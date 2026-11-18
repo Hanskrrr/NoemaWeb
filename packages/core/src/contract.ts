@@ -39,6 +39,8 @@ export const Notebook = z.object({
   id: Id,
   title: z.string(),
   aboutMe: z.string(),
+  /** The Assistant proposes changes for the learner to confirm, instead of acting on its own (ADR 0033). */
+  assistantAsks: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -646,7 +648,7 @@ export const MessageContext = z.object({
 export type MessageContext = z.infer<typeof MessageContext>;
 
 export const UpdateNotebookRequest = z
-  .object({ title: z.string().min(1).max(200), aboutMe: z.string().max(4000) })
+  .object({ title: z.string().min(1).max(200), aboutMe: z.string().max(4000), assistantAsks: z.boolean() })
   .partial()
   .refine((v) => Object.keys(v).length > 0, 'nothing to update');
 export type UpdateNotebookRequest = z.infer<typeof UpdateNotebookRequest>;
@@ -936,6 +938,8 @@ export const StreamAction = z.object({ action: AssistantAction });
 export type StreamAction = z.infer<typeof StreamAction>;
 export const AssistantActionList = z.object({ actions: z.array(AssistantAction) });
 export type AssistantActionList = z.infer<typeof AssistantActionList>;
+/** Undo all of an answer's changes (ADR 0033): how they are now, and how many could not be undone any more. */
+export const UndoAllResponse = z.object({ actions: z.array(AssistantAction), kept: z.number().int() });
 export const STREAM_EVENTS = ['snapshot', 'delta', 'status', 'phase', 'step', 'action', 'end'] as const;
 
 /** Sent on every state-changing request; the server rejects requests without it. */

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import {
+  MAX_LOOKUP_ROUNDS,
+  MAX_LOOKUPS_PER_ROUND,
   type Message,
   type MessageContext,
   type Source,
@@ -9,7 +11,7 @@ import {
   type ThreadDetail,
   ulid,
 } from '@noema/core';
-import { ASSISTANT_PROMPT } from '../src/chat/assistant.ts';
+import { ACTING_PROMPT } from '../src/chat/assistant.ts';
 import { api, newThread, readEvents, type SseEvent, startServer, type TestServer } from './helpers.ts';
 
 // The Assistant (ADR 0023): one thread per notebook that looks things up
@@ -104,7 +106,8 @@ test('it looks things up in rounds, says what it is doing, and cites what it fou
 
   // What was sent: the Assistant's instructions, the question with the overview, then each lookup and what came back.
   const context = await contextOf(id);
-  assert.equal(context.request?.[0]?.content.startsWith(ASSISTANT_PROMPT), true);
+  // It acts on its own by default (ADR 0033).
+  assert.equal(context.request?.[0]?.content.startsWith(ACTING_PROMPT), true);
   const question = context.request?.find((m) => m.role === 'user');
   assert.match(question?.content ?? '', /^## The notebook now/);
   assert.match(question?.content ?? '', /\[1\] “Week 4: Parallelism”/);
@@ -162,20 +165,21 @@ test('a page of a PDF, a note, a list; labels it was never given, and wrong argu
   );
 });
 
-test('at most four lookups a round and six rounds; then it answers', async () => {
+test(`at most ${MAX_LOOKUPS_PER_ROUND} lookups a round and ${MAX_LOOKUP_ROUNDS} rounds; then it answers`, async () => {
   const me = await assistant();
-  const many = await ask(me.id, 'Look [[together]] [[search:a]] [[search:b]] [[search:c]] [[search:d]] [[search:e]]');
+  const words = Array.from({ length: MAX_LOOKUPS_PER_ROUND + 1 }, (_, i) => `[[search:a${i}]]`).join(' ');
+  const many = await ask(me.id, `Look [[together]] ${words}`);
   const tools = (await contextOf(many.id)).request?.filter((m) => m.role === 'tool').map((m) => m.content) ?? [];
-  assert.equal(tools.length, 5);
-  assert.equal(tools[4], 'Not looked up: at most 4 lookups at once.');
-  assert.equal((await answerOf(me.id, many.id)).lookups?.steps.length, 4);
+  assert.equal(tools.length, MAX_LOOKUPS_PER_ROUND + 1);
+  assert.equal(tools[MAX_LOOKUPS_PER_ROUND], `Not looked up: at most ${MAX_LOOKUPS_PER_ROUND} lookups at once.`);
+  assert.equal((await answerOf(me.id, many.id)).lookups?.steps.length, MAX_LOOKUPS_PER_ROUND);
 
-  const markers = Array.from({ length: 8 }, (_, i) => `[[search:w${i}]]`).join(' ');
+  const markers = Array.from({ length: MAX_LOOKUP_ROUNDS + 2 }, (_, i) => `[[search:w${i}]]`).join(' ');
   const long = await ask(me.id, `Keep looking ${markers}`);
   const answer = await answerOf(me.id, long.id);
   assert.equal(answer.status, 'done');
-  assert.equal(answer.lookups?.steps.length, 6);
-  assert.match(answer.content, /I looked 6 times/);
+  assert.equal(answer.lookups?.steps.length, MAX_LOOKUP_ROUNDS);
+  assert.match(answer.content, new RegExp(`I looked ${MAX_LOOKUP_ROUNDS} times`));
 });
 
 test('its own thread is not material, and it is never "asked before"', async () => {

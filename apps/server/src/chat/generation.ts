@@ -4,7 +4,10 @@
 // gets everything so far, then the rest as it arrives.
 
 import {
+  ACTING_TOOLS,
+  ANSWERING_KINDS,
   ASSISTANT_TOOLS,
+  type ActionKind,
   type AssistantAction,
   type AssistantPhase,
   assembleContext,
@@ -17,8 +20,11 @@ import {
   type LookupStep,
   type Lookups,
   type ManifestPart,
+  MAKING_KINDS,
+  MAX_CHANGES,
   MAX_LOOKUP_ROUNDS,
   MAX_LOOKUPS_PER_ROUND,
+  MAX_NEW_ANSWERS,
   type MessageError,
   type MessageStatus,
   normalizeNumbered,
@@ -32,6 +38,7 @@ import {
   WEB_RESULTS,
   type WebItem,
   webPlanRequest,
+  WAITING_KINDS,
 } from '@noema/core';
 import type { Config } from '../config.ts';
 import { type ModelProvider, ProviderError, type StreamEvent, type Usage } from '../llm/provider.ts';
@@ -39,8 +46,8 @@ import type { ModelSource } from '../llm/settings.ts';
 import type { Folders } from '../files/folders.ts';
 import type { Logger } from '../log.ts';
 import type { Repo } from '../store/repo.ts';
-import { ACTION_TOOL_NAMES, actionView, planAction } from './actions.ts';
-import { ASSISTANT_PROMPT, VaultLookup } from './assistant.ts';
+import { ACTION_TOOL_NAMES, type AssistantActions, actionView, planAction } from './actions.ts';
+import { ACTING_PROMPT, ASSISTANT_PROMPT, VaultLookup } from './assistant.ts';
 import { SYSTEM_PROMPT } from './prompt.ts';
 import type { Headliner } from './headlines.ts';
 import type { Titler } from './titles.ts';
@@ -101,6 +108,8 @@ export class Generations {
   private readonly log: Logger;
   /** Folders on the learner's computer (ADR 0025), for the Assistant's file tools. */
   private readonly folders: Folders | null;
+  /** What runs the Assistant's changes (ADR 0033): set once both exist, since each needs the other. */
+  private actions: AssistantActions | null = null;
 
   constructor(deps: {
     repo: Repo;
@@ -118,6 +127,11 @@ export class Generations {
     this.headliner = deps.headliner ?? null;
     this.config = deps.config;
     this.log = deps.log;
+  }
+
+  /** The Assistant acts on its own with these (ADR 0033); without them, it only proposes. */
+  useActions(actions: AssistantActions): void {
+    this.actions = actions;
   }
 
   get(messageId: string): Pick<Live, 'content' | 'status' | 'error' | 'phase' | 'steps'> | undefined {
@@ -229,6 +243,8 @@ export class Generations {
       }
       if (entry.controller.signal.aborted) throw new ProviderError('aborted', 'stopped');
       final = { status: 'done', error: null };
+      // Pages found on the web: only those the answer cites stay on offer (ADR 0033).
+      if (entry.steps.some((x) => x.tool === 'web')) this.repo.keepCitedWebFinds(entry.revisionId, citedWeb(entry.content));
     } catch (err) {
       final = this.toFinal(entry, err);
     } finally {
@@ -426,6 +442,8 @@ export class Generations {
   private async assistant(entry: Live, args: StartArgs, provider: ModelProvider, rec: Recorder): Promise<Lookups> {
     const notebook = this.repo.getNotebook(args.notebookId);
     const vault = new VaultLookup(this.repo, args.notebookId, args.threadId, this.folders);
+    // It acts on its own (ADR 0033) unless the learner asked it to ask first.
+    const acting: Acting = { acts: this.actions !== null && !(notebook?.assistantAsks ?? false), did: new Set(), changes: 0, answers: 0 };
     // Earlier answers go back as their text, without the labels that meant something only in them.
     const labelsOf = new Map(
       this.repo.listMessages(args.threadId).map((m) => [m.id, Object.keys(m.lookups?.refs ?? {})] as const),
@@ -434,7 +452,7 @@ export class Generations {
       .history(args.threadId, args.question.seq)
       .map((h) => (h.role === 'assistant' ? { ...h, content: withoutLabels(h.content, labelsOf.get(h.id) ?? []) } : h));
     const base = assembleContext({
-      system: ASSISTANT_PROMPT,
+      system: acting.acts ? ACTING_PROMPT : ASSISTANT_PROMPT,
       aboutMe: notebook?.aboutMe ?? '',
       history,
       overview: this.withPlace(vault, args.question.id),
@@ -463,7 +481,7 @@ export class Generations {
       const stream = provider.stream({
         messages,
         purpose: 'assistant',
-        ...(tools ? { tools: ASSISTANT_TOOLS, ...(last ? { toolChoice: 'none' as const } : {}) } : {}),
+        ...(tools ? { tools: acting.acts ? ACTING_TOOLS : ASSISTANT_TOOLS, ...(last ? { toolChoice: 'none' as const } : {}) } : {}),
         ...(tools && !thinking ? { light: true } : {}),
         maxTokens: this.config.maxOutputTokens ?? undefined,
         revision: args.revision,
@@ -528,7 +546,9 @@ export class Generations {
           continue;
         }
         if (ACTION_TOOL_NAMES.has(call.name)) {
-          answers.push({ role: 'tool', toolCallId: call.id, content: await this.propose(entry, vault, call) });
+          // Stopped: no more changes.
+          const content = entry.controller.signal.aborted ? 'Not done: the learner stopped the answer.' : await this.propose(entry, vault, call, acting);
+          answers.push({ role: 'tool', toolCallId: call.id, content });
           continue;
         }
         const result = await vault.run(call);
@@ -566,11 +586,26 @@ export class Generations {
     return place ? `${vault.overview()}\n\n${vault.place(place)}` : vault.overview();
   }
 
-  /** A change the model asked for: checked and kept as a proposal (or done, for show). What the model is told. */
-  private async propose(entry: Live, vault: VaultLookup, call: ToolCall): Promise<string> {
+  /**
+   * A change the model asked for: checked, then done at once when the Assistant acts on its own (ADR 0033), or kept
+   * as a proposal for the learner's Do it (show is always done). Returns what the model is told.
+   */
+  private async propose(entry: Live, vault: VaultLookup, call: ToolCall, acting: Acting): Promise<string> {
     const plan = await planAction(vault, this.repo, call, this.folders);
     if ('refused' in plan) return plan.refused;
     const show = plan.kind === 'show';
+    if (!show) {
+      // The same change twice in one answer (the same tool, with the same arguments) is done once.
+      const key = `${plan.kind}:${stable(parsed(call.arguments))}`;
+      if (acting.did.has(key)) return `Already ${acting.acts ? 'done' : 'proposed'} in this answer: ${plan.summary}. Do not ask for it again.`;
+      if (acting.changes >= MAX_CHANGES) return `Not done: at most ${MAX_CHANGES} changes in one answer. Tell the learner what is left to do.`;
+      acting.did.add(key);
+      acting.changes += 1;
+    }
+    const kind = plan.kind as ActionKind;
+    // What waits for the learner even when it acts on its own: files on their computer, and answers past the few it starts.
+    const answering = ANSWERING_KINDS.has(kind);
+    const waits = !show && (!acting.acts || WAITING_KINDS.has(kind) || (answering && acting.answers >= MAX_NEW_ANSWERS));
     const stored = this.repo.addAction({
       id: ulid(),
       messageId: entry.messageId,
@@ -583,9 +618,22 @@ export class Generations {
     });
     const view = actionView(stored);
     this.emit(entry, (w) => w.action?.(view));
-    return show
-      ? `Done: the learner is being shown ${plan.open?.title ? `“${plan.open.title}”` : 'it'} now.`
-      : `Proposed to the learner; it happens only when they tap Do it under your answer: ${plan.summary}.`;
+    if (show) return `Done: the learner is being shown ${plan.open?.title ? `“${plan.open.title}”` : 'it'} now.`;
+    if (waits || !this.actions) {
+      const why = !acting.acts
+        ? ''
+        : WAITING_KINDS.has(kind)
+          ? ' (it changes a file on their computer)'
+          : ` (it starts another answer, and you started ${MAX_NEW_ANSWERS} already)`;
+      return `Waiting for the learner to tap Do it under your answer${why}: ${plan.summary}.`;
+    }
+    if (answering) acting.answers += 1;
+    const done = await this.actions.run(stored.id);
+    this.emit(entry, (w) => w.action?.(done));
+    if (done.status !== 'done') return `It could not be done: ${done.error ?? 'it failed'}. (${plan.summary})`;
+    // Something new: a label for it, to go on with.
+    const made = MAKING_KINDS.has(kind) && done.open ? vault.label(done.open) : null;
+    return `Done: ${plan.summary}.${made ? ` What it made is [${made}]: use that label to go on with it.` : ''}`;
   }
 
   /** The picture a reference names, for the provider. */
@@ -610,6 +658,48 @@ export class Generations {
     this.log.error('unexpected generation error', { messageId: entry.messageId, err });
     return { status: 'failed', error: { kind: 'internal', message: describeError('internal') } };
   }
+}
+
+/** The pages an answer cites as [web 2], in the order first cited. */
+export function citedWeb(text: string): number[] {
+  const out: number[] = [];
+  for (const m of text.matchAll(/\bweb\s*(\d{1,2})\b/gi)) {
+    const n = Number(m[1]);
+    if (!out.includes(n)) out.push(n);
+  }
+  return out;
+}
+
+/** The Assistant's changes in one answer (ADR 0033): whether it acts on its own, what it did, and how many. */
+interface Acting {
+  acts: boolean;
+  did: Set<string>;
+  changes: number;
+  /** Changes it did that start another answer of the model. */
+  answers: number;
+}
+
+function parsed(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+/** JSON with its keys in order and its words in lower case, to tell the same change from another. */
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const o = value as Record<string, unknown>;
+    return `{${Object.keys(o)
+      .filter((k) => o[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stable(o[k])}`)
+      .join(',')}}`;
+  }
+  if (typeof value === 'string') return JSON.stringify(/^\d+$/.test(value.trim()) ? Number(value) : value.trim().toLowerCase());
+  return JSON.stringify(value) ?? 'null';
 }
 
 /** One answer's model call, as it goes: recorded when the call ends. */

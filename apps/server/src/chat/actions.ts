@@ -1,9 +1,10 @@
-// Changes the Assistant proposes (ADR 0024). The model asks for a change with
-// a tool; planAction checks it and resolves its labels and words to ids and
-// offsets, and it is kept as a proposal. Nothing happens until the learner
-// taps Do it: AssistantActions runs it through the same store calls as the
+// Changes the Assistant makes (ADRs 0024, 0033). The model asks for a change
+// with a tool; planAction checks it and resolves its labels and words to ids
+// and offsets, and it is kept as an action. Acting on its own (ADR 0033), the
+// Assistant runs it at once; asking first, it waits for the learner's Do it.
+// Either way AssistantActions runs it through the same store calls as the
 // app's own buttons, and keeps what it made, so it can be opened and undone.
-// "show" is the exception: it only takes the learner somewhere, at once.
+// "show" only takes the learner somewhere, at once.
 
 import {
   ACTION_KINDS,
@@ -581,6 +582,36 @@ export class AssistantActions {
       if (error === null) log.error('assistant action failed', { kind: claimed.kind, err });
       return actionView(repo.setAction(id, ['running'], 'failed', { error: error ?? 'It could not be done.' }) as StoredAction);
     }
+  }
+
+  /** Do every change of an answer that waits for the learner, in the order proposed (Do all). */
+  async runAll(messageId: string): Promise<AssistantAction[]> {
+    for (const a of this.ofMessage(messageId)) if (a.status === 'proposed') await this.run(a.id);
+    return this.ofMessage(messageId).map(actionView);
+  }
+
+  /**
+   * Undo every change of an answer that can be undone, newest first (Undo all). One that cannot be undone any more
+   * (a file changed since) is left as it is, and the others are still undone.
+   */
+  async undoAll(messageId: string): Promise<{ actions: AssistantAction[]; kept: number }> {
+    let kept = 0;
+    for (const a of this.ofMessage(messageId).reverse()) {
+      if (!actionView(a).undoable) continue;
+      try {
+        await this.undo(a.id);
+      } catch (err) {
+        if (!(err instanceof ConflictError || err instanceof NotFoundError)) throw err;
+        kept += 1;
+      }
+    }
+    return { actions: this.ofMessage(messageId).map(actionView), kept };
+  }
+
+  private ofMessage(messageId: string): StoredAction[] {
+    const m = this.deps.repo.getMessage(messageId);
+    if (!m) throw new NotFoundError('message');
+    return this.deps.repo.actionsOfThread(m.threadId).filter((a) => a.messageId === messageId);
   }
 
   async undo(id: string): Promise<AssistantAction> {

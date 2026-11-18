@@ -169,16 +169,28 @@ export function MessageView({
 
 const GLYPH: Record<LookupStep['tool'], string> = { search: '⌕', open: '❐', list: '≡', web: '◎' };
 
+/** More lookups than this, and the trail folds (ADR 0033): while it works, to the newest; after, to a count. */
+const STEPS_SHOWN = 3;
+
 /** What the Assistant looked up for an answer, in order; the newest arrives with a small motion while it works. */
 function LookupTrail({ steps, live }: { steps: LookupStep[]; live: boolean }) {
+  const [open, setOpen] = useState(false);
+  const many = steps.length > STEPS_SHOWN && !open;
+  const from = many && live ? steps.length - STEPS_SHOWN : 0;
+  const shown = many && !live ? [] : steps.slice(from);
   return (
     <div className="lookup-trail" data-testid="lookup-trail" aria-label="What the Assistant looked up">
       <span>Looked up</span>
-      {steps.map((step, i) => (
+      {many && (
+        <button type="button" className="lookup-more" onClick={() => setOpen(true)} data-testid="lookup-more">
+          {live ? `${from} earlier` : `${steps.length} times`} ▸
+        </button>
+      )}
+      {shown.map((step, i) => (
         <span
           // biome-ignore lint/suspicious/noArrayIndexKey: steps only grow, in order
-          key={i}
-          className={`lookup-step${live && i === steps.length - 1 ? ' lookup-step-new' : ''}`}
+          key={from + i}
+          className={`lookup-step${live && from + i === steps.length - 1 ? ' lookup-step-new' : ''}`}
           title={step.label}
           data-testid="lookup-step"
         >
@@ -187,6 +199,11 @@ function LookupTrail({ steps, live }: { steps: LookupStep[]; live: boolean }) {
           {step.tool !== 'open' && <span className="lookup-count">· {step.found}</span>}
         </span>
       ))}
+      {open && steps.length > STEPS_SHOWN && (
+        <button type="button" className="lookup-more" onClick={() => setOpen(false)}>
+          Fold
+        </button>
+      )}
     </div>
   );
 }

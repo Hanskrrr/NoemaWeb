@@ -2,7 +2,42 @@
 
 How each push to GitHub (`Hanskrrr/NoemaWeb`) was made, so the next one can be made the same way. Newest first. Add an entry for every push: what, the checks before it, how, and the result.
 
-## Next push: `notebook-features`, asked before, PDF sources and the Assistant
+## Next push: `notebook-features`, reading rooms to concepts
+
+- **What.** 18 commits on top of `cfb2256`: 17 of work, and the one that adds this entry. The work is:
+  - reading a room (ADR 0027) and its overlaps fixed (addendum);
+  - the Assistant floating (ADR 0028);
+  - links drawn by dragging, Review and colours (ADR 0029);
+  - the room's brief (ADR 0030);
+  - sources from the web (ADR 0031);
+  - rooms in rooms (ADR 0032);
+  - the Assistant acting on its own (ADR 0033);
+  - deleting for good (ADR 0034);
+  - ways to see a room (ADR 0035);
+  - concepts (ADR 0036).
+
+  Migrations 020 to 026. 94 files, about 14,400 lines added (before this entry). No force needed: `origin/notebook-features` (`cfb2256`) is an ancestor.
+- **Checks before pushing.**
+  - `node --test` (core, server, web): 376 pass, in the sandbox and on the Mac (its Linux shell).
+  - tsc clean in the sandbox for core, server, web and the root project.
+  - Playwright in the sandbox: 90 tests. The room tests passed in every full run. Each run had one different failure elsewhere (files, sources, the thread map), which passed when rerun (handoff 2026-11-19-ways-to-see-a-room).
+  - `pnpm lint` (Biome) not run.
+  - No `data/`, `.env`, `*.db` or settings file in the range. No key-like strings or private keys in `git log -p cfb2256..`. No local paths. Every commit by WU Jinyu, with the Claude co-author lines. Made-up text only in tests and docs.
+  - Not in the push, and left as they are on the Mac: the uncommitted `pnpm-lock.yaml` change, and the uncommitted AOCI setup (`AGENTS.md`'s AOCI block, `.gitignore`, `.aoci/`, `aoci*.txt`, its handoff).
+- **Tried from the Claude session: no route.**
+  - The sandbox: adding the repository with push access needs the GitHub account linked to Claude ("link your GitHub account").
+  - The bridge to the Mac: GitHub is not on its allow list (SSH to github.com:22 refused, HTTPS 403 from the proxy).
+- **How.** A plain push from the Mac's Terminal, with his SSH key:
+
+  ```sh
+  cd ~/Code/CodeFactory/AgenticSys/NoemaLearningNote/NoemaWeb
+  git log --oneline -1            # docs: push log …
+  git push origin notebook-features
+  ```
+
+- **Result.** Not pushed yet. Record here the commit pushed, when, and by whom.
+
+## 2026-11-13: `notebook-features`, asked before, PDF sources, the Assistant and rooms
 
 - **What.** The commits on top of `5bb1ccb`: "asked before" by words and by the chat model reading for meaning (ADR 0020), `pnpm asked:check`; the study-structure draft (docs only); PDF sources and pages (ADRs 0021, 0022, migrations 014 and 015, a new dependency `pdfjs-dist` 6.2.108, made-up PDF fixtures); the Assistant, its frame, the panel beside what is open, and changes it proposes (ADRs 0023, 0024, migrations 016 and 017); and their docs. No force needed.
 - **Checks before pushing.** See the 2026-11-11 to 2026-11-13 handoffs: `node --test` and Playwright in the Claude sandbox, tsc on the Mac. Before pushing: `pnpm install` on the Mac (it adds pdf.js and updates `pnpm-lock.yaml`, which should be committed with it), then `pnpm check`. No notebook content in code, tests or docs; the fixture PDFs' metadata names no person or path.
@@ -15,7 +50,7 @@ How each push to GitHub (`Hanskrrr/NoemaWeb`) was made, so the next one can be m
   git push origin notebook-features
   ```
 
-- **Result.** Not pushed yet. Record here the commit pushed, when, and by whom.
+- **Result.** Pushed by the founder from his Mac: `origin/notebook-features` is `cfb2256` (docs: ADR 0026 and handoff for rooms), so the push also carried the first rooms commits. The Mac's remote-tracking ref was written at 2026-11-13 14:21 UTC. The `pnpm-lock.yaml` commit was not made: the Mac still has the lockfile change uncommitted.
 
 ## 2026-11-07: `notebook-features`, guides for collaborators, the rest of M5, and fixes
 

@@ -202,6 +202,10 @@ export const api = {
     call(Thread, 'POST', `/api/threads/${threadId}/split-off`, { id, messageId }),
   joinBack: (threadId: string) => call(Thread, 'POST', `/api/threads/${threadId}/join-back`, {}),
   deleteThread: (threadId: string) => call(DeleteThreadResponse, 'DELETE', `/api/threads/${threadId}`),
+  /** Deleted for good, no Undo (ADR 0034). */
+  forgetThread: (threadId: string) => call(DeleteThreadResponse, 'DELETE', `/api/threads/${threadId}/forever`),
+  forgetNote: (noteId: string) => call(Ok, 'DELETE', `/api/notes/${noteId}/forever`),
+  forgetSource: (id: string) => call(Ok, 'DELETE', `/api/sources/${id}/forever`),
   restoreThread: (threadId: string) => call(Thread, 'POST', `/api/threads/${threadId}/restore`, {}),
   restoreNote: (noteId: string) => call(Note, 'POST', `/api/notes/${noteId}/restore`, {}),
   trash: (notebookId: string) => call(Trash, 'GET', `/api/notebooks/${notebookId}/trash`),

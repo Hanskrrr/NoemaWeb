@@ -34,6 +34,8 @@ import { ConnectScreen, ModelDialog } from './ModelSettings.tsx';
 import { NoteView } from './NoteView.tsx';
 import { sourceFamily } from './reading.ts';
 import { RoomView } from './RoomView.tsx';
+import type { DragItem } from './drag.ts';
+import { type ItemsApi, ItemsContext } from './itemMenu.ts';
 import { RoomTrail, type RoomsApi, RoomsContext, unitOf } from './Rooms.tsx';
 import { parseHash, type Route, toHash, useRoute } from './route.ts';
 import { ComeBack, isTyping, SearchDialog, searchShortcut } from './Search.tsx';
@@ -113,7 +115,7 @@ function NotebookView({
   const [aboutOpen, setAboutOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   /** One line at the bottom after something went to the Trash, with Undo. */
-  const [toast, setToast] = useState<{ text: string; undo: () => void } | null>(null);
+  const [toast, setToast] = useState<{ text: string; undo?: () => void } | null>(null);
   const [draft, setDraft] = useState<BranchDraft | null>(null);
   const [focus, setFocus] = useState<Focus | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -522,6 +524,103 @@ function NotebookView({
   const family = route?.kind === 'thread' && threads ? sourceFamily(threads, route.id) : null;
   const beside = family && sources.some((x) => x.id === family.sourceId) ? family : null;
 
+  // Right-click on a thread, source or note: to the Trash, or deleted for good (ADR 0034).
+  const itemsApi = useMemo<ItemsApi>(() => {
+    const all = threads ?? [];
+    /** The side questions still its own, at any depth: they go with it. */
+    const below = (id: string): string[] =>
+      all.filter((t) => t.parentThreadId === id && !t.splitAt).flatMap((t) => [t.id, ...below(t.id)]);
+    const plural = (n: number, one: string, many: string) => (n === 1 ? one : `${n} ${many}`);
+    const failed = (err: unknown) => say(err instanceof Error ? err.message : 'That did not work. Try again.');
+    /** What is open, if it went: somewhere else. */
+    const away = (kind: DragItem['kind'], ids: string[]) => {
+      const gone =
+        (kind === 'thread' && route?.kind === 'thread' && ids.includes(route.id)) ||
+        (kind === 'note' && route?.kind === 'note' && ids.includes(route.id)) ||
+        (kind === 'source' && ((route?.kind === 'source' && ids.includes(route.id)) || (beside !== null && ids.includes(beside.sourceId))));
+      if (gone) go({ kind: 'new' });
+    };
+    return {
+      trash: async (item) => {
+        try {
+          const title = item.title || 'Untitled';
+          if (item.kind === 'thread') {
+            const r = await api.deleteThread(item.id);
+            const sides = r.deleted - 1;
+            setToast({
+              text: `“${title}”${sides > 0 ? ` and ${plural(sides, 'its side question', 'side questions')}` : ''} moved to the Trash.`,
+              undo: () => void restoreThread(item.id),
+            });
+            away('thread', [item.id, ...below(item.id)]);
+          } else if (item.kind === 'note') {
+            await api.deleteNote(item.id);
+            setToast({ text: `“${title}” moved to the Trash.`, undo: () => void restoreNote(item.id) });
+            away('note', [item.id]);
+          } else {
+            await api.deleteSource(item.id);
+            setToast({ text: `“${title}” moved to the Trash.`, undo: () => void restoreSource(item.id) });
+            away('source', [item.id]);
+          }
+          await refresh();
+        } catch (err) {
+          failed(err);
+        }
+      },
+      forget: async (item) => {
+        try {
+          const title = item.title || 'Untitled';
+          if (item.kind === 'thread') {
+            const ids = [item.id, ...below(item.id)];
+            const r = await api.forgetThread(item.id);
+            const sides = r.deleted - 1;
+            setToast({ text: `“${title}”${sides > 0 ? ` and ${plural(sides, 'its side question', 'side questions')}` : ''} deleted for good.` });
+            away('thread', ids);
+          } else if (item.kind === 'note') {
+            await api.forgetNote(item.id);
+            setToast({ text: `“${title}” deleted for good.` });
+            away('note', [item.id]);
+          } else {
+            await api.forgetSource(item.id);
+            setToast({ text: `“${title}” deleted for good.` });
+            away('source', [item.id]);
+          }
+          await refresh();
+        } catch (err) {
+          failed(err);
+        }
+      },
+      forgetText: (item) => {
+        const title = `“${item.title || 'Untitled'}”`;
+        const never = 'This cannot be undone.';
+        if (item.kind === 'thread') {
+          // In the Trash, the lists do not have it: the Trash says how many side questions went with it.
+          const sides = trash.threads.find((t) => t.threadId === item.id)?.sideQuestions ?? below(item.id).length;
+          const t = all.find((x) => x.id === item.id);
+          const into = t?.mergedIntoId ? all.find((x) => x.id === t.mergedIntoId) : undefined;
+          const made = notes.filter((n) => n.threadId === item.id).length;
+          return [
+            `${title}${sides > 0 ? ` and ${plural(sides, 'its side question', 'side questions')}` : ''} will be gone for good: the questions, the answers, the places in rooms and the links.`,
+            ...(into ? [`It was merged into “${into.title || 'Untitled'}”: what was merged goes from there too.`] : []),
+            ...(made > 0 ? [`${plural(made, 'The note', 'notes')} made from it stay.`] : []),
+            never,
+          ].join(' ');
+        }
+        if (item.kind === 'source') {
+          const x = sources.find((s) => s.id === item.id);
+          const asked = x?.threads ?? 0;
+          return [
+            `${title} will be gone for good, with its versions, pins, places in rooms and links.`,
+            ...(asked > 0 ? [`${plural(asked, 'The thread', 'threads')} asked about it stay.`] : []),
+            ...(x?.linked ? ['The file on your computer stays.'] : []),
+            never,
+          ].join(' ');
+        }
+        return `${title} will be gone for good, with its blocks and its history. ${never}`;
+      },
+    };
+  }, [threads, notes, sources, trash, route, beside, go, refresh, say, restoreThread, restoreNote, restoreSource]);
+
+
   let main: ReactNode = null;
   let thread: ReactNode = null;
   if (route?.kind === 'thread' && threads === null) {
@@ -795,6 +894,7 @@ function NotebookView({
 
   return (
     <RoomsContext.Provider value={roomsApi}>
+    <ItemsContext.Provider value={itemsApi}>
     <div className="shell">
       <LivingFrame />
       <ContextMenuHost />
@@ -875,9 +975,11 @@ function NotebookView({
       {toast && (
         <div className="toast" role="status" data-testid="app-toast">
           {toast.text}
-          <button type="button" onClick={toast.undo} data-testid="toast-undo">
-            Undo
-          </button>
+          {toast.undo && (
+            <button type="button" onClick={toast.undo} data-testid="toast-undo">
+              Undo
+            </button>
+          )}
         </div>
       )}
       {searching && (
@@ -1013,6 +1115,7 @@ function NotebookView({
         </button>
       )}
     </div>
+    </ItemsContext.Provider>
     </RoomsContext.Provider>
   );
 }

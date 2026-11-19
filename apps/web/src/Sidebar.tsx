@@ -28,6 +28,7 @@ import { type DragEvent, type MouseEvent, type ReactNode, useEffect, useRef, use
 import { openMenu } from './ContextMenu.tsx';
 import { addDropped, type DragItem, draggableItem, isItemDrag, isOutsideDrag, takeOutsideDrop } from './drag.ts';
 import { FilesPanel } from './Files.tsx';
+import { deleteItems, useItems } from './itemMenu.ts';
 import { FilesIcon, NotesIcon, RoomsIcon, SourcesIcon, ThreadsIcon, TrashIcon } from './icons.tsx';
 import { RoomsPanel, roomMenu, useRooms } from './Rooms.tsx';
 import { sourceFamily } from './reading.ts';
@@ -246,11 +247,17 @@ export function Sidebar({
     if (wanted) show(wanted);
   }, [activeId, activeRoomId, wanted]);
 
-  // Right-click and drag, on any thread, source or note in the lists (ADR 0026).
+  // Right-click and drag, on any thread, source or note in the lists (ADR 0026); to the Trash or for good (ADR 0034).
+  const items = useItems();
   const handles = (item: DragItem, open: () => void) => ({
     ...draggableItem(item),
     onContextMenu: (e: MouseEvent) =>
-      openMenu(e, roomMenu(rooms, item, [{ label: 'Open', onSelect: open }]), item.title || 'Untitled'),
+      openMenu(e, [...roomMenu(rooms, item, [{ label: 'Open', onSelect: open }]), ...deleteItems(items, item)], item.title || 'Untitled'),
+  });
+  /** In the Trash: Restore, or delete for good. */
+  const trashed = (item: DragItem, restore: () => void) => ({
+    onContextMenu: (e: MouseEvent) =>
+      openMenu(e, [{ label: 'Restore', onSelect: restore }, ...deleteItems(items, item, { trashed: true })], item.title || 'Untitled'),
   });
 
   // Files and links dropped on Sources (or on its icon) are read as sources.
@@ -663,10 +670,16 @@ export function Sidebar({
           <p className="sidebar-empty">The Trash is empty.</p>
         ) : (
           <>
-            <p className="sidebar-empty">Restore puts it back as it was, with its side questions.</p>
+            <p className="sidebar-empty">Restore puts it back as it was, with its side questions. Right-click to delete it for good.</p>
             <ul className="sidebar-list">
               {trash.threads.map((t) => (
-                <li key={t.threadId} className="trash-item" data-testid="trash-item" data-id={t.threadId}>
+                <li
+                  key={t.threadId}
+                  className="trash-item"
+                  data-testid="trash-item"
+                  data-id={t.threadId}
+                  {...trashed({ kind: 'thread', id: t.threadId, title: t.title }, () => onRestoreThread(t.threadId))}
+                >
                   <button type="button" className="thread-link" onClick={() => onOpenTrashed('thread', t.threadId)}>
                     {t.title || 'Untitled'}
                     {t.sideQuestions > 0 && <span className="fold-count"> + {t.sideQuestions}</span>}
@@ -682,7 +695,13 @@ export function Sidebar({
                 </li>
               ))}
               {trash.sources.map((x) => (
-                <li key={x.sourceId} className="trash-item" data-testid="trash-item" data-id={x.sourceId}>
+                <li
+                  key={x.sourceId}
+                  className="trash-item"
+                  data-testid="trash-item"
+                  data-id={x.sourceId}
+                  {...trashed({ kind: 'source', id: x.sourceId, title: x.title }, () => onRestoreSource(x.sourceId))}
+                >
                   <button type="button" className="thread-link" onClick={() => onOpenTrashed('source', x.sourceId)}>
                     <span aria-hidden>❡ </span>
                     {x.title || 'Untitled'}
@@ -698,7 +717,13 @@ export function Sidebar({
                 </li>
               ))}
               {trash.notes.map((n) => (
-                <li key={n.noteId} className="trash-item" data-testid="trash-item" data-id={n.noteId}>
+                <li
+                  key={n.noteId}
+                  className="trash-item"
+                  data-testid="trash-item"
+                  data-id={n.noteId}
+                  {...trashed({ kind: 'note', id: n.noteId, title: n.title }, () => onRestoreNote(n.noteId))}
+                >
                   <button type="button" className="thread-link" onClick={() => onOpenTrashed('note', n.noteId)}>
                     <span aria-hidden>▤ </span>
                     {n.title || 'Untitled'}

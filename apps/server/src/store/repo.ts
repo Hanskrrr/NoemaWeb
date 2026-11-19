@@ -2192,6 +2192,111 @@ export class Repo {
     });
   }
 
+  // Deleting for good (ADR 0034) --------------------------------------------
+  //
+  // On the learner's word, from right-click: a thread (with the side questions
+  // still its own), a source or a note is removed from the notebook, whether
+  // it is in the Trash or not. There is no Undo. What only pointed at it lets
+  // go of it and stays: threads asked about a source stay (no longer tied to
+  // its passage), threads that became their own stay (no longer under it),
+  // notes made from a thread stay (their citations of it show as not found).
+  // Its places in rooms, its links and its summaries go. Files on the
+  // learner's computer are never touched.
+
+  /** Delete a thread for good, with the side questions still its own (in the Trash or not). How many threads went. */
+  purgeThread(threadId: string): number {
+    return this.db.tx(() => {
+      const row = this.db.sql.prepare('SELECT id, kind FROM thread WHERE id = ?').get(threadId) as Row | undefined;
+      if (!row) throw new NotFoundError('thread');
+      if (row.kind === 'assistant') throw new InvalidError('the Assistant is not a thread to delete');
+      // Its side questions, at any depth: those still its own, in the Trash or not.
+      const below = this.db.sql.prepare('SELECT id FROM thread WHERE parent_thread_id = ? AND split_at IS NULL');
+      const ids = [threadId];
+      for (let i = 0; i < ids.length; i++) for (const r of below.all(ids[i] as string) as Row[]) ids.push(r.id as string);
+      if (ids.some((id) => this.hasLiveAnswer(id))) throw new ConflictError('wait for the answer to finish');
+      const list = ids.map(() => '?').join(', ');
+      // Notes made from it were in its rooms with it: they stay in them, now on their own.
+      const made = (
+        this.db.sql.prepare(`SELECT id FROM note WHERE thread_id IN (${list}) ORDER BY created_at`).all(...ids) as Row[]
+      ).map((r) => ({ kind: 'note' as const, id: r.id as string }));
+      const rooms = this.db.sql
+        .prepare(`SELECT DISTINCT room_id FROM room_item WHERE kind = 'thread' AND item_id IN (${list}) AND state = 'in'`)
+        .all(...ids) as Row[];
+      if (made.length) for (const r of rooms) this.addRoomItems(r.room_id as string, made);
+      // What stays lets go of it: threads that became their own, side questions started on its words, replies.
+      this.db.sql.prepare(`UPDATE thread SET parent_thread_id = NULL WHERE parent_thread_id IN (${list}) AND id NOT IN (${list})`).run(...ids, ...ids);
+      this.db.sql
+        .prepare(
+          `UPDATE thread SET origin_anchor_id = NULL WHERE id NOT IN (${list}) AND origin_anchor_id IN (
+             SELECT a.id FROM anchor a JOIN message m ON m.id = a.message_id WHERE m.thread_id IN (${list}))`,
+        )
+        .run(...ids, ...ids);
+      this.db.sql
+        .prepare(
+          `UPDATE message SET reply_to = NULL WHERE thread_id NOT IN (${list}) AND reply_to IN (SELECT id FROM message WHERE thread_id IN (${list}))`,
+        )
+        .run(...ids, ...ids);
+      this.db.sql.prepare(`DELETE FROM search WHERE (kind IN ('message', 'thread') AND thread_id IN (${list})) OR (kind = 'thread' AND target_id IN (${list}))`).run(...ids, ...ids);
+      this.forgetItems('thread', ids);
+      // Its messages, answers, anchors, pins, merges and the Assistant's changes in it go with it (ON DELETE CASCADE).
+      this.db.sql.prepare(`DELETE FROM thread WHERE id IN (${list})`).run(...ids);
+      this.logEvent('thread.purged', threadId, { sideQuestions: ids.length - 1 });
+      return ids.length;
+    });
+  }
+
+  /** Delete a source for good, with its versions and passages. Threads asked about it stay. */
+  purgeSource(sourceId: string): void {
+    this.db.tx(() => {
+      if (!this.db.sql.prepare('SELECT 1 FROM source WHERE id = ?').get(sourceId)) throw new NotFoundError('source');
+      // The threads asked about it were in its rooms with it: they stay in them, now on their own.
+      const asked = (
+        this.db.sql
+          .prepare(
+            `SELECT t.id FROM thread t JOIN source_anchor a ON a.id = t.source_anchor_id JOIN source_version v ON v.id = a.version_id
+             WHERE v.source_id = ? ORDER BY t.created_at`,
+          )
+          .all(sourceId) as Row[]
+      ).map((r) => ({ kind: 'thread' as const, id: r.id as string }));
+      const rooms = this.db.sql.prepare("SELECT room_id FROM room_item WHERE kind = 'source' AND item_id = ? AND state = 'in'").all(sourceId) as Row[];
+      if (asked.length) for (const r of rooms) this.addRoomItems(r.room_id as string, asked);
+      this.db.sql
+        .prepare(
+          `UPDATE thread SET source_anchor_id = NULL WHERE source_anchor_id IN (
+             SELECT a.id FROM source_anchor a JOIN source_version v ON v.id = a.version_id WHERE v.source_id = ?)`,
+        )
+        .run(sourceId);
+      this.db.sql.prepare("DELETE FROM search WHERE thread_id = ? AND kind IN ('source', 'passage')").run(sourceId);
+      this.db.sql.prepare("UPDATE web_find SET status = 'found', source_id = NULL WHERE source_id = ?").run(sourceId);
+      this.forgetItems('source', [sourceId]);
+      this.db.sql.prepare('DELETE FROM source WHERE id = ?').run(sourceId);
+      this.logEvent('source.purged', sourceId);
+    });
+  }
+
+  /** Delete a note for good, with its blocks and history. */
+  purgeNote(noteId: string): void {
+    this.db.tx(() => {
+      const row = this.db.sql.prepare('SELECT status FROM note WHERE id = ?').get(noteId) as Row | undefined;
+      if (!row) throw new NotFoundError('note');
+      if (row.status === 'generating') throw new ConflictError('wait for the note to finish');
+      this.db.sql.prepare("DELETE FROM search WHERE thread_id = ? AND kind IN ('note', 'block')").run(noteId);
+      this.forgetItems('note', [noteId]);
+      this.db.sql.prepare('DELETE FROM note WHERE id = ?').run(noteId);
+      this.logEvent('note.purged', noteId);
+    });
+  }
+
+  /** What only points at things deleted for good: their places in rooms, their links, their summaries. */
+  private forgetItems(kind: 'thread' | 'source' | 'note', ids: string[]): void {
+    const list = ids.map(() => '?').join(', ');
+    this.db.sql.prepare(`DELETE FROM room_item WHERE kind = ? AND item_id IN (${list})`).run(kind, ...ids);
+    this.db.sql
+      .prepare(`DELETE FROM item_link WHERE (from_kind = ? AND from_id IN (${list})) OR (to_kind = ? AND to_id IN (${list}))`)
+      .run(kind, ...ids, kind, ...ids);
+    this.db.sql.prepare(`DELETE FROM gist WHERE kind = ? AND item_id IN (${list})`).run(kind, ...ids);
+  }
+
   /** What is in the Trash, last deleted first. */
   trash(notebookId: string): Trash {
     const threads = this.db.sql

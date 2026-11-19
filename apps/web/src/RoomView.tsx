@@ -44,6 +44,7 @@ import {
 } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { openMenu } from './ContextMenu.tsx';
+import { deleteItems, useItems } from './itemMenu.ts';
 import { addDropped, droppedItem, droppedRoom, isItemDrag, isOutsideDrag, isRoomDrag, takeOutsideDrop } from './drag.ts';
 import { EditableTitle } from './EditableTitle.tsx';
 import { Orb } from './LivingFrame.tsx';
@@ -121,6 +122,7 @@ export function RoomView({
   onDeleted: () => void;
 }) {
   const rooms = useRooms();
+  const items = useItems();
   const [view, setView] = useState<RoomViewData | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [spots, setSpots] = useState<Map<string, Spot>>(new Map());
@@ -575,7 +577,7 @@ export function RoomView({
                 hint: c.explicit ? undefined : 'It came with something in this room; it stays out until you put it back.',
                 testId: 'menu-take-out',
               },
-            ]),
+            ]).concat(deleteItems(items, { kind: c.kind, id: c.id, title: c.title })),
             c.title || 'Untitled',
           )
         }

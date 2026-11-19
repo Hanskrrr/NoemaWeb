@@ -935,6 +935,19 @@ export function createApp(deps: AppDeps): App {
     sendJson(res, 200, repo.restoreThread(params.id as string));
   });
 
+  // Deleting for good (ADR 0034): no Undo; the learner confirmed it.
+  router.on('DELETE', '/api/threads/:id/forever', ({ res, params }) => {
+    sendJson(res, 200, { ok: true, deleted: repo.purgeThread(params.id as string) });
+  });
+  router.on('DELETE', '/api/sources/:id/forever', ({ res, params }) => {
+    repo.purgeSource(params.id as string);
+    sendJson(res, 200, { ok: true });
+  });
+  router.on('DELETE', '/api/notes/:id/forever', ({ res, params }) => {
+    repo.purgeNote(params.id as string);
+    sendJson(res, 200, { ok: true });
+  });
+
   router.on('GET', '/api/notebooks/:id/trash', ({ res, params }) => {
     if (!repo.getNotebook(params.id as string)) throw notFound('notebook');
     sendJson(res, 200, repo.trash(params.id as string));

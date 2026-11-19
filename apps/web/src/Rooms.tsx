@@ -8,6 +8,7 @@ import { type NoteSummary, type Room, type RoomItemRef, type RoomNode, roomTree,
 import { type CSSProperties, createContext, type DragEvent, type FormEvent, type ReactNode, useContext, useRef, useState } from 'react';
 import { type MenuItem, openMenu } from './ContextMenu.tsx';
 import { type DragItem, draggableItem, draggableRoom, droppedItem, droppedRoom, isItemDrag, isRoomDrag } from './drag.ts';
+import { deleteItems, useItems } from './itemMenu.ts';
 import { keys, storage } from './storage.ts';
 
 export interface RoomsApi {
@@ -286,6 +287,7 @@ export function RoomsPanel({
   onOpenNote: (id: string) => void;
 }) {
   const rooms = useRooms();
+  const items = useItems();
   const [naming, setNaming] = useState(false);
   const [title, setTitle] = useState('');
   const [loose, setLoose] = useState(() => storage.get(keys.roomsLooseOpen) !== '0');
@@ -409,7 +411,7 @@ export function RoomsPanel({
                       type="button"
                       className={`thread-link${x.id === activeId ? ' active' : ''}`}
                       onClick={x.open}
-                      onContextMenu={(e) => openMenu(e, roomMenu(rooms, x), x.title || 'Untitled')}
+                      onContextMenu={(e) => openMenu(e, [...roomMenu(rooms, x), ...deleteItems(items, x)], x.title || 'Untitled')}
                       {...draggableItem(x)}
                       data-testid="loose-link"
                       data-kind={x.kind}

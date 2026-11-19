@@ -6450,3 +6450,38 @@ button.room-fold:hover {
 .action-group .action-card.is-done .action-buttons {
   grid-column: 3;
 }
+
+/* Deleting for good, from right-click (ADR 0034): the item in red, and the
+   question asked in the menu's place before it is done. */
+.context-item.context-danger {
+  color: var(--bad);
+}
+.context-item.context-danger:hover,
+.context-item.context-danger:focus-visible {
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+}
+.context-menu.context-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-width: 22rem;
+  padding: 0.75rem 0.8rem;
+  border-color: color-mix(in srgb, var(--bad) 35%, var(--rule));
+}
+.context-ask-text {
+  margin: 0;
+  line-height: 1.45;
+}
+.context-ask-buttons {
+  display: flex;
+  gap: 0.4rem;
+}
+.context-ask-buttons button.danger {
+  margin-left: 0;
+  border: 1px solid var(--bad);
+  background: var(--bad);
+  color: var(--paper);
+}
+.context-ask-buttons button.danger:hover {
+  background: color-mix(in srgb, var(--bad) 85%, var(--ink));
+}

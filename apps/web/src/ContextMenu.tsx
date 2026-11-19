@@ -22,6 +22,15 @@ export type MenuItem =
       placeholder: string;
       onSubmit: (text: string) => void | Promise<void>;
       testId?: string;
+    }
+  | {
+      /** Something that cannot be undone (ADR 0034): picked, the menu asks first, in words, with the button to do it. */
+      kind: 'confirm';
+      label: string;
+      ask: string;
+      confirm: string;
+      onConfirm: () => void | Promise<void>;
+      testId?: string;
     };
 
 interface Menu {
@@ -56,6 +65,7 @@ export const closeMenu = () => set(null);
 export function ContextMenuHost() {
   const [menu, setMenu] = useState<Menu | null>(current);
   const [typing, setTyping] = useState<number | null>(null);
+  const [asking, setAsking] = useState<number | null>(null);
   const [text, setText] = useState('');
   const box = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState<{ left: number; top: number }>({ left: 0, top: 0 });
@@ -64,6 +74,7 @@ export function ContextMenuHost() {
     const l = (m: Menu | null) => {
       setMenu(m);
       setTyping(null);
+      setAsking(null);
       setText('');
     };
     listeners.add(l);
@@ -80,8 +91,10 @@ export function ContextMenuHost() {
       left: Math.max(8, Math.min(menu.x, window.innerWidth - r.width - 8)),
       top: Math.max(8, Math.min(menu.y, window.innerHeight - r.height - 8)),
     });
-    box.current.querySelector<HTMLElement>('[role^="menuitem"]')?.focus();
-  }, [menu]);
+    // Asking before something that cannot be undone, Cancel is where the keyboard is.
+    const items = box.current.querySelectorAll<HTMLElement>('[role^="menuitem"]');
+    (asking === null ? items[0] : items[items.length - 1])?.focus();
+  }, [menu, asking]);
 
   useEffect(() => {
     if (!menu) return;
@@ -107,6 +120,48 @@ export function ContextMenuHost() {
   }, [menu]);
 
   if (!menu) return null;
+
+  // Asking before something that cannot be undone: only that, in the menu's place.
+  const ask = asking === null ? null : menu.items[asking];
+  if (ask && ask.kind === 'confirm') {
+    return (
+      // biome-ignore lint/a11y/useSemanticElements: a question in the menu's place, not a dialog of its own
+      <div
+        ref={box}
+        className="context-menu context-ask"
+        role="menu"
+        aria-label={ask.label}
+        style={{ left: at.left, top: at.top }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            closeMenu();
+          }
+        }}
+        onContextMenu={(e) => e.preventDefault()}
+        data-testid="context-ask"
+      >
+        <p className="context-ask-text">{ask.ask}</p>
+        <div className="context-ask-buttons">
+          <button
+            type="button"
+            role="menuitem"
+            className="danger"
+            onClick={() => {
+              closeMenu();
+              void ask.onConfirm();
+            }}
+            data-testid={ask.testId ? `${ask.testId}-yes` : undefined}
+          >
+            {ask.confirm}
+          </button>
+          <button type="button" role="menuitem" className="quiet" onClick={closeMenu}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const move = (e: KeyboardEvent) => {
     const items = [...(box.current?.querySelectorAll<HTMLElement>('[role^="menuitem"], input') ?? [])];
@@ -147,6 +202,22 @@ export function ContextMenuHost() {
         if (item.kind === 'separator') {
           // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list
           return <hr key={i} className="context-separator" />;
+        }
+        if (item.kind === 'confirm') {
+          return (
+            <button
+              // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list
+              key={i}
+              type="button"
+              role="menuitem"
+              className="context-item context-danger"
+              onClick={() => setAsking(i)}
+              data-testid={item.testId}
+            >
+              <span className="context-check" aria-hidden />
+              {item.label}
+            </button>
+          );
         }
         if (item.kind === 'input') {
           return typing === i ? (

@@ -92,6 +92,7 @@ React 19 and Vite, no router or state library. One stylesheet with light and dar
 | `src/ContextMenu.tsx`, `drag.ts` | The right-click menu (one for the app); dragging things onto rooms, and files and links from outside read as sources |
 | `src/ThreadView.tsx` | A thread: messages, the composer, select to ask a side question, Back, split-off, delete, drafts of new threads |
 | `src/Assistant.tsx` | The Assistant, floating over what is open (folded to a bar, or open on the conversation), pinned beside it, or on its own page: questions with where the learner is, answers with their lookups, cards for what they cite, the quote preview, the changes to confirm |
+| `src/itemMenu.ts` | Right-click on a thread, source or note anywhere it is listed: Move to the Trash, or Delete forever… asked first in the menu (ADR 0034) |
 | `src/MessageView.tsx` `WebFinds` | Pages found on the web for an answer or a room, to add as sources (ADR 0031) |
 | `src/assistantFloat.ts` | The floating Assistant's window (where it is, its size, kept inside the browser) and the questions it offers for the place (ADR 0028) |
 | `src/LivingFrame.tsx`, `presence.ts` | The light around the window while the Assistant is open, and its orb; what it is doing (a small store the Assistant sets) |

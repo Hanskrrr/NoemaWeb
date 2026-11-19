@@ -50,6 +50,16 @@ export function droppedRoom(e: DragEvent): { id: string; title: string } | null 
   }
   return null;
 }
+/**
+ * The room a thing or room was dragged out of, in the Folders view (ADR 0035): let go on a folder, it moves
+ * there (out of that room); with ⌥, it is kept in both.
+ */
+export const FROM_ROOM_MIME = 'application/x-noema-from-room';
+export function draggedFrom(e: DragEvent): string | null {
+  const id = e.dataTransfer.getData(FROM_ROOM_MIME);
+  return id || null;
+}
+
 /** Files, or a link, from outside Noema. */
 export const isOutsideDrag = (e: DragEvent) =>
   !isItemDrag(e) && !isRoomDrag(e) && (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes('text/uri-list'));

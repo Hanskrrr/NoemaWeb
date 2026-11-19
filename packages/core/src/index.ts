@@ -18,3 +18,4 @@ export * from './files.ts';
 export * from './rooms.ts';
 export * from './links.ts';
 export * from './gists.ts';
+export * from './path.ts';

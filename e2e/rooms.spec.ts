@@ -26,6 +26,11 @@ async function addNote(request: APIRequestContext, title: string): Promise<strin
   return id;
 }
 
+test.beforeEach(async ({ page }) => {
+  // These are about the Board, the map; a room opens in the way last chosen (ADR 0035).
+  await page.addInitScript(() => localStorage.setItem('noema:room-view', 'board'));
+});
+
 test.afterEach(async ({ request }) => {
   // Taken down, so other tests see no rooms.
   const { rooms } = await (await request.get(`/api/notebooks/${await notebookId(request)}/rooms`)).json();

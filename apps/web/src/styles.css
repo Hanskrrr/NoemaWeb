@@ -6485,3 +6485,442 @@ button.room-fold:hover {
 .context-ask-buttons button.danger:hover {
   background: color-mix(in srgb, var(--bad) 85%, var(--ink));
 }
+
+/* ------------------------------------------------------------------------ */
+/* Ways to see a room (ADR 0035): the switch, and Folders, as Finder lists   */
+/* a folder.                                                                 */
+.room-modes {
+  display: inline-flex;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-right: 0.3rem;
+}
+.room-actions .room-modes button {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  padding: 0.25rem 0.7rem;
+}
+.room-actions .room-modes button + button {
+  border-left: 1px solid var(--rule);
+}
+.room-actions .room-modes button:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--ink);
+}
+.room-actions .room-modes button.is-on {
+  background: color-mix(in srgb, var(--accent) 16%, var(--sheet));
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.room-folders {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+  container-type: inline-size;
+}
+.room-folders.with-preview {
+  grid-template-columns: minmax(0, 1fr) minmax(15rem, 19rem);
+}
+.folders-list {
+  min-width: 0;
+  border-radius: 8px;
+  outline: none;
+  padding-bottom: 0.6rem;
+}
+.folders-list.drop-over {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.folders-head,
+.folders-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6.6rem minmax(0, 10rem) 4.8rem 4.4rem;
+  align-items: center;
+  gap: 0 0.6rem;
+  padding: 0 0.5rem;
+}
+.folders-head {
+  border-bottom: 1px solid var(--rule);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.folders-head > * {
+  padding: 0.35rem 0;
+  text-align: left;
+}
+.folders-head button {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  padding: 0.35rem 0;
+  border-radius: 0;
+}
+.folders-head button:hover,
+.folders-head button.is-sorted {
+  color: var(--ink);
+}
+.folders-row {
+  min-height: 2.15rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--rule) 60%, transparent);
+  font-size: 0.9rem;
+  cursor: default;
+  user-select: none;
+  outline: none;
+}
+.folders-row:hover {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.folders-row.is-selected {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.folders-row:focus-visible {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.folders-row.is-target {
+  background: color-mix(in srgb, var(--k-room) 18%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--k-room);
+}
+.folders-row.is-folder .folders-title {
+  font-weight: 600;
+}
+.folders-name {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  padding-left: calc(var(--depth, 0) * 1.25rem);
+}
+.folders-twisty {
+  flex: none;
+  width: 1rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  text-align: center;
+}
+.folders-twisty:hover {
+  color: var(--ink);
+}
+.folders-glyph {
+  flex: none;
+  width: 1rem;
+  text-align: center;
+  color: var(--k, var(--ink-soft));
+}
+.folders-glyph.kind-thread { --k: var(--k-thread); }
+.folders-glyph.kind-source { --k: var(--k-source); }
+.folders-glyph.kind-note { --k: var(--k-note); }
+.folders-glyph.kind-room { --k: var(--k-room); }
+.folders-glyph.kind-concept { --k: var(--lk-explains); }
+.folders-alias {
+  flex: none;
+  color: var(--ink-faint);
+  font-size: 0.78rem;
+}
+.folders-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.folders-kind,
+.folders-touched {
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+.folders-also {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.84rem;
+}
+.folders-open {
+  color: var(--warn);
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+.room-folders button.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  border-radius: 0;
+}
+.room-folders button.link:hover {
+  text-decoration: underline;
+}
+.folders-foot {
+  margin: 0.6rem 0.5rem 0;
+  text-align: left;
+}
+.folders-list .room-empty {
+  position: static;
+  margin: 1.5rem auto;
+}
+@container (max-width: 44rem) {
+  .room-folders.with-preview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@container (max-width: 34rem) {
+  .folders-head,
+  .folders-row {
+    grid-template-columns: minmax(0, 1fr) 5.4rem 4.4rem;
+  }
+  .folders-head .folders-also,
+  .folders-row .folders-also,
+  .folders-head .folders-touched,
+  .folders-row .folders-touched {
+    display: none;
+  }
+}
+
+.folders-preview {
+  position: sticky;
+  top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.2rem 0 0 1rem;
+  border-left: 1px solid var(--rule);
+  font-size: 0.88rem;
+}
+.folders-preview.is-empty {
+  padding-top: 1rem;
+}
+.folders-preview-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.folders-preview-kind,
+.folders-preview-label {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.folders-preview h3 {
+  margin: 0;
+  font: 600 1.15rem / 1.3 var(--serif);
+  text-wrap: balance;
+}
+.folders-preview-ai {
+  padding: 0.6rem 0.75rem;
+  border-radius: 12px;
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient(var(--sheet), var(--sheet)) padding-box,
+    linear-gradient(120deg, var(--lf-a), var(--lf-b), var(--lf-c), var(--lf-d)) border-box;
+}
+.folders-preview-ai.is-stale {
+  opacity: 0.75;
+}
+.folders-preview-ai p {
+  margin: 0.15rem 0 0;
+  font-family: var(--serif);
+  line-height: 1.5;
+}
+.folders-preview-things {
+  margin: 0;
+  padding-left: 0.2rem;
+  list-style: none;
+  color: var(--ink-soft);
+}
+.folders-preview-facts {
+  display: grid;
+  grid-template-columns: 5.2rem minmax(0, 1fr);
+  gap: 0.35rem 0.6rem;
+  margin: 0;
+}
+.folders-preview-facts dt {
+  color: var(--ink-faint);
+}
+.folders-preview-facts dd {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  margin: 0;
+  min-width: 0;
+}
+.folders-preview-open {
+  color: var(--warn);
+}
+.folders-preview-actions {
+  margin: 0.2rem 0 0;
+}
+
+/* Path (ADR 0035): the order to study a room in. */
+.room-path-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  max-width: 52rem;
+}
+.path-steps,
+.path-group-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.path-steps {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.path-steps::before {
+  content: '';
+  position: absolute;
+  left: 0.95rem;
+  top: 1rem;
+  bottom: 1rem;
+  width: 2px;
+  background: linear-gradient(var(--k-thread), color-mix(in srgb, var(--k-thread) 25%, transparent));
+  opacity: 0.6;
+}
+.path-group-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.path-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1.9rem minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+}
+.path-step.is-beside {
+  margin-left: 2.2rem;
+}
+.path-num {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  margin-top: 0.55rem;
+  border-radius: 50%;
+  background: var(--sheet);
+  border: 1.5px solid color-mix(in srgb, var(--k-thread) 70%, var(--rule));
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.path-step.is-beside .path-num {
+  border-style: dashed;
+}
+.path-card {
+  min-width: 0;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--k, var(--rule));
+  border-radius: 10px;
+  background: var(--sheet);
+}
+.path-card.kind-thread { --k: var(--k-thread); }
+.path-card.kind-source { --k: var(--k-source); }
+.path-card.kind-note { --k: var(--k-note); }
+.path-card.kind-concept { --k: var(--lk-explains); }
+.path-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.6rem;
+  margin: 0;
+}
+.path-title {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 1rem;
+  text-align: left;
+}
+.path-title:hover {
+  color: var(--accent);
+}
+.path-glyph {
+  color: var(--k, var(--ink-soft));
+}
+.path-after {
+  color: var(--ink-faint);
+  font-size: 0.82rem;
+}
+.path-text {
+  margin: 0.25rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.path-open {
+  margin: 0.35rem 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--warn);
+  font-size: 0.86rem;
+}
+.path-loose {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  margin: 0.2rem 0 0 2.65rem;
+}
+.path-loose .hint {
+  text-align: left;
+}
+.path-chip {
+  padding: 0.15rem 0.6rem;
+  border: 1px dashed var(--rule);
+  border-radius: 999px;
+  background: none;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+}
+.path-chip:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+.path-note {
+  margin: 0 0 0 2.65rem;
+  text-align: left;
+}
+.path-empty {
+  padding: 1.2rem 1.4rem;
+  border: 1px dashed var(--rule);
+  border-radius: 12px;
+}
+.path-empty .hint {
+  text-align: left;
+  max-width: 38rem;
+}
+.room-path-view .room-empty {
+  position: static;
+}

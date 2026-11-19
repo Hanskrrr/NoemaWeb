@@ -62,4 +62,9 @@ export const keys = {
   roomsLooseOpen: 'noema:rooms-loose-open',
   /** Rooms in the sidebar whose rooms inside are folded away (ADR 0032). */
   roomsFolded: 'noema:rooms-folded',
+  /** How each room was last seen (Folders, Concepts, Path, Board), by room; and the last one chosen, for rooms not yet seen (ADR 0035). */
+  roomViews: 'noema:room-views',
+  roomViewLast: 'noema:room-view',
+  /** The column the Folders view is sorted by, and which way. */
+  foldersSort: 'noema:folders-sort',
 };

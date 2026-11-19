@@ -49,7 +49,11 @@ import { addDropped, droppedItem, droppedRoom, isItemDrag, isOutsideDrag, isRoom
 import { EditableTitle } from './EditableTitle.tsx';
 import { Orb } from './LivingFrame.tsx';
 import { WebFinds } from './MessageView.tsx';
+import { RoomFolders } from './RoomFolders.tsx';
+import { type PathNode, RoomPath } from './RoomPath.tsx';
 import { roomMenu, useRooms } from './Rooms.tsx';
+import { type Door, day, GLYPH, holdsOf, kindName, marksOf, plural, type RoomCard, refOf } from './roomText.ts';
+import { keys, storage } from './storage.ts';
 
 const WIDTH = 264;
 // Columns stand far enough apart for the words of a link between them; a
@@ -65,35 +69,29 @@ const HOLD_MS = 700;
 type Spot = { x: number; y: number };
 type Box = { x: number; y: number; w: number; h: number };
 type Cluster = RoomViewData['clusters'][number];
-type RoomCard = Cluster['cards'][number];
-type Door = RoomViewData['doors'][number];
 /** A door's place on the map is kept by "room:id", beside the clusters' "kind:id". */
 const doorKey = (id: string) => `room:${id}`;
 const isDoorKey = (key: string) => key.startsWith('room:');
 
-const GLYPH: Record<RoomKind, string> = { source: '❡', thread: '◦', note: '▤' };
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
-/** What a card says was done there. */
-function marksOf(c: RoomCard): string {
-  const m = c.marks;
-  const parts: string[] = [];
-  if (c.kind === 'source' && m.threads) parts.push(plural(m.threads, 'thread'));
-  if (c.kind !== 'note') {
-    if (m.questions) parts.push(plural(m.questions, 'question'));
-    if (m.sides) parts.push(plural(m.sides, 'side question'));
-  } else {
-    parts.push(plural(m.blocks, 'block'));
-  }
-  return parts.join(' · ');
+/** The ways to see a room (ADR 0035), one question each; each room opens in the way it was last seen. */
+export type RoomMode = 'folders' | 'path' | 'board';
+const MODES: Array<{ mode: RoomMode; label: string; glyph: string; title: string }> = [
+  { mode: 'folders', label: 'Folders', glyph: '☰', title: 'As a list, like Finder: rooms inside are folders, things are files' },
+  { mode: 'path', label: 'Path', glyph: '→', title: 'As an order to study in, from the links you kept' },
+  { mode: 'board', label: 'Board', glyph: '▦', title: 'As a map you arrange: clusters, doors and the lines between them' },
+];
+const isMode = (m: unknown): m is RoomMode => MODES.some((x) => x.mode === m);
+function modeOf(roomId: string): RoomMode {
+  const mine = storage.getJson<Record<string, string>>(keys.roomViews, {})[roomId];
+  if (isMode(mine)) return mine;
+  const last = storage.get(keys.roomViewLast);
+  return isMode(last) ? last : 'folders';
 }
-/** A card's key ("thread:01…") as the thing it is. */
-const refOf = (key: string) => {
-  const i = key.indexOf(':');
-  return { kind: key.slice(0, i) as RoomKind, id: key.slice(i + 1) };
-};
-const kindName = (c: RoomCard) => (c.kind === 'source' ? (c.file ? 'File' : 'Source') : c.kind === 'thread' ? 'Thread' : 'Note');
-const day = (at: string) => (at ? new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '');
+function rememberMode(roomId: string, mode: RoomMode) {
+  const all = storage.getJson<Record<string, string>>(keys.roomViews, {});
+  storage.setJson(keys.roomViews, { ...all, [roomId]: mode });
+  storage.set(keys.roomViewLast, mode);
+}
 
 export function RoomView({
   roomId,
@@ -170,6 +168,7 @@ export function RoomView({
   const [choosing, setChoosing] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [merging, setMerging] = useState(false);
+  const [mode, setMode] = useState<RoomMode>(() => modeOf(roomId));
   const swallow = useRef(false);
 
   const load = useCallback(async () => {
@@ -479,9 +478,10 @@ export function RoomView({
     const r = canvas.current?.getBoundingClientRect();
     return { x: Math.max(0, Math.round(e.clientX - (r?.left ?? 0) - 24)), y: Math.max(0, Math.round(e.clientY - (r?.top ?? 0) - 16)) };
   };
+  // In Folders there is no map: Noema places what is dropped when the Board is next seen.
   const onDrop = (e: DragEvent) => {
     setDropOver(false);
-    const at = dropAt(e);
+    const at = canvas.current ? dropAt(e) : undefined;
     const item = droppedItem(e);
     if (item) {
       e.preventDefault();
@@ -506,7 +506,7 @@ export function RoomView({
         if (added.length) {
           await rooms.add(
             roomId,
-            added.map((x, i) => ({ kind: 'source' as const, id: x.id, x: at.x + i * STEP, y: at.y + i * STEP })),
+            added.map((x, i) => ({ kind: 'source' as const, id: x.id, ...(at ? { x: at.x + i * STEP, y: at.y + i * STEP } : {}) })),
           );
         }
         setStatus(
@@ -546,6 +546,32 @@ export function RoomView({
   const titleOfRoom = (id: string) => rooms.rooms.find((r) => r.id === id)?.title || 'Untitled room';
   const through = [...path, roomId];
 
+  /** Right-click on a thing, in any view of the room. */
+  const cardMenu = (c: RoomCard) => (e: MouseEvent) =>
+    openMenu(
+      e,
+      roomMenu(rooms, { kind: c.kind, id: c.id, title: c.title }, [
+        { label: 'Open', onSelect: () => onOpen(c.kind, c.id) },
+        ...(mode === 'board'
+          ? [
+              {
+                label: 'Link to…',
+                hint: 'Then pick the card it links to (or drag from this card to it)',
+                onSelect: () => setLinking({ key: `${c.kind}:${c.id}`, title: c.title }),
+                testId: 'menu-link-to',
+              },
+            ]
+          : []),
+        {
+          label: 'Take out of this room',
+          onSelect: () => rooms.remove(roomId, { kind: c.kind, id: c.id }),
+          hint: c.explicit ? undefined : 'It came with something in this room; it stays out until you put it back.',
+          testId: 'menu-take-out',
+        },
+      ]).concat(deleteItems(items, { kind: c.kind, id: c.id, title: c.title })),
+      c.title || 'Untitled',
+    );
+
   const cardButton = (c: RoomCard, head: boolean) => {
     const open = c.kind !== 'note' ? c.marks.open : 0;
     const marks = marksOf(c);
@@ -560,27 +586,7 @@ export function RoomView({
         onMouseEnter={() => setFocusKey(key)}
         onMouseLeave={() => setFocusKey((k) => (k === key ? null : k))}
         onFocus={() => setFocusKey(key)}
-        onContextMenu={(e) =>
-          openMenu(
-            e,
-            roomMenu(rooms, { kind: c.kind, id: c.id, title: c.title }, [
-              { label: 'Open', onSelect: () => onOpen(c.kind, c.id) },
-              {
-                label: 'Link to…',
-                hint: 'Then pick the card it links to (or drag from this card to it)',
-                onSelect: () => setLinking({ key, title: c.title }),
-                testId: 'menu-link-to',
-              },
-              {
-                label: 'Take out of this room',
-                onSelect: () => rooms.remove(roomId, { kind: c.kind, id: c.id }),
-                hint: c.explicit ? undefined : 'It came with something in this room; it stays out until you put it back.',
-                testId: 'menu-take-out',
-              },
-            ]).concat(deleteItems(items, { kind: c.kind, id: c.id, title: c.title })),
-            c.title || 'Untitled',
-          )
-        }
+        onContextMenu={cardMenu(c)}
         data-card-key={key}
         data-testid="room-card"
         data-kind={c.kind}
@@ -697,6 +703,25 @@ export function RoomView({
           </p>
         </div>
         <div className="room-actions">
+          <div className="room-modes" role="group" aria-label="How to see this room" data-testid="room-modes">
+            {MODES.map((m) => (
+              <button
+                key={m.mode}
+                type="button"
+                className={mode === m.mode ? 'is-on' : ''}
+                aria-pressed={mode === m.mode}
+                onClick={() => {
+                  setMode(m.mode);
+                  rememberMode(roomId, m.mode);
+                }}
+                title={m.title}
+                data-testid={`room-mode-${m.mode}`}
+              >
+                <span aria-hidden>{m.glyph} </span>
+                {m.label}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className={picking ? 'active' : 'quiet'}
@@ -706,7 +731,7 @@ export function RoomView({
           >
             Choose what is in it
           </button>
-          {blocks(view).length > 1 && (
+          {mode === 'board' && blocks(view).length > 1 && (
             <button type="button" className="quiet" onClick={arrange} title="Place every cluster again, in the order they came in" data-testid="room-arrange">
               Arrange
             </button>
@@ -892,7 +917,49 @@ export function RoomView({
           <WebFinds key={view.webFinds.map((f) => f.id).join()} finds={view.webFinds} title="Sources for what is still open" onAdded={() => void rooms.refresh()} />
         </div>
       )}
-      {view.clusters.length > 0 && (
+      {mode === 'folders' && (
+        <RoomFolders
+          view={view}
+          through={through}
+          onOpen={onOpen}
+          onOpenTarget={onOpenTarget}
+          onDropHere={onDrop}
+          empty={
+            <div className="room-empty" data-testid="room-empty">
+              <p className="empty-title">Nothing in this room yet</p>
+              <p className="hint">
+                Drag threads, sources and notes here from the sidebar, or drop files and links from your computer to read
+                them as sources. Or choose what is in it.
+              </p>
+            </div>
+          }
+        />
+      )}
+      {mode === 'path' && (
+        <RoomPath
+          nodes={[...cards.values()].map(
+            (c): PathNode => ({
+              key: `${c.kind}:${c.id}`,
+              title: c.title,
+              glyph: GLYPH[c.kind],
+              kind: c.kind,
+              text: view.gists[`${c.kind}:${c.id}`]?.text ?? null,
+              open: (view.brief?.open ?? []).filter((o) => o.item?.kind === c.kind && o.item.id === c.id).map((o) => o.question),
+              sides: c.kind === 'note' ? 0 : c.marks.open,
+              onOpen: () => onOpen(c.kind, c.id),
+              onMenu: cardMenu(c),
+            }),
+          )}
+          links={kept.map((l) => ({ from: `${l.from.kind}:${l.from.id}`, to: `${l.to.kind}:${l.to.id}`, kind: l.kind }))}
+          empty={
+            <div className="room-empty" data-testid="room-empty">
+              <p className="empty-title">Nothing in this room yet</p>
+              <p className="hint">Put threads, sources and notes in it; the links you keep between them make the path.</p>
+            </div>
+          }
+        />
+      )}
+      {mode === 'board' && view.clusters.length > 0 && (
         <div className="room-legend" data-testid="room-legend">
           {LINK_KINDS.filter((k) => kept.some((l) => l.kind === k)).map((k) => (
             <span key={k} className={`legend-kind kind-${k}`}>
@@ -903,6 +970,7 @@ export function RoomView({
         </div>
       )}
       {/* The map scrolls sideways in its own space: with the Assistant beside it, nothing goes under it. */}
+      {mode === 'board' && (
       <div className="room-map" data-testid="room-map">
       <div
         ref={canvas}
@@ -1082,6 +1150,7 @@ export function RoomView({
         })}
       </div>
       </div>
+      )}
       <CreateHere
         title={room.title}
         puttingRoom={puttingRoom}
@@ -1444,12 +1513,7 @@ function DoorCard({
   onMenu: (e: MouseEvent) => void;
 }) {
   const c = door.counts;
-  const holds = [
-    ...(c.sources ? [plural(c.sources, 'source')] : []),
-    ...(c.threads ? [plural(c.threads, 'thread')] : []),
-    ...(c.notes ? [plural(c.notes, 'note')] : []),
-    ...(c.rooms ? [plural(c.rooms, 'room')] : []),
-  ].join(' · ');
+  const holds = holdsOf(c);
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: right-click is a shortcut; its button opens the room
     <div className={`room-door${target ? ' is-target' : ''}`} onContextMenu={onMenu} data-door-id={door.id} data-testid="room-door">

@@ -75,9 +75,14 @@ ADRs 0035 (views) and 0036 (concepts).
   - Concepts: read, suggested, lanes, lines, tray, quote, Not this, Keep all, drag from the tray, read again, Folders and Path.
   - A concept split, linked by hand, merged back, asked about, made a room.
 - `rooms.spec.ts` now sets the Board as the last view (the map's tests).
-- Full e2e run: 88 of 90 passed on the first run.
-  - The brief's call count changed (fixed: one more call only with three things or more).
-  - `files.spec.ts` "proposes a change to a file" timed out under load, then passed alone.
+- Full e2e runs (90 tests). The first had one real failure: the brief's call count changed, fixed so there is one more call only with three things or more.
+  - The three runs after that each had one failure, a different test each time and all in areas not touched here:
+    - `files.spec.ts` "a file becomes a note" (a 45 s timeout);
+    - `sources.spec.ts` "a web page read from its address" (the rail's Sources not pressed);
+    - `notebook.spec.ts` "every thread has its own map" (another thread's map).
+  - Each passed when run again, alone and repeated. The room tests and the new ones passed in every run.
+  - These look like races with what the earlier specs leave in the shared server. They are worth a look; they were not seen in the one full run at `29c4275`.
+- On the Mac (its Linux shell): pulled with `--autostash`, which left his uncommitted AOCI changes (`AGENTS.md`'s AOCI block, `.gitignore`, `pnpm-lock.yaml`, the untracked AOCI files) exactly as they were. 376 unit tests pass there.
 - Screenshots of Folders, Path and Concepts (suggested and kept), and Folders and Path with concepts, in dark and light, with made-up rooms.
 
 ## Not verified
@@ -88,6 +93,7 @@ ADRs 0035 (views) and 0036 (concepts).
 
 ## Next
 
+- On his Mac, an AOCI index (`aoci.txt`, `.aoci/`, set up in Codex) covers this repo. It does not yet know these two commits; its maintenance step (`aoci_maintain` in Codex) brings it up to date.
 - His judgement on each view, and on the concepts with DeepSeek.
 - The draft's step 4, waiting for his word: a concept in several rooms (putting a concept's door in another room) and a notebook-wide list of concepts.
 - The Assistant knows nothing of concepts yet: it could list them and put things in them.

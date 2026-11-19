@@ -19,6 +19,7 @@ import {
   FolderList,
   FolderTree,
   Health,
+  ConceptLink,
   ItemLink,
   ImportResponse,
   type InsertBlockRequest,
@@ -322,6 +323,17 @@ export const api = {
   /** A line the learner drew: the AI says what it means, and why (ADR 0029). */
   chooseLink: (id: string) => call(ItemLink, 'POST', `/api/links/${id}/choose`, {}),
   mergeRoom: (id: string, into: string) => call(Room, 'POST', `/api/rooms/${id}/merge`, { into }),
+  /** Concepts (ADR 0036): small rooms in a room, suggested when it is read, kept, dismissed, made rooms; their links. */
+  createConcept: (roomId: string, id: string, title: string, items: RoomItemRef[] = []) =>
+    call(Room, 'POST', `/api/rooms/${roomId}/concepts`, { id, title, items }),
+  keepAllConcepts: (roomId: string) => call(z.object({ kept: z.number() }), 'POST', `/api/rooms/${roomId}/concepts/keep`, {}),
+  keepConcept: (id: string) => call(Room, 'POST', `/api/concepts/${id}/keep`, {}),
+  dropConcept: (id: string) => call(Ok, 'DELETE', `/api/concepts/${id}`),
+  conceptToRoom: (id: string) => call(Room, 'POST', `/api/concepts/${id}/room`, {}),
+  createConceptLink: (roomId: string, id: string, from: string, to: string, kind: LinkKind) =>
+    call(ConceptLink, 'POST', `/api/rooms/${roomId}/concept-links`, { id, from, to, kind }),
+  keepConceptLink: (id: string) => call(ConceptLink, 'PATCH', `/api/concept-links/${id}`, { status: 'accepted' }),
+  deleteConceptLink: (id: string) => call(Ok, 'DELETE', `/api/concept-links/${id}`),
   /** Sources from the web (ADR 0031): a page found, added to its room, or left; a room's web on or off; pages for what is open. */
   addWebFind: (id: string) => call(z.object({ find: WebFind, source: Source }), 'POST', `/api/web/${id}/add`, {}),
   dismissWebFind: (id: string) => call(z.object({ find: WebFind }), 'POST', `/api/web/${id}/dismiss`, {}),

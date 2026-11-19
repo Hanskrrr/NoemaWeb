@@ -212,3 +212,134 @@ test('Path: the order to study a room in, from the links kept; side by side what
   await expect(page).toHaveURL(new RegExp(`#/t/${trade}`));
   await expect(page.getByTestId('rename')).toContainText('What does checkpointing trade?');
 });
+
+async function sources(request: APIRequestContext, titles: string[]): Promise<string[]> {
+  const ids: string[] = [];
+  for (const t of titles) ids.push(await source(request, t));
+  return ids;
+}
+
+test('Concepts: read with AI, the key ideas are suggested, each defined by your own words; kept, dismissed, filled from the tray; in Folders and Path too', async ({
+  page,
+  request,
+}) => {
+  const ids = await sources(request, ['Moss blanket', 'Winter den', 'Glowfin fur', 'Ice fishing']);
+  const big = await room(
+    request,
+    'Glowfin winters',
+    ids.map((id) => ({ kind: 'source', id })),
+  );
+  await page.goto(`/#/room/${big}`);
+  await page.getByTestId('room-mode-concepts').click();
+  await expect(page.getByTestId('concepts-empty')).toContainText('What is this room about?');
+  await page.getByTestId('concepts-read').click();
+  const nodes = page.getByTestId('concept-node');
+  await expect(nodes).toHaveCount(3);
+  await expect(page.getByTestId('concepts-bar')).toHaveText('3 concepts from your 4 things · 3 suggested');
+  await expect(nodes.first()).toHaveAttribute('data-status', 'suggested');
+  // Laid out by what comes first: the second builds on the first; the third stands beside the second.
+  await expect(page.getByTestId('concepts-lane').nth(0).getByTestId('concept-node')).toHaveText([/Fake concept 1/]);
+  await expect(page.getByTestId('concepts-lane').nth(1).getByTestId('concept-node')).toHaveText([/Fake concept 2/, /Fake concept 3/]);
+  await expect(page.getByTestId('concept-line-label')).toHaveText(['builds on', 'contrasts']);
+  // Nothing lost: the last thing is in the tray.
+  await expect(page.getByTestId('tray-item')).toHaveText([/Ice fishing/]);
+
+  // The first concept: defined by the words of a source, which open where they are.
+  await nodes.first().click();
+  const drawer = page.getByTestId('concept-drawer');
+  await expect(drawer.getByTestId('concept-rename')).toContainText('Fake concept 1');
+  await expect(drawer.getByTestId('concept-quote')).toContainText('“Moss blanket”');
+  await expect(drawer.getByTestId('concept-thing')).toHaveText([/Moss blanket/, /Winter den/]);
+
+  // Not this: gone. Keep all: the rest are kept.
+  await nodes.filter({ hasText: 'Fake concept 3' }).getByTestId('concept-not-this').click();
+  await expect(nodes).toHaveCount(2);
+  await page.getByTestId('concepts-keep-all').click();
+  await expect(page.getByTestId('concepts-bar')).toHaveText('2 concepts from your 4 things');
+  await expect(nodes.first()).toHaveAttribute('data-status', 'kept');
+
+  // From the tray onto a concept.
+  await drag(page, page.getByTestId('tray-item').first(), nodes.filter({ hasText: 'Fake concept 2' }));
+  await expect(page.getByTestId('concepts-status')).toContainText('“Ice fishing” is under “Fake concept 2” now.');
+  await expect(page.getByTestId('tray-item')).toHaveCount(0);
+  await expect(page.getByTestId('room-meta')).toContainText('2 concepts');
+
+  // Read again: kept stay, the dismissed one is not suggested again.
+  await page.getByTestId('concepts-read').click();
+  await expect(page.getByTestId('concepts-read')).toHaveText(/Read again/);
+  await expect(nodes.filter({ hasText: 'Fake concept 3' })).toHaveCount(0);
+  await expect(nodes.filter({ hasText: 'Fake concept 1' })).toHaveAttribute('data-status', 'kept');
+
+  // Folders: kept concepts are folders of their things.
+  await page.getByTestId('room-mode-folders').click();
+  const conceptRow = page.locator('[data-testid=folder-row][data-key^="concept:"]').filter({ hasText: 'Fake concept 2' });
+  await expect(conceptRow).toContainText('Concept · 2');
+  await conceptRow.getByTestId('folder-toggle').click();
+  await expect(page.locator('[data-testid=folder-row][data-depth="1"] .folders-title')).toHaveText(['Glowfin fur', 'Ice fishing']);
+  // Opened: shown in Concepts.
+  await conceptRow.dblclick();
+  await expect(page.getByTestId('room-mode-concepts')).toHaveAttribute('aria-pressed', 'true');
+  await expect(drawer.getByTestId('concept-rename')).toContainText('Fake concept 2');
+
+  // Path: concept by concept.
+  await page.getByTestId('room-mode-path').click();
+  await expect(page.getByTestId('path-step').locator('.path-title')).toHaveText([/Fake concept 1/, /Fake concept 2/]);
+  await expect(page.getByTestId('path-step').nth(1).getByTestId('path-after')).toHaveText('builds on 1');
+  await expect(page.getByTestId('path-step').nth(1).getByTestId('path-thing')).toHaveText([/Glowfin fur/, /Ice fishing/]);
+});
+
+test('a concept is split, merged back, linked by hand, asked about, and made a room of its own', async ({ page, request }) => {
+  const ids = await sources(request, ['Moss blanket', 'Winter den', 'Glowfin fur']);
+  const big = await room(
+    request,
+    'Glowfin homes',
+    ids.map((id) => ({ kind: 'source', id })),
+  );
+  await page.goto(`/#/room/${big}`);
+  await page.getByTestId('room-mode-concepts').click();
+  await page.getByTestId('concepts-read').click();
+  const nodes = page.getByTestId('concept-node');
+  await expect(nodes).toHaveCount(3);
+  await page.getByTestId('concepts-keep-all').click();
+  await expect(page.getByTestId('concepts-bar')).toHaveText('3 concepts from your 3 things');
+  const drawer = page.getByTestId('concept-drawer');
+
+  // Split: "Winter den" to a new concept.
+  await nodes.filter({ hasText: 'Fake concept 1' }).click();
+  await drawer.getByTestId('concept-split').click();
+  await drawer.getByTestId('concept-split-pick').nth(1).check();
+  await drawer.getByTestId('concept-split-title').fill('Dens');
+  await drawer.getByTestId('concept-split-save').click();
+  await expect(nodes).toHaveCount(4);
+  await expect(drawer.getByTestId('concept-rename')).toContainText('Dens');
+  await expect(drawer.getByTestId('concept-thing')).toHaveText([/Winter den/]);
+  await expect(nodes.filter({ hasText: 'Fake concept 1' })).toContainText('1');
+
+  // Linked by hand: Dens builds on Fake concept 1.
+  await drawer.getByTestId('concept-link-to').click();
+  await drawer.getByTestId('concept-link-kind').selectOption('builds-on');
+  await drawer.getByTestId('concept-link-other').selectOption({ label: 'Fake concept 1' });
+  await drawer.getByTestId('concept-link-save').click();
+  await expect(drawer.getByTestId('concept-link')).toContainText('builds on “Fake concept 1”');
+
+  // Merged back.
+  await drawer.getByTestId('concept-merge').click();
+  await drawer.getByTestId('concept-merge-into').filter({ hasText: 'Fake concept 1' }).click();
+  await expect(nodes).toHaveCount(3);
+  await expect(drawer.getByTestId('concept-rename')).toContainText('Fake concept 1');
+  await expect(drawer.getByTestId('concept-thing')).toHaveText([/Moss blanket/, /Winter den/]);
+
+  // Asked about: the question waits in the bar at the foot, to finish and send.
+  await drawer.getByTestId('concept-ask').click();
+  await expect(page.getByTestId('room-ask')).toHaveValue('About “Fake concept 1”: ');
+  await expect(page.getByTestId('room-ask')).toBeFocused();
+
+  // Made a room: a room inside now, in the sidebar's list.
+  await nodes.filter({ hasText: 'Fake concept 3' }).click();
+  await drawer.getByTestId('concept-to-room').click();
+  await expect(nodes).toHaveCount(2);
+  await page.getByTestId('room-mode-folders').click();
+  await expect(page.locator('[data-testid=folder-row][data-key^="room:"]')).toHaveText([/Fake concept 3/]);
+  const { rooms } = await (await request.get(`/api/notebooks/${await notebookId(request)}/rooms`)).json();
+  expect(rooms.map((r: { title: string }) => r.title).sort()).toEqual(['Fake concept 3', 'Glowfin homes']);
+});

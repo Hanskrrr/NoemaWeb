@@ -6924,3 +6924,396 @@ button.room-fold:hover {
 .room-path-view .room-empty {
   position: static;
 }
+
+/* Concepts (ADR 0036): the key ideas of a room, as nodes laid out by what comes first. */
+.room-concepts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  container-type: inline-size;
+}
+.concepts-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.7rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: 14px;
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient(var(--sheet), var(--sheet)) padding-box,
+    linear-gradient(120deg, var(--lf-a), var(--lf-b), var(--lf-c), var(--lf-d)) border-box;
+}
+.concepts-bar-text {
+  flex: 1;
+  min-width: 12rem;
+  margin: 0;
+  color: var(--ink-soft);
+}
+.concepts-bar-text b {
+  color: var(--ink);
+}
+.concepts-new input {
+  font: inherit;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+}
+.concepts-empty {
+  padding: 1.2rem 1.4rem;
+  border: 1px dashed var(--rule);
+  border-radius: 12px;
+}
+.concepts-empty .hint {
+  text-align: left;
+  max-width: 42rem;
+}
+.concepts-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 21rem);
+  gap: 1.2rem;
+  align-items: start;
+}
+@container (max-width: 50rem) {
+  .concepts-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.concepts-map {
+  position: relative;
+  min-width: 0;
+}
+.concepts-lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.concepts-lines marker path {
+  fill: var(--lk-builds-on);
+}
+.concept-line {
+  fill: none;
+  stroke: var(--lk, var(--lk-builds-on));
+  stroke-width: 1.6;
+  opacity: 0.8;
+}
+.concept-line.kind-contrasts-with {
+  stroke-dasharray: 5 4;
+}
+.concept-line.is-suggested {
+  stroke-dasharray: 3 4;
+  opacity: 0.5;
+}
+.concept-line-label {
+  position: absolute;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  padding: 0 0.35rem;
+  border: 1px solid color-mix(in srgb, var(--lk, var(--rule)) 45%, var(--rule));
+  border-radius: 5px;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+.concept-line-label.is-suggested {
+  border-style: dashed;
+}
+.concepts-lanes {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 2.6rem;
+}
+.concepts-lane {
+  display: flex;
+  flex-direction: column;
+  gap: 1.6rem;
+  min-width: 0;
+}
+.concepts-lanehead,
+.concepts-label,
+.concepts-kicker {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.concept-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.7rem 0.85rem;
+  border: 1.5px solid color-mix(in srgb, var(--lk-explains) 45%, var(--rule));
+  border-radius: 12px;
+  background: var(--sheet);
+  cursor: pointer;
+  outline: none;
+  box-shadow: 0 0 22px -14px color-mix(in srgb, var(--lk-explains) 70%, transparent);
+}
+.concept-node:hover {
+  border-color: color-mix(in srgb, var(--lk-explains) 75%, var(--rule));
+}
+.concept-node:focus-visible,
+.concept-node.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.concept-node.is-suggested {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--lf-b) 70%, var(--rule));
+  background: color-mix(in srgb, var(--lf-b) 5%, var(--sheet));
+}
+.concept-node.is-target {
+  border-color: var(--k-room);
+  background: color-mix(in srgb, var(--k-room) 12%, var(--sheet));
+}
+.concept-name {
+  margin: 0;
+  font-weight: 650;
+  font-size: 1rem;
+  line-height: 1.3;
+}
+.concept-glyph {
+  color: var(--lk-explains);
+}
+.concept-def {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+}
+.concept-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.1rem 0 0;
+}
+.concept-count {
+  padding: 0 0.4rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  color: var(--k, var(--ink-soft));
+}
+.concept-count.kind-thread { --k: var(--k-thread); }
+.concept-count.kind-source { --k: var(--k-source); }
+.concept-count.kind-note { --k: var(--k-note); }
+.concept-open,
+.concept-open-list {
+  margin: 0;
+  color: var(--warn);
+  font-size: 0.84rem;
+}
+.concept-open-list {
+  padding: 0;
+  list-style: none;
+}
+.concept-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0.15rem 0 0;
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+}
+.concepts-tray {
+  position: relative;
+  z-index: 1;
+  margin-top: 2rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px dashed var(--rule);
+  border-radius: 12px;
+}
+.concepts-tray.is-target {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.concepts-tray .hint {
+  text-align: left;
+  margin: 0.3rem 0 0;
+}
+.concepts-things {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0.3rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.concepts-tray .concepts-things {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.9rem;
+}
+.concepts-thing {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.concepts-thing-open {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0.1rem 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.9rem;
+}
+.concepts-thing-open:hover {
+  color: var(--accent);
+}
+.concepts-thing-glyph {
+  color: var(--k, var(--ink-soft));
+}
+.concepts-thing.kind-thread { --k: var(--k-thread); }
+.concepts-thing.kind-source { --k: var(--k-source); }
+.concepts-thing.kind-note { --k: var(--k-note); }
+.concepts-thing-out {
+  margin-left: auto;
+  opacity: 0;
+}
+.concepts-thing:hover .concepts-thing-out,
+.concepts-thing-out:focus-visible {
+  opacity: 1;
+}
+.concepts-guess {
+  padding: 0 0.4rem;
+  border: 1px dashed color-mix(in srgb, var(--lf-b) 60%, var(--rule));
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+}
+.concepts-guess:hover {
+  color: var(--ink);
+}
+.concepts-drawer {
+  position: sticky;
+  top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.2rem 0 0 1rem;
+  border-left: 1px solid var(--rule);
+}
+.concepts-drawer h1 {
+  margin: 0;
+  font-size: 1.25rem;
+  line-height: 1.3;
+}
+.concepts-drawer .title-button {
+  font: 650 1.25rem / 1.3 var(--sans);
+}
+.concept-quote {
+  margin: 0;
+  padding: 0.15rem 0 0.15rem 0.75rem;
+  border-left: 3px solid var(--lk-explains);
+}
+.concept-quote p {
+  margin: 0;
+  font-family: var(--serif);
+  line-height: 1.5;
+}
+.concept-quote footer {
+  margin-top: 0.2rem;
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+}
+.concept-links {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.88rem;
+}
+.concept-links li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.concept-links li.is-suggested {
+  color: var(--ink-soft);
+}
+.concepts-hint {
+  text-align: left;
+  margin: 0.2rem 0 0;
+}
+.concept-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.concept-actions button {
+  font-size: 0.84rem;
+  padding: 0.25rem 0.7rem;
+}
+.concept-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.88rem;
+}
+.concept-form.is-split {
+  flex-direction: column;
+  align-items: flex-start;
+}
+.concept-form select,
+.concept-form input:not([type='checkbox']) {
+  font: inherit;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+}
+.concept-split-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.concept-ask {
+  align-self: flex-start;
+}
+.path-things {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.8rem;
+  margin: 0.35rem 0 0;
+}
+.path-thing {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+}
+.path-thing:hover {
+  color: var(--accent);
+}
+.path-thing.kind-thread span { color: var(--k-thread); }
+.path-thing.kind-source span { color: var(--k-source); }
+.path-thing.kind-note span { color: var(--k-note); }
+.folders-def {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.8rem;
+}

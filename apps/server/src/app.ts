@@ -29,6 +29,9 @@ import {
   CreateRoomRequest,
   UpdateLinkRequest,
   MergeRoomRequest,
+  CreateConceptRequest,
+  CreateConceptLinkRequest,
+  UpdateConceptLinkRequest,
   RoomWebRequest,
   RenameRoomRequest,
   RoomItemRef,
@@ -433,6 +436,50 @@ export function createApp(deps: AppDeps): App {
   });
   router.on('DELETE', '/api/rooms/:id/rooms/:child', ({ res, params }) => {
     sendJson(res, 200, repo.takeRoomOut(params.id as string, params.child as string));
+  });
+  // Concepts (ADR 0036): small rooms inside a room, suggested by the AI when it is read, kept by the learner.
+  router.on('POST', '/api/rooms/:id/concepts', async (ctx) => {
+    const body = await ctx.body(CreateConceptRequest);
+    const room = repo.getRoom(ctx.params.id as string);
+    if (!room) throw notFound('room');
+    if (room.kind === 'concept') throw new HttpError(400, 'invalid', 'A concept cannot hold concepts: make it a room first.');
+    sendJson(ctx.res, 201, repo.createConcept(room.id, { id: body.id, title: body.title, items: body.items ?? [], status: 'kept', by: 'you' }));
+  });
+  router.on('POST', '/api/rooms/:id/concepts/keep', ({ res, params }) => {
+    if (!repo.getRoom(params.id as string)) throw notFound('room');
+    sendJson(res, 200, { kept: repo.keepAllConcepts(params.id as string) });
+  });
+  router.on('POST', '/api/rooms/:id/concept-links', async (ctx) => {
+    const body = await ctx.body(CreateConceptLinkRequest);
+    if (!repo.getRoom(ctx.params.id as string)) throw notFound('room');
+    sendJson(ctx.res, 201, repo.createConceptLink(ctx.params.id as string, body, 'you', 'accepted'));
+  });
+  const concept = (id: string) => {
+    const c = repo.getRoom(id);
+    if (!c || c.kind !== 'concept') throw notFound('concept');
+    return c;
+  };
+  router.on('POST', '/api/concepts/:id/keep', ({ res, params }) => {
+    concept(params.id as string);
+    sendJson(res, 200, repo.keepConcept(params.id as string));
+  });
+  router.on('POST', '/api/concepts/:id/room', ({ res, params }) => {
+    concept(params.id as string);
+    sendJson(res, 200, repo.conceptToRoom(params.id as string));
+  });
+  router.on('DELETE', '/api/concepts/:id', ({ res, params }) => {
+    concept(params.id as string);
+    repo.dropConcept(params.id as string);
+    sendJson(res, 200, { ok: true });
+  });
+  router.on('PATCH', '/api/concept-links/:id', async (ctx) => {
+    const body = await ctx.body(UpdateConceptLinkRequest);
+    if (!repo.conceptLink(ctx.params.id as string)) throw notFound('link');
+    sendJson(ctx.res, 200, repo.updateConceptLink(ctx.params.id as string, body));
+  });
+  router.on('DELETE', '/api/concept-links/:id', ({ res, params }) => {
+    if (!repo.deleteConceptLink(params.id as string)) throw notFound('link');
+    sendJson(res, 200, { ok: true });
   });
   router.on('PUT', '/api/rooms/:id/door-places', async (ctx) => {
     const body = await ctx.body(DoorPlacesRequest);

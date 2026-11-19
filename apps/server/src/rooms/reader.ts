@@ -7,8 +7,11 @@
 
 import {
   briefRequest,
+  CONCEPTS_MAX,
+  CONCEPTS_MIN_THINGS,
   type ChosenLink,
   chooseLinkRequest,
+  conceptsRequest,
   describeError,
   gistRequest,
   type ItemLink,
@@ -17,6 +20,7 @@ import {
   readBrief,
   readChosenLink,
   readGist,
+  readConcepts,
   readLinks,
   type RoomItemRef,
   type RoomReading,
@@ -52,7 +56,7 @@ export class RoomReader {
   start(roomId: string): RoomReading {
     const now = this.readings.get(roomId);
     if (now && this.running.has(roomId)) return now;
-    const first: RoomReading = { phase: 'summaries', done: 0, total: 0, suggested: 0, error: null, current: [] };
+    const first: RoomReading = { phase: 'summaries', done: 0, total: 0, suggested: 0, concepts: 0, error: null, current: [] };
     this.readings.set(roomId, first);
     const run = this.run(roomId)
       .catch((err: unknown) => {
@@ -72,7 +76,7 @@ export class RoomReader {
   }
 
   private set(roomId: string, patch: Partial<RoomReading>): void {
-    const at = this.readings.get(roomId) ?? { phase: 'summaries' as const, done: 0, total: 0, suggested: 0, error: null, current: [] };
+    const at = this.readings.get(roomId) ?? { phase: 'summaries' as const, done: 0, total: 0, suggested: 0, concepts: 0, error: null, current: [] };
     this.readings.set(roomId, { ...at, ...patch });
   }
 
@@ -157,6 +161,13 @@ export class RoomReader {
         suggested += 1;
       }
     }
+    // Its concepts (ADR 0036): the key ideas its things are about, suggested for the learner to keep.
+    let concepts = 0;
+    try {
+      concepts = await this.findConcepts(roomId, room);
+    } catch (err) {
+      if (!(err instanceof ProviderError)) this.log.warn('the concepts could not be found', { err });
+    }
     // The brief: what the room adds up to, and what is still open in it (ADR 0030); with the rooms in it, each
     // by its own brief (ADR 0032). Those rooms are not read again here: each is read in itself.
     const basis = this.repo.roomBriefBasis(roomId);
@@ -205,10 +216,11 @@ export class RoomReader {
         if (!(err instanceof ProviderError)) this.log.warn('the room brief could not be written', { err });
       }
     }
-    this.repo.logEvent('room.read', roomId, { summaries: todo.length - failed, failed, suggested, model: provider.model });
+    this.repo.logEvent('room.read', roomId, { summaries: todo.length - failed, failed, suggested, concepts, model: provider.model });
     this.set(roomId, {
       phase: 'done',
       suggested,
+      concepts,
       error: failed > 0 ? `${failed} of ${todo.length} could not be summarized${firstError ? `: ${firstError}` : '.'}` : null,
     });
   }
@@ -245,6 +257,89 @@ export class RoomReader {
     if (!chosen) throw new Error('the kind could not be read');
     this.repo.logEvent('link.chosen', linkId, { kind: chosen.kind, flip: chosen.flip, model: provider.model });
     return this.repo.updateItemLink(linkId, { kind: chosen.kind, flip: chosen.flip, why: chosen.why || null }) as ItemLink;
+  }
+
+  /**
+   * The concepts of a room (ADR 0036): from the summaries of its things, the AI suggests the key ideas they are
+   * about (what it suggested before and was not kept goes first), each defined by a point of one thing's summary,
+   * and how they link. It puts things in the concepts the learner kept only as guesses, for the learner to take.
+   */
+  private async findConcepts(roomId: string, room: { notebookId: string; title: string; members: RoomItemRef[] }): Promise<number> {
+    const key = (x: RoomItemRef) => roomKey(x.kind, x.id);
+    const gists = this.repo.gists(room.members.map(key));
+    const items = room.members.filter((x) => gists.has(key(x))).slice(0, LINKS_MAX_ITEMS);
+    if (items.length < CONCEPTS_MIN_THINGS) return 0;
+    this.set(roomId, { phase: 'concepts' });
+    const provider = this.models.current();
+    this.repo.clearSuggestedConcepts(roomId);
+    const kept = this.repo.keptConcepts(roomId);
+    const reading = this.repo.conceptReading(roomId);
+    const index = new Map<string, number>(items.map((x, i) => [key(x), i + 1]));
+    const most = Math.max(0, CONCEPTS_MAX - kept.length);
+    const titles = this.titles(room.notebookId);
+    let raw = '';
+    for await (const ev of provider.stream({
+      messages: conceptsRequest(
+        room.title,
+        items.map((x) => ({
+          kind: x.kind,
+          title: titles.get(key(x)) ?? '',
+          gist: gists.get(key(x))?.text ?? '',
+          points: (gists.get(key(x))?.points ?? []).map((p) => p.text),
+        })),
+        kept.map((c) => ({ name: c.title, definition: c.definition, things: c.members.flatMap((k) => index.get(k) ?? []) })),
+        reading.dismissed,
+        most,
+      ),
+      maxTokens: 2000,
+      light: true,
+      purpose: 'concepts',
+      signal: AbortSignal.timeout(90_000),
+    })) {
+      if (ev.type === 'text') raw += ev.text;
+    }
+    const draft = readConcepts(raw, {
+      things: items.length,
+      points: items.map((x) => gists.get(key(x))?.points.length ?? 0),
+      kept: kept.map((c) => c.title),
+      dismissed: reading.dismissed,
+      most,
+    });
+    if (!draft) {
+      this.log.warn('could not read the concepts', { chars: raw.length });
+      return 0;
+    }
+    const ids = kept.map((c) => c.id);
+    for (const c of draft.concepts) {
+      const id = ulid();
+      const at = c.definedBy ? items[c.definedBy.thing - 1] : undefined;
+      const quote = at ? (gists.get(key(at))?.points[c.definedBy?.point ?? 0]?.target ?? null) : null;
+      this.repo.createConcept(roomId, {
+        id,
+        title: c.name,
+        definition: c.definition || null,
+        quote,
+        items: c.things.map((n) => items[n - 1] as RoomItemRef),
+        status: 'suggested',
+        by: 'ai',
+      });
+      ids.push(id);
+    }
+    const linked = new Set(this.repo.conceptLinks(roomId).map((l) => [l.from, l.to].sort().join('|')));
+    for (const l of draft.links) {
+      const from = ids[l.from - 1];
+      const to = ids[l.to - 1];
+      if (!from || !to || linked.has([from, to].sort().join('|'))) continue;
+      this.repo.createConceptLink(roomId, { id: ulid(), from, to, kind: l.kind, why: l.why || null }, 'ai', 'suggested');
+    }
+    this.repo.saveConceptReading(roomId, {
+      guesses: draft.place.flatMap((p) => {
+        const item = items[p.thing - 1];
+        const concept = ids[p.concept - 1];
+        return item && concept ? [{ item: key(item), concept }] : [];
+      }),
+    });
+    return draft.concepts.length;
   }
 
   private async summarize(item: RoomItemRef, basis: string): Promise<void> {

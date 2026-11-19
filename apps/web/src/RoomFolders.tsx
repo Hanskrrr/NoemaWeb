@@ -5,7 +5,7 @@
 // Enter opens it. Drag a row onto a folder to move it there; with ⌥ it stays
 // here too. Right-click is the same menu as everywhere.
 
-import { type Gist, LINK_WORDS, type Room, type RoomKind, type RoomView as RoomViewData, type VaultTarget } from '@noema/core';
+import { type Concept, type Gist, LINK_WORDS, type Room, type RoomKind, type RoomView as RoomViewData, type VaultTarget } from '@noema/core';
 import { type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { api } from './api.ts';
 import { openMenu } from './ContextMenu.tsx';
@@ -23,7 +23,7 @@ import {
 import { alsoIn, DEFAULT_SORT, type FolderColumn, type FolderSort, nextSort, roomAlsoIn, sortRows, typeAhead } from './folders.ts';
 import { deleteItems, useItems } from './itemMenu.ts';
 import { roomMenu, useRooms } from './Rooms.tsx';
-import { type Door, day, GLYPH, holdsOf, kindName, marksOf, plural, ROOM_GLYPH, type RoomCard } from './roomText.ts';
+import { CONCEPT_GLYPH, type Door, day, GLYPH, holdsOf, kindName, marksOf, plural, ROOM_GLYPH, type RoomCard } from './roomText.ts';
 import { keys, storage } from './storage.ts';
 
 interface Row {
@@ -43,6 +43,8 @@ interface Row {
   also: Room[];
   card?: RoomCard;
   door?: Door;
+  /** A concept kept in the room (ADR 0036): a folder of its things. */
+  concept?: Concept;
   gist?: Gist;
   /** The view of the room it is listed in. */
   of: RoomViewData;
@@ -59,6 +61,7 @@ const COLUMNS: Array<{ col: FolderColumn | null; label: string; className: strin
 export function RoomFolders({
   view,
   through,
+  onConcept,
   onOpen,
   onOpenTarget,
   onDropHere,
@@ -67,6 +70,8 @@ export function RoomFolders({
   view: RoomViewData;
   /** The rooms passed through to get here, and this one (ADR 0032). */
   through: string[];
+  /** A concept opened: shown in Concepts (ADR 0036). */
+  onConcept: (id: string) => void;
   onOpen: (kind: RoomKind, id: string) => void;
   onOpenTarget: (target: VaultTarget) => void;
   /** Something dropped on the list itself, not on a folder: it goes in this room. */
@@ -104,8 +109,53 @@ export function RoomFolders({
 
   const title = (id: string) => rooms.rooms.find((r) => r.id === id)?.title || (id === roomId ? view.room.title : 'Untitled room');
 
+  // Which room each concept listed is part of: moved into one of its own room's concepts, a thing stays in the room.
+  const conceptOf = new Map<string, string>();
+  const fileRow = (v: RoomViewData, c: RoomCard, depth: number, chain: string[], prefix: string, holder: string): Row => {
+    const key = `${c.kind}:${c.id}`;
+    return {
+      id: `${prefix}/${key}`,
+      key,
+      folder: false,
+      depth,
+      holder,
+      chain,
+      title: c.title,
+      kind: kindName(c),
+      at: c.marks.at,
+      open: c.kind === 'note' ? 0 : c.marks.open,
+      // In a concept, it is in the room too: not "also in" that.
+      also: alsoIn(rooms.rooms, key, v.room.id),
+      card: c,
+      gist: v.gists[key],
+      of: v,
+    };
+  };
   const rowsOf = (v: RoomViewData, depth: number, chain: string[], prefix: string): Row[] => {
     const holder = v.room.id;
+    const cards = v.clusters.flatMap((c) => c.cards);
+    const byKey = new Map(cards.map((c) => [`${c.kind}:${c.id}`, c]));
+    const concepts = v.concepts.filter((c) => c.status === 'kept');
+    const under = new Set(concepts.flatMap((c) => c.members as string[]));
+    for (const c of concepts) conceptOf.set(c.id, holder);
+    const conceptRows: Row[] = concepts.map((c) => {
+      const mine = c.members.flatMap((k) => byKey.get(k) ?? []);
+      return {
+        id: `${prefix}/concept:${c.id}`,
+        key: `concept:${c.id}`,
+        folder: true,
+        depth,
+        holder,
+        chain,
+        title: c.title,
+        kind: `Concept · ${mine.length}`,
+        at: mine.reduce((at, x) => (x.marks.at > at ? x.marks.at : at), ''),
+        open: mine.reduce((n, x) => n + (x.kind === 'note' ? 0 : x.marks.open), 0),
+        also: c.also.flatMap((id) => rooms.rooms.find((r) => r.id === id) ?? []),
+        concept: c,
+        of: v,
+      };
+    });
     const folders: Row[] = v.doors.map((d) => {
       const total = d.counts.sources + d.counts.threads + d.counts.notes + d.counts.rooms;
       return {
@@ -124,30 +174,15 @@ export function RoomFolders({
         of: v,
       };
     });
-    const files: Row[] = v.clusters
-      .flatMap((c) => c.cards)
-      .map((c) => {
-        const key = `${c.kind}:${c.id}`;
-        return {
-          id: `${prefix}/${key}`,
-          key,
-          folder: false,
-          depth,
-          holder,
-          chain,
-          title: c.title,
-          kind: kindName(c),
-          at: c.marks.at,
-          open: c.kind === 'note' ? 0 : c.marks.open,
-          also: alsoIn(rooms.rooms, key, holder),
-          card: c,
-          gist: v.gists[key],
-          of: v,
-        };
-      });
+    const files: Row[] = cards.filter((c) => !under.has(`${c.kind}:${c.id}`)).map((c) => fileRow(v, c, depth, chain, prefix, holder));
     const out: Row[] = [];
-    for (const r of sortRows([...folders, ...files], sort)) {
+    for (const r of sortRows([...conceptRows, ...folders, ...files], sort)) {
       out.push(r);
+      if (r.concept && opened.has(r.id)) {
+        const c = r.concept;
+        const inside = c.members.flatMap((k) => byKey.get(k) ?? []).map((x) => fileRow(v, x, depth + 1, chain, r.id, c.id));
+        out.push(...sortRows(inside, sort));
+      }
       if (r.door && opened.has(r.id)) {
         const child = inner.get(r.door.id);
         // Never round in circles (a room cannot be inside itself, but be safe).
@@ -161,8 +196,7 @@ export function RoomFolders({
   const current = at >= 0 ? rows[at] : undefined;
 
   const toggle = (row: Row, open?: boolean) => {
-    if (!row.door) return;
-    const id = row.door.id;
+    if (!row.door && !row.concept) return;
     const willOpen = open ?? !opened.has(row.id);
     setOpened((s) => {
       const next = new Set(s);
@@ -170,7 +204,8 @@ export function RoomFolders({
       else next.delete(row.id);
       return next;
     });
-    if (willOpen && !inner.has(id)) {
+    const id = row.door?.id;
+    if (id && willOpen && !inner.has(id)) {
       void api.room(id).then(
         (v) => setInner((m) => new Map(m).set(id, v)),
         () => setStatus('That room could not be opened.'),
@@ -178,7 +213,8 @@ export function RoomFolders({
     }
   };
   const openRow = (row: Row) => {
-    if (row.door) rooms.openRoom(row.door.id, [...through.slice(0, -1), ...row.chain]);
+    if (row.concept) onConcept(row.concept.id);
+    else if (row.door) rooms.openRoom(row.door.id, [...through.slice(0, -1), ...row.chain]);
     else if (row.card) onOpen(row.card.kind, row.card.id);
   };
   const changeSort = (col: FolderColumn) => {
@@ -200,9 +236,9 @@ export function RoomFolders({
     else if (e.key === 'ArrowUp') select(rows[Math.max(0, at - 1)]);
     else if (e.key === 'Home') select(rows[0]);
     else if (e.key === 'End') select(rows[rows.length - 1]);
-    else if (e.key === 'ArrowRight' && row?.door) toggle(row, true);
+    else if (e.key === 'ArrowRight' && row?.folder) toggle(row, true);
     else if (e.key === 'ArrowLeft' && row) {
-      if (row.door && opened.has(row.id)) toggle(row, false);
+      if (row.folder && opened.has(row.id)) toggle(row, false);
       else select(rows.find((r) => row.id.startsWith(`${r.id}/`) && r.depth === row.depth - 1));
     } else if (e.key === 'Enter' && row) openRow(row);
     else if (e.key === ' ') setPreview((p) => !p);
@@ -226,8 +262,10 @@ export function RoomFolders({
     const item = droppedItem(e);
     const room = droppedRoom(e);
     const from = draggedFrom(e);
-    const keep = e.altKey || !from || from === target;
-    const into = title(target);
+    // Into a concept of the room it was in (ADR 0036): it stays in the room as well.
+    const keep = e.altKey || !from || from === target || conceptOf.get(target) === from;
+    const concept = [...conceptOf.keys()].includes(target) ? rowsByConcept(target) : null;
+    const into = concept ?? title(target);
     if (item) {
       const ref = rooms.unit(item);
       await rooms.add(target, [ref]);
@@ -245,10 +283,17 @@ export function RoomFolders({
     }
   };
   const accepts = (e: DragEvent) => isItemDrag(e) || isRoomDrag(e);
+  const rowsByConcept = (id: string) => rows.find((r) => r.concept?.id === id)?.title ?? '';
 
   const menuFor = (row: Row) => (e: MouseEvent) => {
     setSelected(row.id);
-    const from = title(row.holder);
+    const inConcept = conceptOf.has(row.holder);
+    const from = inConcept ? rowsByConcept(row.holder) : title(row.holder);
+    if (row.concept) {
+      const c = row.concept;
+      openMenu(e, [{ label: 'Show in Concepts', onSelect: () => onConcept(c.id) }], row.title || 'Untitled');
+      return;
+    }
     if (row.door) {
       const id = row.door.id;
       openMenu(
@@ -272,9 +317,19 @@ export function RoomFolders({
       e,
       roomMenu(rooms, thing, [
         { label: 'Open', onSelect: () => onOpen(c.kind, c.id) },
+        ...(inConcept
+          ? [
+              {
+                label: `Take out of “${from}”`,
+                hint: 'It stays in the room, under no concept',
+                onSelect: () => rooms.remove(row.holder, { kind: c.kind, id: c.id }),
+                testId: 'menu-concept-out',
+              },
+            ]
+          : []),
         {
-          label: `Take out of “${from}”`,
-          onSelect: () => rooms.remove(row.holder, { kind: c.kind, id: c.id }),
+          label: `Take out of “${title(row.of.room.id)}”`,
+          onSelect: () => rooms.remove(row.of.room.id, { kind: c.kind, id: c.id }),
           hint: c.explicit ? (row.also.length ? 'It stays in the other rooms it is in' : undefined) : 'It came with something in this room; it stays out until you put it back.',
           testId: 'menu-take-out',
         },
@@ -343,30 +398,38 @@ export function RoomFolders({
         {rows.length === 0 && empty}
         {rows.map((r) => {
           const isOpen = opened.has(r.id);
-          const glyph = r.door ? ROOM_GLYPH : GLYPH[r.card?.kind ?? 'thread'];
-          const drag = r.door ? draggableRoom({ id: r.door.id, title: r.title }) : draggableItem({ kind: r.card?.kind ?? 'thread', id: r.card?.id ?? '', title: r.title });
+          const glyph = r.concept ? CONCEPT_GLYPH : r.door ? ROOM_GLYPH : GLYPH[r.card?.kind ?? 'thread'];
+          const kindClass = r.concept ? 'concept' : (r.card?.kind ?? 'room');
+          const target = r.concept?.id ?? r.door?.id;
+          const takes = (e: DragEvent) => (r.concept ? isItemDrag(e) : accepts(e));
+          const drag = r.concept
+            ? null
+            : r.door
+              ? draggableRoom({ id: r.door.id, title: r.title })
+              : draggableItem({ kind: r.card?.kind ?? 'thread', id: r.card?.id ?? '', title: r.title });
           return (
             // biome-ignore lint/a11y/useSemanticElements: a row of a tree
             <div
               key={r.id}
               role="treeitem"
               aria-level={r.depth + 1}
-              aria-expanded={r.door ? isOpen : undefined}
+              aria-expanded={r.folder ? isOpen : undefined}
               aria-selected={r.id === selected}
               tabIndex={r.id === selected ? 0 : -1}
-              className={`folders-row${r.folder ? ' is-folder' : ''}${r.id === selected ? ' is-selected' : ''}${over === r.id ? ' is-target' : ''} kind-${r.card?.kind ?? 'room'}`}
+              className={`folders-row${r.folder ? ' is-folder' : ''}${r.id === selected ? ' is-selected' : ''}${over === r.id ? ' is-target' : ''} kind-${kindClass}`}
               style={{ '--depth': r.depth } as CSSProperties}
               onClick={() => setSelected(r.id)}
               onDoubleClick={() => openRow(r)}
               onContextMenu={menuFor(r)}
-              draggable
+              draggable={drag !== null}
               onDragStart={(e) => {
+                if (!drag) return;
                 drag.onDragStart(e);
                 e.dataTransfer.setData(FROM_ROOM_MIME, r.holder);
                 e.dataTransfer.effectAllowed = 'all';
               }}
               onDragOver={(e) => {
-                if (!r.door || !accepts(e)) return;
+                if (!target || !takes(e)) return;
                 e.preventDefault();
                 e.stopPropagation();
                 e.dataTransfer.dropEffect = e.altKey || !draggedFrom(e) ? 'copy' : 'move';
@@ -374,12 +437,12 @@ export function RoomFolders({
               }}
               onDragLeave={() => setOver((o) => (o === r.id ? null : o))}
               onDrop={(e) => {
-                if (!r.door || !accepts(e)) return;
+                if (!target || !takes(e)) return;
                 e.preventDefault();
                 e.stopPropagation();
                 setOver(null);
                 setOverList(false);
-                void dropOn(e, r.door.id);
+                void dropOn(e, target);
               }}
               data-row={r.id}
               data-key={r.key}
@@ -387,7 +450,7 @@ export function RoomFolders({
               data-testid="folder-row"
             >
               <span className="folders-name">
-                {r.door ? (
+                {r.folder ? (
                   <button
                     type="button"
                     className="folders-twisty"
@@ -404,7 +467,7 @@ export function RoomFolders({
                 ) : (
                   <span className="folders-twisty" aria-hidden />
                 )}
-                <span className={`folders-glyph kind-${r.card?.kind ?? 'room'}`} aria-hidden>
+                <span className={`folders-glyph kind-${kindClass}`} aria-hidden>
                   {glyph}
                 </span>
                 {r.also.length > 0 && (
@@ -413,6 +476,7 @@ export function RoomFolders({
                   </span>
                 )}
                 <span className="folders-title">{r.title || (r.door ? 'Untitled room' : 'Untitled')}</span>
+                {r.concept?.definition && <span className="folders-def hint">{r.concept.definition}</span>}
               </span>
               <span className="folders-kind">{r.kind}</span>
               <span className="folders-also" data-testid="folder-also">
@@ -493,8 +557,10 @@ function FolderPreview({
       </aside>
     );
   }
-  const homes = [row.holder, ...row.also.map((r) => r.id)];
-  const head = row.door
+  const homes = [row.concept || !row.card ? row.holder : row.of.room.id, ...row.also.map((r) => r.id)];
+  const head = row.concept
+    ? `${CONCEPT_GLYPH} Concept · ${plural(row.concept.members.length, 'thing')}`
+    : row.door
     ? `${ROOM_GLYPH} Room · ${holdsOf(row.door.counts) || 'nothing in it yet'}`
     : `${GLYPH[row.card?.kind ?? 'thread']} ${row.kind}${row.card && marksOf(row.card) ? ` · ${marksOf(row.card)}` : ''}`;
   const titles = new Map(row.of.clusters.flatMap((c) => c.cards).map((c) => [`${c.kind}:${c.id}`, c.title]));
@@ -504,7 +570,7 @@ function FolderPreview({
       )
     : [];
   const open = (row.of.brief?.open ?? []).filter((o) => o.item && `${o.item.kind}:${o.item.id}` === row.key);
-  const text = row.door ? row.door.brief : (row.gist?.text ?? null);
+  const text = row.concept ? row.concept.definition : row.door ? row.door.brief : (row.gist?.text ?? null);
   return (
     <aside className="folders-preview" aria-label={`Preview of “${row.title}”`} data-testid="folder-preview">
       <div className="folders-preview-top">
@@ -516,8 +582,15 @@ function FolderPreview({
       <h3 data-testid="folder-preview-title">{row.title || 'Untitled'}</h3>
       {text && (
         <div className={`folders-preview-ai${row.gist && !row.gist.fresh ? ' is-stale' : ''}`} data-testid="folder-preview-ai">
-          <p className="folders-preview-label">{row.door ? 'AI · its brief' : `AI · summary${row.gist?.fresh === false ? ', older' : ''}`}</p>
+          <p className="folders-preview-label">
+            {row.concept ? (row.concept.by === 'ai' ? 'AI · what it is' : 'What it is') : row.door ? 'AI · its brief' : `AI · summary${row.gist?.fresh === false ? ', older' : ''}`}
+          </p>
           <p>{text}</p>
+          {row.concept?.quote?.quote && (
+            <button type="button" className="room-point" onClick={() => row.concept?.quote && onOpenTarget(row.concept.quote)}>
+              <span aria-hidden>↗ </span>“{row.concept.quote.quote}”
+            </button>
+          )}
           {row.gist && row.gist.points.length > 0 && (
             <ul className="room-points">
               {row.gist.points.map((p, i) => (
@@ -589,7 +662,7 @@ function FolderPreview({
       </dl>
       <p className="folders-preview-actions">
         <button type="button" className="primary" onClick={() => onOpen(row)} data-testid="folder-preview-open">
-          Open
+          {row.concept ? 'Show in Concepts' : 'Open'}
         </button>
       </p>
     </aside>

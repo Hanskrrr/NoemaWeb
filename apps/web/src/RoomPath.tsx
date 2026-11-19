@@ -20,9 +20,22 @@ export interface PathNode {
   sides: number;
   onOpen: () => void;
   onMenu?: (e: MouseEvent) => void;
+  /** A concept's things (ADR 0036), each a click away. */
+  things?: Array<{ key: string; glyph: string; kind: string; title: string; onOpen: () => void }>;
 }
 
-export function RoomPath({ nodes, links, empty }: { nodes: PathNode[]; links: PathLink[]; empty: ReactNode }) {
+export function RoomPath({
+  nodes,
+  links,
+  empty,
+  footer,
+}: {
+  nodes: PathNode[];
+  links: PathLink[];
+  empty: ReactNode;
+  /** Said under the path: with concepts, the things under none. */
+  footer?: ReactNode;
+}) {
   const byKey = new Map(nodes.map((n) => [n.key, n]));
   const path = pathOrder(
     nodes.map((n) => n.key),
@@ -67,6 +80,16 @@ export function RoomPath({ nodes, links, empty }: { nodes: PathNode[]; links: Pa
             </span>
           </p>
           {n.text && <p className="path-text">{n.text}</p>}
+          {n.things && n.things.length > 0 && (
+            <p className="path-things">
+              {n.things.map((t) => (
+                <button key={t.key} type="button" className={`path-thing kind-${t.kind}`} onClick={t.onOpen} data-testid="path-thing">
+                  <span aria-hidden>{t.glyph} </span>
+                  {t.title || 'Untitled'}
+                </button>
+              ))}
+            </p>
+          )}
           {(n.open.length > 0 || n.sides > 0) && (
             <ul className="path-open">
               {n.open.map((q, i) => (
@@ -91,7 +114,8 @@ export function RoomPath({ nodes, links, empty }: { nodes: PathNode[]; links: Pa
           <p className="empty-title">No order yet</p>
           <p className="hint">
             The path is made from the links you keep: what builds on what, what is an example of what, what explains
-            what. Keep the links Read with AI suggests (Review), or draw them on the Board, and the order appears here.
+            what. Keep the links Read with AI suggests (Review, or Keep all in Concepts), or draw them on the Board,
+            and the order appears here.
           </p>
         </div>
       ) : (
@@ -127,6 +151,7 @@ export function RoomPath({ nodes, links, empty }: { nodes: PathNode[]; links: Pa
           <span className="hint">Link them to what they build on, and they take their place.</span>
         </p>
       )}
+      {footer}
     </div>
   );
 }

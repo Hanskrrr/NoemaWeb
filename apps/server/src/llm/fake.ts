@@ -220,6 +220,41 @@ export class FakeProvider implements ModelProvider {
       yield { type: 'finish', reason: 'stop' };
       return;
     }
+    if (req.purpose === 'concepts') {
+      // Predictable concepts (ADR 0036): three, named "Fake concept 1, 2, 3" (skipping names kept or dismissed);
+      // the first holds the first half of the things, the second the rest, the third the first and the last; with
+      // four things or more, the last is about none. The second builds on the first, the third contrasts with the
+      // second. Things in no concept are put in the first kept one, as a guess.
+      if (question.includes('[[fail-concepts]]')) throw new ProviderError('unavailable', 'fake failure: unavailable');
+      const n = [...question.matchAll(/^(\d+)\. /gm)].length;
+      const kept = [...question.matchAll(/^\[(\d+)\] “(.*?)”/gm)].map((m) => m[2] as string);
+      const dismissed = [...(/Not these, the learner dismissed them: (.*)\./.exec(question)?.[1] ?? '').matchAll(/“(.*?)”/g)].map((m) => m[1] as string);
+      const most = Number(/Give at most (\d+) new concepts/.exec(question)?.[1] ?? 12);
+      const m = n >= 4 ? n - 1 : n;
+      const half = Math.ceil(m / 2);
+      const range = (a: number, b: number) => Array.from({ length: Math.max(0, b - a + 1) }, (_, i) => a + i);
+      const groups = [range(1, half), range(half + 1, m), [...new Set([1, m])]].filter((g) => g.length > 0);
+      const names: string[] = [];
+      for (let i = 1; names.length < Math.min(groups.length, most) && i < 20; i++) {
+        const name = `Fake concept ${i}`;
+        if (!kept.includes(name) && !dismissed.includes(name)) names.push(name);
+      }
+      const concepts = names.map((name, i) => ({
+        name,
+        definition: `The ${['first', 'second', 'third'][i]} idea of the room.`,
+        defined_by: `${(groups[i] as number[])[0]}a`,
+        things: groups[i],
+      }));
+      const K = kept.length;
+      const links = [];
+      if (concepts.length >= 2) links.push({ from: K + 2, to: K + 1, kind: 'builds-on', why: 'Fake: the second needs the first.' });
+      if (concepts.length >= 3) links.push({ from: K + 3, to: K + 2, kind: 'contrasts-with', why: 'Fake: another way.' });
+      const place = K > 0 && n >= 4 ? [{ thing: n, concept: 1 }] : [];
+      await sleep(this.delayMs, req.signal);
+      yield { type: 'text', text: JSON.stringify({ concepts, links, place }) };
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
     if (req.purpose === 'web-plan') {
       // Searches only when a question asks for it: [[web]] one search, [[web2]] two; nothing otherwise.
       const words = (/The question:\n([\s\S]*)$/.exec(question)?.[1] ?? '').replace(/\[\[[^\]]*\]\]/g, '').trim().split(/\s+/).slice(0, 4).join(' ');

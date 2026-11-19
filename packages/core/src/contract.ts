@@ -996,6 +996,9 @@ export const Room = z.object({
   /** Rooms in rooms (ADR 0032): the rooms it is in, in the order it was put in them, and the rooms in it. */
   parents: z.array(Id).default([]),
   rooms: z.array(Id).default([]),
+  /** A concept (ADR 0036) is a small room inside the room it was read from; suggested by the AI until kept. */
+  kind: z.enum(['room', 'concept']).default('room'),
+  status: z.enum(['suggested', 'kept']).default('kept'),
 });
 export type Room = z.infer<typeof Room>;
 export const RoomList = z.object({ rooms: z.array(Room) });
@@ -1102,16 +1105,57 @@ export const Gist = z.object({
 });
 export type Gist = z.infer<typeof Gist>;
 export const RoomReading = z.object({
-  phase: z.enum(['summaries', 'links', 'brief', 'done', 'failed']),
+  phase: z.enum(['summaries', 'links', 'concepts', 'brief', 'done', 'failed']),
   done: z.number().int(),
   /** Things being summarized this moment ("kind:id"): the light passes over their cards. */
   current: z.array(z.string()).default([]),
   total: z.number().int(),
   /** Links suggested this time. */
   suggested: z.number().int(),
+  /** Concepts suggested this time (ADR 0036). */
+  concepts: z.number().int().default(0),
   error: z.string().nullable(),
 });
 export type RoomReading = z.infer<typeof RoomReading>;
+
+/**
+ * A concept of a room (ADR 0036): a key idea its things are about, a small room inside it. Suggested by the AI
+ * when the room is read, until the learner keeps it.
+ */
+export const Concept = z.object({
+  id: Id,
+  title: z.string(),
+  status: z.enum(['suggested', 'kept']),
+  /** One plain sentence. */
+  definition: z.string().nullable(),
+  /** The words of the learner's own thing that define it, where they are. */
+  quote: VaultTarget.nullable(),
+  /** Its things, as "kind:id", of those in the room. */
+  members: z.array(RoomKeySchema),
+  /** The other rooms it is in. */
+  also: z.array(Id).default([]),
+  by: z.enum(['you', 'ai']),
+});
+export type Concept = z.infer<typeof Concept>;
+export const ConceptLink = z.object({
+  id: Id,
+  from: Id,
+  to: Id,
+  kind: LinkKindSchema,
+  why: z.string().nullable(),
+  by: z.enum(['you', 'ai']),
+  status: z.enum(['suggested', 'accepted']),
+});
+export type ConceptLink = z.infer<typeof ConceptLink>;
+export const CreateConceptRequest = z.object({
+  id: Id,
+  title: z.string().trim().min(1).max(200),
+  items: z.array(RoomItemRef).max(500).optional(),
+});
+export const UpdateConceptLinkRequest = z
+  .object({ status: z.literal('accepted').optional(), kind: LinkKindSchema.optional() })
+  .refine((b) => Object.keys(b).length > 0, 'nothing to change');
+export const CreateConceptLinkRequest = z.object({ id: Id, from: Id, to: Id, kind: LinkKindSchema });
 
 export const RoomView = z.object({
   room: Room,
@@ -1144,6 +1188,10 @@ export const RoomView = z.object({
   ),
   /** The rooms inside it (ADR 0032), as doors. */
   doors: z.array(RoomDoor).default([]),
+  /** Its concepts (ADR 0036), kept and suggested, and the links between them; where the AI would put a thing not in one. */
+  concepts: z.array(Concept).default([]),
+  conceptLinks: z.array(ConceptLink).default([]),
+  guesses: z.array(z.object({ item: RoomKeySchema, concept: Id })).default([]),
   links: z.array(
     z.object({
       from: RoomKeySchema,

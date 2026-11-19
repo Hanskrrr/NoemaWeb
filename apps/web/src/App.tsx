@@ -307,18 +307,19 @@ function NotebookView({
       },
       add: async (roomId, items) => {
         try {
-          await api.addToRoom(roomId, items);
+          const into = await api.addToRoom(roomId, items);
           await refreshRooms();
-          say(`Put in ${nameOf(roomId)}`);
+          // A concept (ADR 0036) is not in the list of rooms: its name comes back with it.
+          say(into.kind === 'concept' ? `Put under ${into.title}` : `Put in ${nameOf(roomId)}`);
         } catch (err) {
           failed(err);
         }
       },
       remove: async (roomId, item) => {
         try {
-          await api.removeFromRoom(roomId, item);
+          const from = await api.removeFromRoom(roomId, item);
           await refreshRooms();
-          say(`Taken out of ${nameOf(roomId)}`);
+          say(`Taken out of ${from.kind === 'concept' ? from.title : nameOf(roomId)}`);
         } catch (err) {
           failed(err);
         }

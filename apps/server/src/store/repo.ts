@@ -40,6 +40,8 @@ import {
   type Origin,
   type Pin,
   type ReadableNotebook,
+  type Concept,
+  type ConceptLink,
   type Gist,
   type ItemLink,
   type ItemText,
@@ -74,6 +76,7 @@ import {
   type WebFind,
   type ThreadMap,
   ulid,
+  VaultTarget,
 } from '@noema/core';
 import type { Db } from './db.ts';
 
@@ -344,7 +347,14 @@ export interface RoomSnapshot {
   room: Record<string, unknown>;
   items: Array<Record<string, unknown>>;
   brief?: Record<string, unknown> | null;
+  /** Its concepts (ADR 0036), which go with it, the links between them and what its reading remembers. */
+  concepts?: RoomSnapshot[];
+  conceptLinks?: Array<Record<string, unknown>>;
+  conceptReading?: Record<string, unknown> | null;
 }
+
+/** A room's door to a room in it, and whether that room is a concept (ADR 0036). */
+type KindDoor = Door & { concept: boolean };
 
 export class Repo {
   readonly db: Db;
@@ -1030,10 +1040,22 @@ export class Repo {
     }));
   }
 
-  private toRoom(r: Row, graph: RoomGraph, doors: Door[]): Room {
+  /** A concept's things (ADR 0036): only what was put in it, of what is still there. */
+  private conceptMembers(rows: RoomRow[], graph: RoomGraph): string[] {
+    const there = new Set<string>([
+      ...graph.threads.map((t) => roomKey('thread', t.id)),
+      ...graph.sources.map((x) => roomKey('source', x.id)),
+      ...graph.notes.map((n) => roomKey('note', n.id)),
+    ]);
+    return rows.filter((x) => x.state === 'in').map((x) => roomKey(x.kind, x.id)).filter((k) => there.has(k));
+  }
+
+  private toRoom(r: Row, graph: RoomGraph, doors: KindDoor[]): Room {
     const id = r.id as string;
-    const members = [...roomMembers(this.roomRows(id), graph).keys()];
-    const rooms = doors.filter((d) => d.parent === id).map((d) => d.child);
+    const concept = r.kind === 'concept';
+    const members = concept ? this.conceptMembers(this.roomRows(id), graph) : [...roomMembers(this.roomRows(id), graph).keys()];
+    // Its concepts are not rooms in it: they are part of it (ADR 0036).
+    const rooms = doors.filter((d) => d.parent === id && !d.concept).map((d) => d.child);
     const counts = { sources: 0, threads: 0, notes: 0, rooms: rooms.length };
     for (const k of members) counts[k.startsWith('source:') ? 'sources' : k.startsWith('thread:') ? 'threads' : 'notes'] += 1;
     return {
@@ -1047,31 +1069,34 @@ export class Repo {
       web: r.web === undefined ? true : Number(r.web) === 1,
       parents: doors.filter((d) => d.child === id).map((d) => d.parent),
       rooms,
+      kind: concept ? 'concept' : 'room',
+      status: r.status === 'suggested' ? 'suggested' : 'kept',
     };
   }
 
   /** Rooms in rooms (ADR 0032): every door of a notebook, as (room, the room in it), in the order they were made. */
-  private doors(notebookId: string): Door[] {
+  private doors(notebookId: string): KindDoor[] {
     return (
       this.db.sql
         .prepare(
-          `SELECT d.room_id, d.child_id FROM room_door d JOIN room r ON r.id = d.room_id
+          `SELECT d.room_id, d.child_id, c.kind FROM room_door d JOIN room r ON r.id = d.room_id JOIN room c ON c.id = d.child_id
            WHERE r.notebook_id = ? ORDER BY d.created_at, d.rowid`,
         )
         .all(notebookId) as Row[]
-    ).map((r) => ({ parent: r.room_id as string, child: r.child_id as string }));
+    ).map((r) => ({ parent: r.room_id as string, child: r.child_id as string, concept: r.kind === 'concept' }));
   }
 
   /**
    * What a room's brief is written from (ADR 0030): each thing in it as it is now, and (ADR 0032) the brief of each
    * room in it as it was last written. A room with no rooms in it hashes as it did before rooms could hold rooms.
    */
-  private briefBasisOf(roomId: string, members: string[], bases: Map<string, string>, doors: Door[]): string {
+  private briefBasisOf(roomId: string, members: string[], bases: Map<string, string>, doors: KindDoor[]): string {
     const keys = [...members];
     const at = new Map(bases);
     const written = this.db.sql.prepare('SELECT created_at FROM room_brief WHERE room_id = ?');
     for (const d of doors) {
-      if (d.parent !== roomId) continue;
+      // Its concepts are read with it, not briefed on their own (ADR 0036).
+      if (d.parent !== roomId || d.concept) continue;
       const key = `room:${d.child}`;
       keys.push(key);
       at.set(key, ((written.get(d.child) as Row | undefined)?.created_at as string | undefined) ?? '');
@@ -1082,10 +1107,11 @@ export class Repo {
   /** Put a room in another (ADR 0032), at a place on its map if given; never inside itself, at any depth. */
   putRoomIn(parentId: string, childId: string, at: { x?: number; y?: number } = {}, by: 'you' | 'assistant' = 'you'): Room {
     return this.db.tx(() => {
-      const get = this.db.sql.prepare('SELECT id, notebook_id, title FROM room WHERE id = ?');
+      const get = this.db.sql.prepare('SELECT id, notebook_id, title, kind FROM room WHERE id = ?');
       const parent = get.get(parentId) as Row | undefined;
       const child = get.get(childId) as Row | undefined;
       if (!parent || !child || parent.notebook_id !== child.notebook_id) throw new NotFoundError('room');
+      if (parent.kind === 'concept') throw new InvalidError('A concept holds things, not rooms: make it a room first.');
       if (parentId === childId) throw new InvalidError('A room cannot be put inside itself.');
       if (wouldLoop(this.doors(parent.notebook_id as string), parentId, childId)) {
         throw new InvalidError(`“${parent.title as string}” is inside “${child.title as string}”, so “${child.title as string}” cannot go in it.`);
@@ -1141,7 +1167,7 @@ export class Repo {
   }
 
   /** The rooms in a room, as doors: what each holds, a few of its things, its brief. */
-  private roomDoors(roomId: string, graph: RoomGraph, doors: Door[], bases: Map<string, string>): RoomDoor[] {
+  private roomDoors(roomId: string, graph: RoomGraph, doors: KindDoor[], bases: Map<string, string>): RoomDoor[] {
     const known = new Map<string, { title: string; at: string }>();
     for (const t of graph.threads) known.set(roomKey('thread', t.id), { title: t.title, at: t.updatedAt });
     for (const x of graph.sources) known.set(roomKey('source', x.id), { title: x.title, at: x.updatedAt });
@@ -1151,10 +1177,10 @@ export class Repo {
     const rows = this.db.sql.prepare('SELECT * FROM room_door WHERE room_id = ? ORDER BY created_at, rowid').all(roomId) as Row[];
     return rows.flatMap((d) => {
       const child = getRoom.get(d.child_id as string) as Row | undefined;
-      if (!child) return [];
+      if (!child || child.kind === 'concept') return [];
       const id = child.id as string;
       const members = [...roomMembers(this.roomRows(id), graph).keys()];
-      const inner = doors.filter((x) => x.parent === id).map((x) => x.child);
+      const inner = doors.filter((x) => x.parent === id && !x.concept).map((x) => x.child);
       const counts = { sources: 0, threads: 0, notes: 0, rooms: inner.length };
       for (const k of members) counts[k.startsWith('source:') ? 'sources' : k.startsWith('thread:') ? 'threads' : 'notes'] += 1;
       const brief = getBrief.get(id) as Row | undefined;
@@ -1245,7 +1271,7 @@ export class Repo {
     const graph = this.roomGraph(notebookId);
     const doors = this.doors(notebookId);
     return (
-      this.db.sql.prepare('SELECT * FROM room WHERE notebook_id = ? ORDER BY created_at, rowid').all(notebookId) as Row[]
+      this.db.sql.prepare("SELECT * FROM room WHERE notebook_id = ? AND kind = 'room' ORDER BY created_at, rowid").all(notebookId) as Row[]
     ).map((r) => this.toRoom(r, graph, doors));
   }
 
@@ -1290,6 +1316,7 @@ export class Repo {
           fresh: b.basis === this.briefBasisOf(id, members, bases, doors),
         }
       : null;
+    const concepts = this.conceptsIn(id, graph, doors, inRoom);
     return {
       room: this.toRoom(r, graph, doors),
       clusters,
@@ -1300,7 +1327,220 @@ export class Repo {
       brief,
       webFinds: this.roomWebFinds(id),
       doors: this.roomDoors(id, graph, doors, bases),
+      concepts,
+      conceptLinks: this.conceptLinks(id),
+      guesses: this.conceptGuesses(id).filter(
+        (g) => inRoom.has(g.item) && concepts.some((c) => c.id === g.concept) && !concepts.some((c) => c.members.includes(g.item as Concept['members'][number])),
+      ),
     };
+  }
+
+  // Concepts (ADR 0036) -------------------------------------------------------
+
+  /** A room's concepts, in the order they were made, each with its things of those in the room. */
+  private conceptsIn(roomId: string, graph: RoomGraph, doors: KindDoor[], inRoom: Set<string>): Concept[] {
+    const rows = this.db.sql
+      .prepare(
+        `SELECT c.* FROM room_door d JOIN room c ON c.id = d.child_id
+         WHERE d.room_id = ? AND c.kind = 'concept' ORDER BY d.created_at, d.rowid`,
+      )
+      .all(roomId) as Row[];
+    return rows.map((c) => {
+      const id = c.id as string;
+      let quote: Concept['quote'] = null;
+      if (c.definition_at) {
+        const parsed = VaultTarget.safeParse(JSON.parse(c.definition_at as string));
+        if (parsed.success) quote = parsed.data;
+      }
+      return {
+        id,
+        title: c.title as string,
+        status: c.status === 'suggested' ? 'suggested' : 'kept',
+        definition: (c.definition as string | null) ?? null,
+        quote,
+        members: this.conceptMembers(this.roomRows(id), graph).filter((k) => inRoom.has(k)) as Concept['members'],
+        also: doors.filter((d) => d.child === id && d.parent !== roomId).map((d) => d.parent),
+        by: c.made_by === 'ai' ? 'ai' : 'you',
+      };
+    });
+  }
+
+  /** Make a concept in a room: by hand (kept), or suggested by the AI when the room is read. */
+  createConcept(
+    roomId: string,
+    c: { id: string; title: string; definition?: string | null; quote?: VaultTarget | null; items?: RoomItemRef[]; status: 'suggested' | 'kept'; by: 'you' | 'ai' },
+  ): Room {
+    return this.db.tx(() => {
+      const room = this.db.sql.prepare('SELECT notebook_id, kind FROM room WHERE id = ?').get(roomId) as Row | undefined;
+      if (!room) throw new NotFoundError('room');
+      if (room.kind === 'concept') throw new InvalidError('A concept cannot hold concepts: make it a room first.');
+      if (this.db.sql.prepare('SELECT 1 FROM room WHERE id = ?').get(c.id)) throw new ConflictError('room id already used');
+      const t = now();
+      this.db.sql
+        .prepare(
+          `INSERT INTO room (id, notebook_id, title, kind, status, definition, definition_at, made_by, created_at, updated_at)
+           VALUES (?, ?, ?, 'concept', ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(c.id, room.notebook_id as string, c.title.trim(), c.status, c.definition ?? null, c.quote ? JSON.stringify(c.quote) : null, c.by, t, t);
+      this.db.sql
+        .prepare('INSERT INTO room_door (room_id, child_id, added_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+        .run(roomId, c.id, 'you', t, t);
+      if (c.items?.length) this.addRoomItems(c.id, c.items);
+      this.logEvent('concept.created', c.id, { status: c.status, by: c.by, items: c.items?.length ?? 0 });
+      return this.getRoom(c.id) as Room;
+    });
+  }
+
+  /** Keep a suggested concept: it is the learner's now. */
+  keepConcept(id: string): Room | null {
+    const r = this.db.sql.prepare("UPDATE room SET status = 'kept', updated_at = ? WHERE id = ? AND kind = 'concept'").run(now(), id);
+    if (Number(r.changes) > 0) this.logEvent('concept.kept', id);
+    return this.getRoom(id);
+  }
+
+  /** Keep every concept the AI suggested in a room, and the links it suggested between them. */
+  keepAllConcepts(roomId: string): number {
+    return this.db.tx(() => {
+      const t = now();
+      const r = this.db.sql
+        .prepare(
+          `UPDATE room SET status = 'kept', updated_at = ? WHERE kind = 'concept' AND status = 'suggested'
+           AND id IN (SELECT child_id FROM room_door WHERE room_id = ?)`,
+        )
+        .run(t, roomId);
+      this.db.sql.prepare("UPDATE concept_link SET status = 'accepted', updated_at = ? WHERE room_id = ? AND status = 'suggested'").run(t, roomId);
+      this.logEvent('concept.kept_all', roomId, { n: Number(r.changes) });
+      return Number(r.changes);
+    });
+  }
+
+  /**
+   * A concept taken away: its things stay in the room. One the AI suggested and the learner did not keep is
+   * remembered as dismissed, so it is not suggested again.
+   */
+  dropConcept(id: string): boolean {
+    return this.db.tx(() => {
+      const c = this.db.sql.prepare("SELECT * FROM room WHERE id = ? AND kind = 'concept'").get(id) as Row | undefined;
+      if (!c) return false;
+      if (c.status === 'suggested') {
+        for (const d of this.db.sql.prepare('SELECT room_id FROM room_door WHERE child_id = ?').all(id) as Row[]) {
+          const roomId = d.room_id as string;
+          const was = this.conceptReading(roomId);
+          this.saveConceptReading(roomId, { dismissed: [...new Set([...was.dismissed, c.title as string])].slice(-60) });
+        }
+      }
+      this.db.sql.prepare('DELETE FROM room WHERE id = ?').run(id);
+      this.logEvent('concept.dropped', id, { suggested: c.status === 'suggested' });
+      return true;
+    });
+  }
+
+  /** A concept grown into a room of its own (ADR 0036): it stays where it was, as a room inside. */
+  conceptToRoom(id: string): Room | null {
+    const r = this.db.sql
+      .prepare("UPDATE room SET kind = 'room', status = 'kept', updated_at = ? WHERE id = ? AND kind = 'concept'")
+      .run(now(), id);
+    if (Number(r.changes) === 0) return null;
+    // Links to it were between concepts: it is not one now.
+    this.db.sql.prepare('DELETE FROM concept_link WHERE from_id = ? OR to_id = ?').run(id, id);
+    this.logEvent('concept.to_room', id);
+    return this.getRoom(id);
+  }
+
+  /** Before a new reading: what the AI suggested last time and was not kept goes (nothing the learner kept). */
+  clearSuggestedConcepts(roomId: string): void {
+    this.db.sql
+      .prepare(
+        `DELETE FROM room WHERE kind = 'concept' AND status = 'suggested'
+         AND id IN (SELECT child_id FROM room_door WHERE room_id = ?)
+         AND id NOT IN (SELECT child_id FROM room_door WHERE room_id <> ?)`,
+      )
+      .run(roomId, roomId);
+    this.db.sql.prepare("DELETE FROM concept_link WHERE room_id = ? AND status = 'suggested'").run(roomId);
+  }
+
+  conceptLinks(roomId: string): ConceptLink[] {
+    return (this.db.sql.prepare('SELECT * FROM concept_link WHERE room_id = ? ORDER BY created_at, rowid').all(roomId) as Row[]).map((r) => ({
+      id: r.id as string,
+      from: r.from_id as string,
+      to: r.to_id as string,
+      kind: r.kind as LinkKind,
+      why: (r.why as string | null) ?? null,
+      by: r.made_by === 'ai' ? 'ai' : 'you',
+      status: r.status === 'suggested' ? 'suggested' : 'accepted',
+    }));
+  }
+
+  conceptLink(id: string): (ConceptLink & { roomId: string }) | null {
+    const r = this.db.sql.prepare('SELECT room_id FROM concept_link WHERE id = ?').get(id) as Row | undefined;
+    if (!r) return null;
+    const link = this.conceptLinks(r.room_id as string).find((l) => l.id === id);
+    return link ? { ...link, roomId: r.room_id as string } : null;
+  }
+
+  createConceptLink(roomId: string, l: { id: string; from: string; to: string; kind: LinkKind; why?: string | null }, by: 'you' | 'ai', status: 'suggested' | 'accepted'): ConceptLink {
+    const inRoom = this.db.sql.prepare("SELECT 1 FROM room_door d JOIN room c ON c.id = d.child_id WHERE d.room_id = ? AND d.child_id = ? AND c.kind = 'concept'");
+    if (!inRoom.get(roomId, l.from) || !inRoom.get(roomId, l.to)) throw new InvalidError('both ends must be concepts of this room');
+    if (l.from === l.to) throw new InvalidError('a concept cannot be linked to itself');
+    const t = now();
+    this.db.sql
+      .prepare(
+        `INSERT INTO concept_link (id, room_id, from_id, to_id, kind, why, made_by, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (id) DO NOTHING`,
+      )
+      .run(l.id, roomId, l.from, l.to, l.kind, l.why ?? null, by, status, t, t);
+    this.logEvent('concept.linked', roomId, { kind: l.kind, by, status });
+    return this.conceptLink(l.id) as ConceptLink;
+  }
+
+  updateConceptLink(id: string, patch: { status?: 'accepted'; kind?: LinkKind }): ConceptLink | null {
+    const t = now();
+    if (patch.status) this.db.sql.prepare('UPDATE concept_link SET status = ?, updated_at = ? WHERE id = ?').run(patch.status, t, id);
+    if (patch.kind) this.db.sql.prepare("UPDATE concept_link SET kind = ?, made_by = 'you', updated_at = ? WHERE id = ?").run(patch.kind, t, id);
+    return this.conceptLink(id);
+  }
+
+  deleteConceptLink(id: string): boolean {
+    return Number(this.db.sql.prepare('DELETE FROM concept_link WHERE id = ?').run(id).changes) > 0;
+  }
+
+  conceptReading(roomId: string): { dismissed: string[]; guesses: Array<{ item: string; concept: string }> } {
+    const r = this.db.sql.prepare('SELECT * FROM concept_reading WHERE room_id = ?').get(roomId) as Row | undefined;
+    if (!r) return { dismissed: [], guesses: [] };
+    return { dismissed: JSON.parse(r.dismissed as string) as string[], guesses: JSON.parse(r.guesses as string) as Array<{ item: string; concept: string }> };
+  }
+
+  saveConceptReading(roomId: string, patch: { dismissed?: string[]; guesses?: Array<{ item: string; concept: string }> }): void {
+    const was = this.conceptReading(roomId);
+    this.db.sql
+      .prepare(
+        `INSERT INTO concept_reading (room_id, dismissed, guesses, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT (room_id) DO UPDATE SET dismissed = excluded.dismissed, guesses = excluded.guesses, updated_at = excluded.updated_at`,
+      )
+      .run(roomId, JSON.stringify(patch.dismissed ?? was.dismissed), JSON.stringify(patch.guesses ?? was.guesses), now());
+  }
+
+  private conceptGuesses(roomId: string): Array<{ item: RoomView['guesses'][number]['item']; concept: string }> {
+    return this.conceptReading(roomId).guesses as Array<{ item: RoomView['guesses'][number]['item']; concept: string }>;
+  }
+
+  /** The concepts of a room the learner kept, for its reading: names, definitions and things. */
+  keptConcepts(roomId: string): Array<{ id: string; title: string; definition: string; members: string[] }> {
+    const r = this.db.sql.prepare('SELECT notebook_id FROM room WHERE id = ?').get(roomId) as Row | undefined;
+    if (!r) return [];
+    const graph = this.roomGraph(r.notebook_id as string);
+    const rows = this.db.sql
+      .prepare(
+        `SELECT c.* FROM room_door d JOIN room c ON c.id = d.child_id
+         WHERE d.room_id = ? AND c.kind = 'concept' AND c.status = 'kept' ORDER BY d.created_at, d.rowid`,
+      )
+      .all(roomId) as Row[];
+    return rows.map((c) => ({
+      id: c.id as string,
+      title: c.title as string,
+      definition: (c.definition as string | null) ?? '',
+      members: this.conceptMembers(this.roomRows(c.id as string), graph),
+    }));
   }
 
   /** Which summaries a room's brief is written from, as one hash: a brief from other summaries is older. */
@@ -1591,7 +1831,29 @@ export class Repo {
     const items = this.db.sql.prepare('SELECT * FROM room_item WHERE room_id = ?').all(id) as Row[];
     const brief = this.db.sql.prepare('SELECT * FROM room_brief WHERE room_id = ?').get(id) as Row | undefined;
     const doors = this.db.sql.prepare('SELECT * FROM room_door WHERE room_id = ? OR child_id = ?').all(id, id) as Row[];
-    return { room: { ...room }, items: items.map((r) => ({ ...r })), brief: brief ? { ...brief } : null, doors: doors.map((r) => ({ ...r })) };
+    // Its concepts (ADR 0036), which go when it goes.
+    const concepts =
+      room.kind === 'concept'
+        ? []
+        : (
+            this.db.sql
+              .prepare(
+                `SELECT c.id FROM room_door d JOIN room c ON c.id = d.child_id WHERE d.room_id = ? AND c.kind = 'concept'
+                 AND c.id NOT IN (SELECT child_id FROM room_door WHERE room_id <> ?)`,
+              )
+              .all(id, id) as Row[]
+          ).flatMap((c) => this.roomSnapshot(c.id as string) ?? []);
+    const conceptLinks = this.db.sql.prepare('SELECT * FROM concept_link WHERE room_id = ?').all(id) as Row[];
+    const reading = this.db.sql.prepare('SELECT * FROM concept_reading WHERE room_id = ?').get(id) as Row | undefined;
+    return {
+      room: { ...room },
+      items: items.map((r) => ({ ...r })),
+      brief: brief ? { ...brief } : null,
+      doors: doors.map((r) => ({ ...r })),
+      concepts,
+      conceptLinks: conceptLinks.map((r) => ({ ...r })),
+      conceptReading: reading ? { ...reading } : null,
+    };
   }
 
   /** A room put back as it was in a snapshot: its title, what was in and out of it, where things were. */
@@ -1619,6 +1881,13 @@ export class Repo {
         this.db.sql.prepare('DELETE FROM room_door WHERE room_id = ? OR child_id = ?').run(snap.room.id as string, snap.room.id as string);
         for (const d of snap.doors) this.putDoorRow(d);
       }
+      // Its concepts, then the links between them (ADR 0036).
+      for (const c of snap.concepts ?? []) this.restoreRoom(c);
+      for (const l of snap.conceptLinks ?? []) {
+        const ends = this.db.sql.prepare('SELECT count(*) AS n FROM room WHERE id IN (?, ?)').get(l.from_id as string, l.to_id as string) as Row;
+        if (Number(ends.n) === 2) put('concept_link', l);
+      }
+      if (snap.conceptReading) put('concept_reading', snap.conceptReading);
     });
     this.logEvent('room.restored', snap.room.id as string);
     return this.getRoom(snap.room.id as string) as Room;
@@ -1636,6 +1905,14 @@ export class Repo {
       // Rooms in rooms (ADR 0032): the rooms in the first go in the second, and the second goes where the first was;
       // never so that a room would be inside itself.
       const doors = this.db.sql.prepare('SELECT * FROM room_door WHERE room_id = ? OR child_id = ?').all(fromId, fromId) as Row[];
+      // Concepts (ADR 0036): the first's concepts and their links go to the second; a concept merged into another
+      // brings its links, but none to that other one.
+      this.db.sql.prepare('UPDATE concept_link SET room_id = ? WHERE room_id = ?').run(intoId, fromId);
+      this.db.sql
+        .prepare('DELETE FROM concept_link WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)')
+        .run(fromId, intoId, intoId, fromId);
+      this.db.sql.prepare('UPDATE concept_link SET from_id = ? WHERE from_id = ?').run(intoId, fromId);
+      this.db.sql.prepare('UPDATE concept_link SET to_id = ? WHERE to_id = ?').run(intoId, fromId);
       this.db.sql.prepare('DELETE FROM room WHERE id = ?').run(fromId);
       const notebookId = from.notebookId;
       for (const d of doors) {
@@ -1665,9 +1942,18 @@ export class Repo {
 
   /** A room is taken down; what was in it stays where it is. */
   deleteRoom(id: string): boolean {
-    const r = this.db.sql.prepare('DELETE FROM room WHERE id = ?').run(id);
-    if (Number(r.changes) > 0) this.logEvent('room.deleted', id);
-    return Number(r.changes) > 0;
+    return this.db.tx(() => {
+      // Its concepts are part of it (ADR 0036): they go too, unless they are in another room as well.
+      this.db.sql
+        .prepare(
+          `DELETE FROM room WHERE kind = 'concept' AND id IN (SELECT child_id FROM room_door WHERE room_id = ?)
+           AND id NOT IN (SELECT child_id FROM room_door WHERE room_id <> ?)`,
+        )
+        .run(id, id);
+      const r = this.db.sql.prepare('DELETE FROM room WHERE id = ?').run(id);
+      if (Number(r.changes) > 0) this.logEvent('room.deleted', id);
+      return Number(r.changes) > 0;
+    });
   }
 
   /** The thread a side question is part of; anything else as it is. Null if it is not in this notebook. */
@@ -1683,9 +1969,26 @@ export class Repo {
   /** Put things in a room (a side question goes in as its thread), at a place on its map if given. */
   addRoomItems(roomId: string, items: Array<RoomItemRef & { x?: number; y?: number }>, by: 'you' | 'assistant' = 'you'): Room {
     return this.db.tx(() => {
-      const room = this.db.sql.prepare('SELECT notebook_id FROM room WHERE id = ?').get(roomId) as Row | undefined;
+      const room = this.db.sql.prepare('SELECT notebook_id, kind FROM room WHERE id = ?').get(roomId) as Row | undefined;
       if (!room) throw new NotFoundError('room');
       const t = now();
+      // A concept's things are things of its room (ADR 0036): put in a concept, a thing is put in the room too.
+      if (room.kind === 'concept') {
+        const graph = this.roomGraph(room.notebook_id as string);
+        const parents = (
+          this.db.sql
+            .prepare("SELECT d.room_id FROM room_door d JOIN room r ON r.id = d.room_id WHERE d.child_id = ? AND r.kind = 'room'")
+            .all(roomId) as Row[]
+        ).map((r) => r.room_id as string);
+        for (const parent of parents) {
+          const has = roomMembers(this.roomRows(parent), graph);
+          const missing = items.flatMap((item) => {
+            const at = this.roomItem(room.notebook_id as string, item);
+            return at && !has.has(roomKey(at.kind, at.id)) ? [at] : [];
+          });
+          if (missing.length) this.addRoomItems(parent, missing, by);
+        }
+      }
       for (const item of items) {
         const at = this.roomItem(room.notebook_id as string, item);
         if (!at) throw new InvalidError(`that ${item.kind} is not in this notebook`);
@@ -1719,6 +2022,13 @@ export class Repo {
       if (!at) throw new InvalidError(`that ${item.kind} is not in this notebook`);
       const t = now();
       this.db.sql.prepare('DELETE FROM room_item WHERE room_id = ? AND kind = ? AND item_id = ?').run(roomId, at.kind, at.id);
+      // Out of the room, out of its concepts (ADR 0036).
+      this.db.sql
+        .prepare(
+          `DELETE FROM room_item WHERE kind = ? AND item_id = ? AND room_id IN
+             (SELECT d.child_id FROM room_door d JOIN room c ON c.id = d.child_id WHERE d.room_id = ? AND c.kind = 'concept')`,
+        )
+        .run(at.kind, at.id, roomId);
       const still = roomMembers(this.roomRows(roomId), this.roomGraph(room.notebook_id as string)).has(roomKey(at.kind, at.id));
       if (still) {
         this.db.sql

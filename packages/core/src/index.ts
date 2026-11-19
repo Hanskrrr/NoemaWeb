@@ -19,3 +19,4 @@ export * from './rooms.ts';
 export * from './links.ts';
 export * from './gists.ts';
 export * from './path.ts';
+export * from './concepts.ts';

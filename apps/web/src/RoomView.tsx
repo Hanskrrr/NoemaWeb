@@ -49,10 +49,11 @@ import { addDropped, droppedItem, droppedRoom, isItemDrag, isOutsideDrag, isRoom
 import { EditableTitle } from './EditableTitle.tsx';
 import { Orb } from './LivingFrame.tsx';
 import { WebFinds } from './MessageView.tsx';
+import { RoomConcepts } from './RoomConcepts.tsx';
 import { RoomFolders } from './RoomFolders.tsx';
 import { type PathNode, RoomPath } from './RoomPath.tsx';
 import { roomMenu, useRooms } from './Rooms.tsx';
-import { type Door, day, GLYPH, holdsOf, kindName, marksOf, plural, type RoomCard, refOf } from './roomText.ts';
+import { CONCEPT_GLYPH, type Door, day, GLYPH, holdsOf, kindName, marksOf, plural, type RoomCard, refOf } from './roomText.ts';
 import { keys, storage } from './storage.ts';
 
 const WIDTH = 264;
@@ -74,9 +75,10 @@ const doorKey = (id: string) => `room:${id}`;
 const isDoorKey = (key: string) => key.startsWith('room:');
 
 /** The ways to see a room (ADR 0035), one question each; each room opens in the way it was last seen. */
-export type RoomMode = 'folders' | 'path' | 'board';
+export type RoomMode = 'folders' | 'concepts' | 'path' | 'board';
 const MODES: Array<{ mode: RoomMode; label: string; glyph: string; title: string }> = [
   { mode: 'folders', label: 'Folders', glyph: '☰', title: 'As a list, like Finder: rooms inside are folders, things are files' },
+  { mode: 'concepts', label: 'Concepts', glyph: '◎', title: 'As the key ideas it is about, each holding its things (ADR 0036)' },
   { mode: 'path', label: 'Path', glyph: '→', title: 'As an order to study in, from the links you kept' },
   { mode: 'board', label: 'Board', glyph: '▦', title: 'As a map you arrange: clusters, doors and the lines between them' },
 ];
@@ -169,6 +171,13 @@ export function RoomView({
   const [reviewing, setReviewing] = useState(false);
   const [merging, setMerging] = useState(false);
   const [mode, setMode] = useState<RoomMode>(() => modeOf(roomId));
+  // The concept chosen in Concepts (ADR 0036); a question started about one, waiting in the bar at the foot.
+  const [conceptOn, setConceptOn] = useState<string | null>(null);
+  const [askSeed, setAskSeed] = useState<{ text: string; n: number } | null>(null);
+  const show = (m: RoomMode) => {
+    setMode(m);
+    rememberMode(roomId, m);
+  };
   const swallow = useRef(false);
 
   const load = useCallback(async () => {
@@ -200,7 +209,7 @@ export function RoomView({
 
   // While the room is being read, it is drawn again as summaries come in.
   const reading = view?.reading ?? null;
-  const busy = reading?.phase === 'summaries' || reading?.phase === 'links';
+  const busy = reading?.phase === 'summaries' || reading?.phase === 'links' || reading?.phase === 'concepts' || reading?.phase === 'brief';
   useEffect(() => {
     if (!busy) return;
     const t = window.setTimeout(() => void load(), 700);
@@ -670,6 +679,10 @@ export function RoomView({
   // Suggested links wait in Review; only kept ones are drawn (ADR 0029).
   const suggested = view.itemLinks.filter((l) => l.status === 'suggested');
   const kept = view.itemLinks.filter((l) => l.status === 'accepted');
+  // With concepts kept (ADR 0036), Path goes concept by concept.
+  const keptConcepts = view.concepts.filter((c) => c.status === 'kept');
+  const underConcept = new Set(keptConcepts.flatMap((c) => c.members as string[]));
+  const looseOfConcepts = [...cards.values()].filter((c) => !underConcept.has(`${c.kind}:${c.id}`));
   const byId = new Map(threads.map((t) => [t.id, t]));
   const q = filter.trim().toLowerCase();
   const match = (title: string) => !q || title.toLowerCase().includes(q);
@@ -700,6 +713,7 @@ export function RoomView({
           <p className="room-meta" data-testid="room-meta">
             {plural(room.counts.sources, 'source')} · {plural(room.counts.threads, 'thread')} · {plural(room.counts.notes, 'note')}
             {room.counts.rooms > 0 && ` · ${plural(room.counts.rooms, 'room')} inside`}
+            {view.concepts.some((c) => c.status === 'kept') && ` · ${plural(view.concepts.filter((c) => c.status === 'kept').length, 'concept')}`}
           </p>
         </div>
         <div className="room-actions">
@@ -710,10 +724,7 @@ export function RoomView({
                 type="button"
                 className={mode === m.mode ? 'is-on' : ''}
                 aria-pressed={mode === m.mode}
-                onClick={() => {
-                  setMode(m.mode);
-                  rememberMode(roomId, m.mode);
-                }}
+                onClick={() => show(m.mode)}
                 title={m.title}
                 data-testid={`room-mode-${m.mode}`}
               >
@@ -921,6 +932,10 @@ export function RoomView({
         <RoomFolders
           view={view}
           through={through}
+          onConcept={(id) => {
+            setConceptOn(id);
+            show('concepts');
+          }}
           onOpen={onOpen}
           onOpenTarget={onOpenTarget}
           onDropHere={onDrop}
@@ -935,22 +950,73 @@ export function RoomView({
           }
         />
       )}
+      {mode === 'concepts' && (
+        <RoomConcepts
+          view={view}
+          selected={conceptOn}
+          onSelect={setConceptOn}
+          busy={busy}
+          onRead={() => void startReading()}
+          onOpen={onOpen}
+          onOpenTarget={onOpenTarget}
+          onAskAbout={(text) => setAskSeed((s) => ({ text, n: (s?.n ?? 0) + 1 }))}
+        />
+      )}
       {mode === 'path' && (
         <RoomPath
-          nodes={[...cards.values()].map(
-            (c): PathNode => ({
-              key: `${c.kind}:${c.id}`,
-              title: c.title,
-              glyph: GLYPH[c.kind],
-              kind: c.kind,
-              text: view.gists[`${c.kind}:${c.id}`]?.text ?? null,
-              open: (view.brief?.open ?? []).filter((o) => o.item?.kind === c.kind && o.item.id === c.id).map((o) => o.question),
-              sides: c.kind === 'note' ? 0 : c.marks.open,
-              onOpen: () => onOpen(c.kind, c.id),
-              onMenu: cardMenu(c),
-            }),
-          )}
-          links={kept.map((l) => ({ from: `${l.from.kind}:${l.from.id}`, to: `${l.to.kind}:${l.to.id}`, kind: l.kind }))}
+          nodes={
+            keptConcepts.length > 0
+              ? keptConcepts.map(
+                  (c): PathNode => ({
+                    key: c.id,
+                    title: c.title,
+                    glyph: CONCEPT_GLYPH,
+                    kind: 'concept',
+                    text: c.definition,
+                    open: (view.brief?.open ?? []).filter((o) => o.item && c.members.includes(`${o.item.kind}:${o.item.id}` as never)).map((o) => o.question),
+                    sides: 0,
+                    onOpen: () => {
+                      setConceptOn(c.id);
+                      show('concepts');
+                    },
+                    things: c.members.flatMap((k) => {
+                      const card = cards.get(k);
+                      return card ? [{ key: k, glyph: GLYPH[card.kind], kind: card.kind, title: card.title, onOpen: () => onOpen(card.kind, card.id) }] : [];
+                    }),
+                  }),
+                )
+              : [...cards.values()].map(
+                  (c): PathNode => ({
+                    key: `${c.kind}:${c.id}`,
+                    title: c.title,
+                    glyph: GLYPH[c.kind],
+                    kind: c.kind,
+                    text: view.gists[`${c.kind}:${c.id}`]?.text ?? null,
+                    open: (view.brief?.open ?? []).filter((o) => o.item?.kind === c.kind && o.item.id === c.id).map((o) => o.question),
+                    sides: c.kind === 'note' ? 0 : c.marks.open,
+                    onOpen: () => onOpen(c.kind, c.id),
+                    onMenu: cardMenu(c),
+                  }),
+                )
+          }
+          links={
+            keptConcepts.length > 0
+              ? view.conceptLinks.filter((l) => l.status === 'accepted').map((l) => ({ from: l.from, to: l.to, kind: l.kind }))
+              : kept.map((l) => ({ from: `${l.from.kind}:${l.from.id}`, to: `${l.to.kind}:${l.to.id}`, kind: l.kind }))
+          }
+          footer={
+            keptConcepts.length > 0 && looseOfConcepts.length > 0 ? (
+              <p className="path-loose" data-testid="path-unplaced">
+                <span className="hint">Under no concept yet:</span>
+                {looseOfConcepts.map((c) => (
+                  <button key={`${c.kind}:${c.id}`} type="button" className="path-chip" onClick={() => onOpen(c.kind, c.id)} onContextMenu={cardMenu(c)}>
+                    <span aria-hidden>{GLYPH[c.kind]} </span>
+                    {c.title || 'Untitled'}
+                  </button>
+                ))}
+              </p>
+            ) : null
+          }
           empty={
             <div className="room-empty" data-testid="room-empty">
               <p className="empty-title">Nothing in this room yet</p>
@@ -1192,6 +1258,7 @@ export function RoomView({
           onOpen('note', noteId);
         }}
         onSource={onAddSource}
+        seed={askSeed}
       />
     </section>
   );
@@ -1235,12 +1302,23 @@ function RoomBrief({
       ? `Summarizing ${Math.min(reading.done + 1, reading.total)} of ${reading.total}…`
       : reading.phase === 'links'
         ? 'Looking for links between them…'
-        : reading.phase === 'brief'
+        : reading.phase === 'concepts'
+          ? 'Finding the concepts: the key ideas it is about…'
+          : reading.phase === 'brief'
           ? 'Writing the brief: what the room adds up to…'
           : reading.phase === 'failed'
             ? reading.error
-            : `Read. ${reading.total ? `${reading.total === 1 ? '1 summary' : `${reading.total} summaries`} written` : 'Nothing new to summarize'}; ${plural(reading.suggested, 'link')} suggested${reading.suggested ? ': in Review, to keep or dismiss' : ''}.${reading.error ? ` ${reading.error}` : ''}`;
-  const progress = reading && busy ? (reading.phase === 'summaries' && reading.total > 0 ? reading.done / reading.total : reading.phase === 'links' ? 0.8 : 0.92) : null;
+            : `Read. ${reading.total ? `${reading.total === 1 ? '1 summary' : `${reading.total} summaries`} written` : 'Nothing new to summarize'}; ${plural(reading.suggested, 'link')} suggested${reading.suggested ? ': in Review, to keep or dismiss' : ''}.${reading.concepts ? ` ${plural(reading.concepts, 'concept')} suggested: in Concepts.` : ''}${reading.error ? ` ${reading.error}` : ''}`;
+  const progress =
+    reading && busy
+      ? reading.phase === 'summaries' && reading.total > 0
+        ? (reading.done / reading.total) * 0.7
+        : reading.phase === 'links'
+          ? 0.75
+          : reading.phase === 'concepts'
+            ? 0.85
+            : 0.94
+      : null;
   const readButton = (
     <button type="button" className={`ai-button${unread > 0 || !brief ? ' is-strong' : ''}${busy ? ' is-busy' : ''}`} onClick={onRead} disabled={busy} data-testid="room-read">
       <Orb size="small" />
@@ -1268,7 +1346,7 @@ function RoomBrief({
             The AI writes each thing here a short summary, its points linked to the words they come from; then it
             suggests links between them, and writes the room a brief: what it adds up to, and what is still open.
             {doors > 0 && ' The rooms in it go in by their own briefs: read them first for a fuller one.'} It uses your
-            model: about {unread + 2} calls.
+            model: about {unread + 2 + (things >= 3 ? 1 : 0)} calls.
           </p>
         )}
         {status && (
@@ -1363,8 +1441,11 @@ function CreateHere({
   onAsk,
   onNote,
   onSource,
+  seed,
 }: {
   title: string;
+  /** A question started elsewhere in the room (Ask about this concept, ADR 0036), to finish and send. */
+  seed?: { text: string; n: number } | null;
   /** Putting a room in this one (ADR 0032): whether its panel is open, how to open it, and the panel. */
   puttingRoom: boolean;
   onRoom: () => void;
@@ -1379,6 +1460,18 @@ function CreateHere({
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each new seed, once
+  useEffect(() => {
+    if (!seed) return;
+    setText(seed.text);
+    const el = box.current;
+    if (el) {
+      el.focus();
+      el.setSelectionRange(seed.text.length, seed.text.length);
+      el.scrollIntoView({ block: 'nearest' });
+    }
+  }, [seed?.n]);
   const run = async (what: () => Promise<void>) => {
     setBusy(true);
     setProblem(null);
@@ -1431,6 +1524,7 @@ function CreateHere({
           </button>
         )}
         <textarea
+          ref={box}
           value={text}
           rows={1}
           onChange={(e) => setText(e.target.value)}

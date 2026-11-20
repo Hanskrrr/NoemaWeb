@@ -531,6 +531,10 @@ function NotebookView({
   // the selection it was opened from is gone.
   const [conceptPick, setConceptPick] = useState<{ target: VaultTarget; top: number; left: number } | null>(null);
   const [conceptsChanged, setConceptsChanged] = useState(0);
+  // Going somewhere else closes the list: the words it was opened for are no longer in view.
+  const placeNow = route ? toHash(route) : '';
+  // biome-ignore lint/correctness/useExhaustiveDependencies: closed on each new place
+  useEffect(() => setConceptPick(null), [placeNow]);
   const conceptsApi = useMemo<ConceptsApi>(
     () => ({ notebookId: notebook.id, changed: conceptsChanged, openTarget, say, pick: (target, at) => setConceptPick({ target, ...at }) }),
     [notebook.id, conceptsChanged, openTarget, say],

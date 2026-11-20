@@ -432,8 +432,21 @@ test('a thing that changes is read again, only what changed; its concepts show f
   await page.getByTestId('concept-picker-item').filter({ hasText: 'lantern moss' }).click();
   await expect(page.getByTestId('room-notice')).toHaveText('Put under lantern moss');
   await expect(here).toHaveText([/lantern moss · 2 places/]);
+  // The list closes when you go somewhere else.
+  await page.getByTestId('source-text').evaluate((root) => {
+    const r = document.createRange();
+    r.selectNodeContents(root.querySelector('p') as Element);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(r);
+  });
+  await page.getByTestId('under-concept').click();
+  await expect(page.getByTestId('concept-picker')).toBeVisible();
+  await page.evaluate((id) => {
+    window.location.hash = `#/room/${id}`;
+  }, big);
+  await expect(page.getByTestId('room')).toBeVisible();
+  await expect(page.getByTestId('concept-picker')).toHaveCount(0);
 
-  await page.goto(`/#/room/${big}`);
   await nodes.first().click();
   const yours = page.getByTestId('concept-drawer').getByTestId('concept-place').filter({ hasText: 'you put it here' });
   await expect(yours).toContainText('“It grows on old stones.”');

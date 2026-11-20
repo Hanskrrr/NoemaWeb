@@ -132,8 +132,18 @@ export function RoomView({
   const [confirming, setConfirming] = useState(false);
   const [dropOver, setDropOver] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
-  // Ticks in the picker show at once; the room catches up.
+  // Ticks in the picker show at once; the room catches up. A tick stays until the room says the same (a slower
+  // room no longer makes it flick back), or for a few seconds if the change did not go through.
   const [pending, setPending] = useState<Map<string, boolean>>(new Map());
+  const roomMembers = view?.room.members;
+  useEffect(() => {
+    const inRoom = new Set<string>(roomMembers ?? []);
+    setPending((m) => {
+      if (m.size === 0) return m;
+      const next = new Map([...m].filter(([k, v]) => inRoom.has(k) !== v));
+      return next.size === m.size ? m : next;
+    });
+  }, [roomMembers]);
   // Links between cards (ADR 0027): where each card is, the link being edited, a link being drawn.
   const [cardBoxes, setCardBoxes] = useState<Map<string, Box>>(new Map());
   const [editing, setEditing] = useState<string | null>(null);
@@ -845,11 +855,16 @@ export function RoomView({
                               ? rooms.remove(roomId, { kind: x.kind, id: x.id })
                               : rooms.add(roomId, [{ kind: x.kind, id: x.id }]);
                             void done.finally(() =>
-                              setPending((m) => {
-                                const next = new Map(m);
-                                next.delete(key);
-                                return next;
-                              }),
+                              window.setTimeout(
+                                () =>
+                                  setPending((m) => {
+                                    if (!m.has(key)) return m;
+                                    const next = new Map(m);
+                                    next.delete(key);
+                                    return next;
+                                  }),
+                                4000,
+                              ),
                             );
                           }}
                         />

@@ -14,7 +14,9 @@ import { EditableTitle } from './EditableTitle.tsx';
 import { SaveNoteToFolder } from './Files.tsx';
 import { arrive, clearFound } from './found.ts';
 import { Outline, type OutlineItem, shortLabel } from './Outline.tsx';
+import { ConceptsHere, UnderConcept } from './conceptsHere.tsx';
 import { CiteContext, Markdown } from './markdown/Markdown.tsx';
+import { selectionToSource } from './markdown/selection.ts';
 import { RefPane } from './RefPane.tsx';
 
 const AUTHOR: Record<Note['author'], string> = {
@@ -220,6 +222,30 @@ export function NoteView({
     const scope = refIn ? document.querySelector(`[data-block-id="${refIn}"]`) : document;
     scope?.querySelector(`[data-testid=cite][data-label="${openRef}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [openRef, refIn]);
+
+  // Words selected in a block, to put under a concept (ADR 0037).
+  const [chosen, setChosen] = useState<{ blockId: string; quote: string; rect: DOMRect } | null>(null);
+  useEffect(() => {
+    const onChange = () => {
+      const sel = window.getSelection();
+      if (!note || !sel || sel.isCollapsed || sel.rangeCount === 0) {
+        setChosen(null);
+        return;
+      }
+      const node = sel.anchorNode instanceof Element ? sel.anchorNode : sel.anchorNode?.parentElement;
+      const el = node?.closest<HTMLElement>('[data-block-id]');
+      const block = el ? note.blocks.find((b) => b.id === el.dataset.blockId) : undefined;
+      if (!el || !block || el.classList.contains('editing')) {
+        setChosen(null);
+        return;
+      }
+      const range = selectionToSource(el, block.content);
+      const quote = range ? block.content.slice(range.start, range.end) : sel.toString().trim();
+      setChosen(quote ? { blockId: block.id, quote, rect: sel.getRangeAt(0).getBoundingClientRect() } : null);
+    };
+    document.addEventListener('selectionchange', onChange);
+    return () => document.removeEventListener('selectionchange', onChange);
+  }, [note]);
 
   if (error && !note) return <main className="thread note-page">{error}</main>;
   if (!note) return <main className="thread note-page" aria-busy />;
@@ -438,6 +464,15 @@ export function NoteView({
             <span className="legend-user">you</span>
           </p>
         </header>
+        <ConceptsHere kind="note" id={note.id} version={note.updatedAt} />
+        {chosen && (
+          <div className="selection-actions" style={{ top: Math.max(8, chosen.rect.top - 44), left: chosen.rect.left + chosen.rect.width / 2 }}>
+            <UnderConcept
+              at={{ top: chosen.rect.bottom + 8, left: chosen.rect.left + chosen.rect.width / 2 }}
+              target={() => ({ kind: 'note', noteId: note.id, blockId: chosen.blockId, title: note.title, quote: chosen.quote })}
+            />
+          </div>
+        )}
 
         {saving && (
           <SaveNoteToFolder notebookId={notebookId} note={note} onClose={() => setSaving(false)} onOpenFile={onOpenFile} />

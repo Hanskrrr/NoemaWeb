@@ -1292,6 +1292,8 @@ function RoomBrief({
   const { brief, reading, unread } = view;
   const [finding, setFinding] = useState<string | null>(null);
   const things = view.clusters.reduce((n, c) => n + c.cards.length, 0);
+  // Reading for concepts (ADR 0037): one call a piece not read yet, then one for new names and one for links.
+  const pieces = view.conceptsToRead.pieces;
   const doors = view.doors.length;
   const held = [...(things ? [plural(things, 'thing')] : []), ...(doors ? [plural(doors, 'room')] : [])].join(' · ');
   const titleOfItem = (item: { kind: RoomKind | 'room'; id: string }) =>
@@ -1346,7 +1348,7 @@ function RoomBrief({
             The AI writes each thing here a short summary, its points linked to the words they come from; then it
             suggests links between them, and writes the room a brief: what it adds up to, and what is still open.
             {doors > 0 && ' The rooms in it go in by their own briefs: read them first for a fuller one.'} It uses your
-            model: about {unread + 2 + (things >= 3 ? 1 : 0)} calls.
+            model: about {unread + 2 + (pieces > 0 ? pieces + 2 : 0)} calls{pieces > 0 && `, ${pieces} of them reading its things for concepts`}.
           </p>
         )}
         {status && (

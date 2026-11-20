@@ -1118,23 +1118,45 @@ export const RoomReading = z.object({
 });
 export type RoomReading = z.infer<typeof RoomReading>;
 
+/** A place where a material discusses a concept (ADR 0037): what it does with it, what it says, the words and where they are. */
+export const ConceptPlace = z.object({
+  id: Id,
+  role: z.enum(['defines', 'explains', 'uses', 'example', 'asks']),
+  says: z.string().nullable(),
+  quote: z.string(),
+  /** Null when its words are no longer found in the material. */
+  target: VaultTarget.nullable(),
+  by: z.enum(['you', 'ai']),
+});
+export type ConceptPlace = z.infer<typeof ConceptPlace>;
+
 /**
- * A concept of a room (ADR 0036): a key idea its things are about, a small room inside it. Suggested by the AI
- * when the room is read, until the learner keeps it.
+ * A concept (ADRs 0036, 0037): a key idea of the notebook, a small room holding the materials that discuss it.
+ * Read from the materials, suggested until the learner keeps it; in every room whose materials mention it.
  */
 export const Concept = z.object({
   id: Id,
   title: z.string(),
   status: z.enum(['suggested', 'kept']),
-  /** One plain sentence. */
+  /** One plain sentence: what its best mention says of it. */
   definition: z.string().nullable(),
-  /** The words of the learner's own thing that define it, where they are. */
+  /** The words that define it, where they are. */
   quote: VaultTarget.nullable(),
-  /** Its things, as "kind:id", of those in the room. */
+  /** Its things in this room, as "kind:id". */
   members: z.array(RoomKeySchema),
-  /** The other rooms it is in. */
+  /** The other rooms its things are in. */
   also: z.array(Id).default([]),
   by: z.enum(['you', 'ai']),
+  /** Its other names. */
+  names: z.array(z.string()).default([]),
+  /** Across the notebook: how many materials discuss it, in how many places, and which, with their places. */
+  materials: z.number().int().default(0),
+  places: z.number().int().default(0),
+  sources: z
+    .array(z.object({ item: RoomKeySchema, title: z.string(), inRoom: z.boolean(), places: z.array(ConceptPlace) }))
+    .default([]),
+  /** Kept, but no material discusses it any more. */
+  lost: z.boolean().default(false),
 });
 export type Concept = z.infer<typeof Concept>;
 export const ConceptLink = z.object({
@@ -1156,6 +1178,18 @@ export const UpdateConceptLinkRequest = z
   .object({ status: z.literal('accepted').optional(), kind: LinkKindSchema.optional() })
   .refine((b) => Object.keys(b).length > 0, 'nothing to change');
 export const CreateConceptLinkRequest = z.object({ id: Id, from: Id, to: Id, kind: LinkKindSchema });
+/** A material's things moved from one concept to another (its places go with it), or split off into a new one. */
+export const MoveInConceptsRequest = z.object({ item: RoomItemRef, to: Id });
+export const SplitConceptRequest = z.object({ id: Id, title: z.string().trim().min(1).max(200), items: z.array(RoomItemRef).min(1).max(500) });
+/** A concept grown into a room, inside the room it was opened from. */
+export const ConceptToRoomRequest = z.object({ inside: Id.nullable().optional() });
+/** A passage put under a concept by hand: the material and where the words are. */
+export const AddConceptPlaceRequest = z.object({ target: VaultTarget });
+/** The concepts a material discusses, with its places for each (ADR 0037). */
+export const MaterialConcepts = z.object({
+  concepts: z.array(z.object({ id: Id, title: z.string(), status: z.enum(['suggested', 'kept']), places: z.array(ConceptPlace) })),
+});
+export type MaterialConcepts = z.infer<typeof MaterialConcepts>;
 
 export const RoomView = z.object({
   room: Room,
@@ -1192,6 +1226,8 @@ export const RoomView = z.object({
   concepts: z.array(Concept).default([]),
   conceptLinks: z.array(ConceptLink).default([]),
   guesses: z.array(z.object({ item: RoomKeySchema, concept: Id })).default([]),
+  /** What the concept reading has not read yet (ADR 0037): materials changed or never read, and their pieces. */
+  conceptsToRead: z.object({ materials: z.number().int(), changed: z.number().int(), pieces: z.number().int() }).default({ materials: 0, changed: 0, pieces: 0 }),
   links: z.array(
     z.object({
       from: RoomKeySchema,

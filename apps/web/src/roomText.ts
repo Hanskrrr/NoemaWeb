@@ -9,6 +9,8 @@ export const GLYPH: Record<RoomKind, string> = { source: '❡', thread: '◦', n
 export const ROOM_GLYPH = '⌂';
 export const CONCEPT_GLYPH = '◎';
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+/** Words quoted from a material's Markdown, as read: without the marks of bold, italics and code. */
+export const asRead = (quote: string) => quote.replace(/(\*\*|__|`)(?=\S)([^]*?\S)\1/g, '$2').replace(/(?<![\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/g, '$1');
 export const day = (at: string) => (at ? new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '');
 
 /** What a card says was done there. */

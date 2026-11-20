@@ -48,6 +48,13 @@ export function RoomPath({
     number.set(s.key, String(i + 1));
     for (const b of s.beside) number.set(b, `${i + 1}′`);
   });
+  // A thing under several concepts (ADR 0037): the other steps it is in.
+  const stepsOf = new Map<string, string[]>();
+  for (const n of nodes) {
+    const at = number.get(n.key);
+    if (!at) continue;
+    for (const t of n.things ?? []) stepsOf.set(t.key, [...(stepsOf.get(t.key) ?? []), at]);
+  }
   /** How it comes after each thing before it: "builds on 1", "explains 2". */
   const afterWords = (key: string, after: string[]) =>
     after.flatMap((a) => {
@@ -82,12 +89,16 @@ export function RoomPath({
           {n.text && <p className="path-text">{n.text}</p>}
           {n.things && n.things.length > 0 && (
             <p className="path-things">
-              {n.things.map((t) => (
-                <button key={t.key} type="button" className={`path-thing kind-${t.kind}`} onClick={t.onOpen} data-testid="path-thing">
-                  <span aria-hidden>{t.glyph} </span>
-                  {t.title || 'Untitled'}
-                </button>
-              ))}
+              {n.things.map((t) => {
+                const elsewhere = (stepsOf.get(t.key) ?? []).filter((x) => x !== number.get(key));
+                return (
+                  <button key={t.key} type="button" className={`path-thing kind-${t.kind}`} onClick={t.onOpen} data-testid="path-thing">
+                    <span aria-hidden>{t.glyph} </span>
+                    {t.title || 'Untitled'}
+                    {elsewhere.length > 0 && <span className="path-thing-also"> · also {elsewhere.join(', ')}</span>}
+                  </button>
+                );
+              })}
             </p>
           )}
           {(n.open.length > 0 || n.sides > 0) && (

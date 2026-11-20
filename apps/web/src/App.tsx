@@ -28,13 +28,14 @@ import { ContextDialog } from './ContextView.tsx';
 import { ExportDialog } from './ExportImport.tsx';
 import { LivingFrame, Orb } from './LivingFrame.tsx';
 import { usePresence } from './presence.ts';
-import { expectFound } from './found.ts';
+import { expectFound, quoteWords } from './found.ts';
 import { MapView } from './MapView.tsx';
 import { ConnectScreen, ModelDialog } from './ModelSettings.tsx';
 import { NoteView } from './NoteView.tsx';
 import { sourceFamily } from './reading.ts';
 import { RoomView } from './RoomView.tsx';
 import type { DragItem } from './drag.ts';
+import { type ConceptsApi, ConceptsContext, ConceptPicker } from './conceptsHere.tsx';
 import { type ItemsApi, ItemsContext } from './itemMenu.ts';
 import { RoomTrail, type RoomsApi, RoomsContext, unitOf } from './Rooms.tsx';
 import { parseHash, type Route, toHash, useRoute } from './route.ts';
@@ -481,7 +482,7 @@ function NotebookView({
     (t: VaultTarget) => {
       setJump((n) => n + 1);
       // Arriving there, the words it quoted are marked.
-      const words = t.quote ? [t.quote.length > 48 ? t.quote.slice(0, t.quote.lastIndexOf(' ', 48) > 20 ? t.quote.lastIndexOf(' ', 48) : 48) : t.quote] : [];
+      const words = t.quote ? quoteWords(t.quote) : [];
       if (t.kind === 'thread' && t.messageId) expectFound(t.messageId, words);
       else if (t.kind === 'source') expectFound(`${t.versionId}:${t.at}`, words);
       else if (t.kind === 'note' && t.blockId) expectFound(t.blockId, words);
@@ -526,6 +527,15 @@ function NotebookView({
   const beside = family && sources.some((x) => x.id === family.sourceId) ? family : null;
 
   // Right-click on a thread, source or note: to the Trash, or deleted for good (ADR 0034).
+  // Concepts from a material's side (ADR 0037): its concepts, and words put under one; the list stays open after
+  // the selection it was opened from is gone.
+  const [conceptPick, setConceptPick] = useState<{ target: VaultTarget; top: number; left: number } | null>(null);
+  const [conceptsChanged, setConceptsChanged] = useState(0);
+  const conceptsApi = useMemo<ConceptsApi>(
+    () => ({ notebookId: notebook.id, changed: conceptsChanged, openTarget, say, pick: (target, at) => setConceptPick({ target, ...at }) }),
+    [notebook.id, conceptsChanged, openTarget, say],
+  );
+
   const itemsApi = useMemo<ItemsApi>(() => {
     const all = threads ?? [];
     /** The side questions still its own, at any depth: they go with it. */
@@ -896,6 +906,7 @@ function NotebookView({
   return (
     <RoomsContext.Provider value={roomsApi}>
     <ItemsContext.Provider value={itemsApi}>
+    <ConceptsContext.Provider value={conceptsApi}>
     <div className="shell">
       <LivingFrame />
       <ContextMenuHost />
@@ -1115,7 +1126,23 @@ function NotebookView({
           <Orb size="normal" />
         </button>
       )}
+      {conceptPick && (
+        <ConceptPicker
+          target={conceptPick.target}
+          top={conceptPick.top}
+          left={conceptPick.left}
+          onClose={() => setConceptPick(null)}
+          onDone={(title) => {
+            setConceptPick(null);
+            window.getSelection()?.removeAllRanges();
+            say(`Put under ${title}`);
+            setConceptsChanged((n) => n + 1);
+            void refreshRooms();
+          }}
+        />
+      )}
     </div>
+    </ConceptsContext.Provider>
     </ItemsContext.Provider>
     </RoomsContext.Provider>
   );

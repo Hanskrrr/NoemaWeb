@@ -12,6 +12,19 @@ export function expectFound(target: string, terms: string[]): void {
   pending = terms.length > 0 ? { target, terms } : null;
 }
 
+/**
+ * The words of a quote to mark where it is: Markdown's marks of bold, italics and code split the text as shown, so
+ * each run between them is marked on its own, the first 48 characters of it (ADR 0037).
+ */
+export function quoteWords(quote: string): string[] {
+  return quote
+    .split(/\*\*|__|`|(?<![\w*])\*(?=\S)|(?<=\S)\*(?![\w*])|\n+/)
+    .map((p) => p.trim())
+    .filter((p) => p.length >= 3)
+    .map((p) => (p.length > 48 ? p.slice(0, p.lastIndexOf(' ', 48) > 20 ? p.lastIndexOf(' ', 48) : 48) : p))
+    .slice(0, 4);
+}
+
 export function clearFound(): void {
   highlight('noema-found', null);
 }

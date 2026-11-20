@@ -221,37 +221,58 @@ export class FakeProvider implements ModelProvider {
       return;
     }
     if (req.purpose === 'concepts') {
-      // Predictable concepts (ADR 0036): three, named "Fake concept 1, 2, 3" (skipping names kept or dismissed);
-      // the first holds the first half of the things, the second the rest, the third the first and the last; with
-      // four things or more, the last is about none. The second builds on the first, the third contrasts with the
-      // second. Things in no concept are put in the first kept one, as a guess.
+      // The concept-reading skill, made predictable (ADR 0037): each **bold** phrase of the piece is a concept,
+      // mentioned in its sentence. A sentence that starts with it and says "is", "are" or "means" defines it; a
+      // question asks about it; otherwise it uses it. "(GC)" right after it is another name. A bold phrase whose
+      // name is a known concept's other name ("GC") is given the known name. Its own answers' words ("offline fake
+      // model") are not a subject of the learner's, so they are not read as one.
       if (question.includes('[[fail-concepts]]')) throw new ProviderError('unavailable', 'fake failure: unavailable');
-      const n = [...question.matchAll(/^(\d+)\. /gm)].length;
-      const kept = [...question.matchAll(/^\[(\d+)\] “(.*?)”/gm)].map((m) => m[2] as string);
-      const dismissed = [...(/Not these, the learner dismissed them: (.*)\./.exec(question)?.[1] ?? '').matchAll(/“(.*?)”/g)].map((m) => m[1] as string);
-      const most = Number(/Give at most (\d+) new concepts/.exec(question)?.[1] ?? 12);
-      const m = n >= 4 ? n - 1 : n;
-      const half = Math.ceil(m / 2);
-      const range = (a: number, b: number) => Array.from({ length: Math.max(0, b - a + 1) }, (_, i) => a + i);
-      const groups = [range(1, half), range(half + 1, m), [...new Set([1, m])]].filter((g) => g.length > 0);
-      const names: string[] = [];
-      for (let i = 1; names.length < Math.min(groups.length, most) && i < 20; i++) {
-        const name = `Fake concept ${i}`;
-        if (!kept.includes(name) && !dismissed.includes(name)) names.push(name);
+      const piece = /<<<\n([\s\S]*)\n>>>/.exec(question)?.[1] ?? '';
+      const known = [...(/Known concepts: (.*)\.$/m.exec(question)?.[1] ?? '').matchAll(/“(.*?)”/g)].map((m) => m[1] as string);
+      const mentions = [];
+      for (const sentence of piece.split(/(?<=[.?!])\s+|\n+/)) {
+        for (const m of sentence.matchAll(/\*\*([^*]+)\*\*(?:\s*\(([^)]+)\))?/g)) {
+          const phrase = (m[1] as string).trim();
+          if (phrase === 'offline fake model') continue;
+          const also = m[2] ? [m[2].trim()] : [];
+          const initials = (name: string) => name.split(/\s+/).map((w) => w[0] ?? '').join('').toLowerCase();
+          const name = known.find((k) => k.toLowerCase() === phrase.toLowerCase() || initials(k) === phrase.toLowerCase()) ?? phrase.toLowerCase();
+          const role = sentence.trim().endsWith('?')
+            ? 'asks'
+            : sentence.trim().startsWith(m[0]) && /\b(is|are|means)\b/.test(sentence)
+              ? 'defines'
+              : 'uses';
+          mentions.push({ name, also: name === phrase.toLowerCase() ? also : [phrase, ...also], role, quote: sentence.trim(), says: `Fake: about ${name}.` });
+        }
       }
-      const concepts = names.map((name, i) => ({
-        name,
-        definition: `The ${['first', 'second', 'third'][i]} idea of the room.`,
-        defined_by: `${(groups[i] as number[])[0]}a`,
-        things: groups[i],
-      }));
-      const K = kept.length;
-      const links = [];
-      if (concepts.length >= 2) links.push({ from: K + 2, to: K + 1, kind: 'builds-on', why: 'Fake: the second needs the first.' });
-      if (concepts.length >= 3) links.push({ from: K + 3, to: K + 2, kind: 'contrasts-with', why: 'Fake: another way.' });
-      const place = K > 0 && n >= 4 ? [{ thing: n, concept: 1 }] : [];
       await sleep(this.delayMs, req.signal);
-      yield { type: 'text', text: JSON.stringify({ concepts, links, place }) };
+      yield { type: 'text', text: JSON.stringify({ mentions }) };
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
+    if (req.purpose === 'concept-join') {
+      // The same when one name is the other's initials ("GC", "gradient checkpointing"); otherwise new.
+      const known = [...(/Known concepts:\n([\s\S]*?)\n\n/.exec(question)?.[1] ?? '').matchAll(/^- (.*)$/gm)].map((m) => m[1] as string);
+      const fresh = [...(/New names:\n([\s\S]*)$/.exec(question)?.[1] ?? '').matchAll(/^- (.*)$/gm)].map((m) => m[1] as string);
+      const initials = (name: string) => name.split(/\s+/).map((w) => w[0] ?? '').join('').toLowerCase();
+      const same: Record<string, string | null> = {};
+      for (const f of fresh) {
+        const k = known.find((x) => initials(x) === f.toLowerCase() || initials(f) === x.toLowerCase()) ?? fresh.find((x) => x !== f && x.includes(' ') && initials(x) === f.toLowerCase());
+        same[f] = k ?? null;
+      }
+      await sleep(this.delayMs, req.signal);
+      yield { type: 'text', text: JSON.stringify({ same }) };
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
+    if (req.purpose === 'concept-links') {
+      // The second builds on the first, the third contrasts with the second.
+      const n = [...question.matchAll(/^(\d+)\. /gm)].length;
+      const links = [];
+      if (n >= 2) links.push({ from: 2, to: 1, kind: 'builds-on', why: 'Fake: the second needs the first.' });
+      if (n >= 3) links.push({ from: 3, to: 2, kind: 'contrasts-with', why: 'Fake: another way.' });
+      await sleep(this.delayMs, req.signal);
+      yield { type: 'text', text: JSON.stringify({ links }) };
       yield { type: 'finish', reason: 'stop' };
       return;
     }

@@ -45,6 +45,8 @@ interface Row {
   door?: Door;
   /** A concept kept in the room (ADR 0036): a folder of its things. */
   concept?: Concept;
+  /** Listed under a concept: the other concepts it is under too (ADR 0037). */
+  under?: Concept[];
   gist?: Gist;
   /** The view of the room it is listed in. */
   of: RoomViewData;
@@ -180,7 +182,12 @@ export function RoomFolders({
       out.push(r);
       if (r.concept && opened.has(r.id)) {
         const c = r.concept;
-        const inside = c.members.flatMap((k) => byKey.get(k) ?? []).map((x) => fileRow(v, x, depth + 1, chain, r.id, c.id));
+        const inside = c.members
+          .flatMap((k) => byKey.get(k) ?? [])
+          .map((x) => ({
+            ...fileRow(v, x, depth + 1, chain, r.id, c.id),
+            under: concepts.filter((o) => o.id !== c.id && o.members.includes(`${x.kind}:${x.id}` as never)),
+          }));
         out.push(...sortRows(inside, sort));
       }
       if (r.door && opened.has(r.id)) {
@@ -480,6 +487,28 @@ export function RoomFolders({
               </span>
               <span className="folders-kind">{r.kind}</span>
               <span className="folders-also" data-testid="folder-also">
+                {r.under && r.under.length > 0 && (
+                  <span data-testid="folder-also-under">
+                    <span className="hint">also under </span>
+                    {r.under.map((x, i) => (
+                      <span key={x.id}>
+                        {i > 0 && ', '}
+                        <button
+                          type="button"
+                          className="link"
+                          tabIndex={-1}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onConcept(x.id);
+                          }}
+                        >
+                          {CONCEPT_GLYPH} {x.title}
+                        </button>
+                      </span>
+                    ))}
+                    {r.also.length > 0 && '; '}
+                  </span>
+                )}
                 {r.also.length > 0 ? (
                   <>
                     <span className="hint">also in </span>
@@ -501,7 +530,7 @@ export function RoomFolders({
                     ))}
                   </>
                 ) : (
-                  <span className="hint">—</span>
+                  !r.under?.length && <span className="hint">—</span>
                 )}
               </span>
               <span className="folders-touched">{day(r.at)}</span>

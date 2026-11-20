@@ -23,6 +23,7 @@ import { FileEditor } from './Files.tsx';
 import { arrive, centre, clearFound } from './found.ts';
 import { dayOf } from './hits.ts';
 import { Markdown, type Slot } from './markdown/Markdown.tsx';
+import { ConceptsHere, UnderConcept } from './conceptsHere.tsx';
 import { highlight, selectionToSource, sourceToRange } from './markdown/selection.ts';
 import { pinsChanged } from './Pinned.tsx';
 import { askedPassages, headingText, hostOf, markStrength, sourceFamily } from './reading.ts';
@@ -795,6 +796,7 @@ export function SourceView({
             </nav>
           )}
         </header>
+        <ConceptsHere kind="source" id={sourceId} version={detail?.version.id ?? ''} />
         {source.deletedAt && (
           <div className="in-trash" role="status" data-testid="in-trash">
             This source is in the Trash.
@@ -924,6 +926,19 @@ export function SourceView({
           >
             Ask about this
           </button>
+          {detail && (
+            <UnderConcept
+              at={{ top: selection.rect.bottom + 8, left: selection.rect.left + selection.rect.width / 2 }}
+              target={() => ({
+                kind: 'source',
+                sourceId,
+                versionId: detail.version.id,
+                at: selection.start,
+                title: detail.source.title,
+                quote: content.slice(selection.start, selection.end),
+              })}
+            />
+          )}
           {pinTo && (
             <button
               type="button"

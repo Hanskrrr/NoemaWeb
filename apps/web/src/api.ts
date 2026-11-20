@@ -20,6 +20,9 @@ import {
   FolderTree,
   Health,
   ConceptLink,
+  ConceptPlace,
+  type VaultTarget,
+  MaterialConcepts,
   ItemLink,
   ImportResponse,
   type InsertBlockRequest,
@@ -323,13 +326,25 @@ export const api = {
   /** A line the learner drew: the AI says what it means, and why (ADR 0029). */
   chooseLink: (id: string) => call(ItemLink, 'POST', `/api/links/${id}/choose`, {}),
   mergeRoom: (id: string, into: string) => call(Room, 'POST', `/api/rooms/${id}/merge`, { into }),
-  /** Concepts (ADR 0036): small rooms in a room, suggested when it is read, kept, dismissed, made rooms; their links. */
+  /** Concepts (ADRs 0036, 0037): the notebook's key ideas, read from its materials; kept, dismissed, moved, split, made rooms. */
   createConcept: (roomId: string, id: string, title: string, items: RoomItemRef[] = []) =>
     call(Room, 'POST', `/api/rooms/${roomId}/concepts`, { id, title, items }),
   keepAllConcepts: (roomId: string) => call(z.object({ kept: z.number() }), 'POST', `/api/rooms/${roomId}/concepts/keep`, {}),
   keepConcept: (id: string) => call(Room, 'POST', `/api/concepts/${id}/keep`, {}),
   dropConcept: (id: string) => call(Ok, 'DELETE', `/api/concepts/${id}`),
-  conceptToRoom: (id: string) => call(Room, 'POST', `/api/concepts/${id}/room`, {}),
+  conceptToRoom: (id: string, inside: string | null) => call(Room, 'POST', `/api/concepts/${id}/room`, { inside }),
+  moveInConcepts: (from: string, item: RoomItemRef, to: string) => call(Room, 'POST', `/api/concepts/${from}/move`, { item, to }),
+  splitConcept: (from: string, id: string, title: string, items: RoomItemRef[]) =>
+    call(Room, 'POST', `/api/concepts/${from}/split`, { id, title, items }),
+  addConceptPlace: (id: string, target: VaultTarget) => call(ConceptPlace, 'POST', `/api/concepts/${id}/places`, { target }),
+  removeConceptPlace: (id: string) => call(Ok, 'DELETE', `/api/concept-places/${id}`),
+  materialConcepts: (kind: RoomItemRef['kind'], id: string) => call(MaterialConcepts, 'GET', `/api/items/${kind}/${id}/concepts`),
+  notebookConcepts: (notebookId: string) =>
+    call(
+      z.object({ concepts: z.array(z.object({ id: z.string(), title: z.string(), status: z.enum(['suggested', 'kept']) })) }),
+      'GET',
+      `/api/notebooks/${notebookId}/concepts`,
+    ),
   createConceptLink: (roomId: string, id: string, from: string, to: string, kind: LinkKind) =>
     call(ConceptLink, 'POST', `/api/rooms/${roomId}/concept-links`, { id, from, to, kind }),
   keepConceptLink: (id: string) => call(ConceptLink, 'PATCH', `/api/concept-links/${id}`, { status: 'accepted' }),

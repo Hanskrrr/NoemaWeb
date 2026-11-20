@@ -1,5 +1,5 @@
 import { type APIRequestContext, expect, type Locator, type Page, test } from '@playwright/test';
-import { freshThread, ulidish } from './helpers.ts';
+import { freshThread, highlighted, ulidish } from './helpers.ts';
 
 // Ways to see a room (ADR 0035): Folders, as Finder lists a folder (rooms
 // inside are folders that open in place, things are files, a thing in two
@@ -213,21 +213,34 @@ test('Path: the order to study a room in, from the links kept; side by side what
   await expect(page.getByTestId('rename')).toContainText('What does checkpointing trade?');
 });
 
-async function sources(request: APIRequestContext, titles: string[]): Promise<string[]> {
-  const ids: string[] = [];
-  for (const t of titles) ids.push(await source(request, t));
-  return ids;
+/** A concept on the map, by its name (not by words in its card). */
+function named(page: Page, name: string): Locator {
+  return page.getByTestId('concept-node').filter({ has: page.locator('.concept-name', { hasText: new RegExp(`^\\W*${name}$`) }) });
+}
+/** A source with its own words; the fake model reads each **bold** phrase as a concept (ADR 0037). */
+async function written(request: APIRequestContext, title: string, text: string): Promise<string> {
+  const id = ulidish();
+  await request.post(`/api/notebooks/${await notebookId(request)}/sources`, { data: { id, title, text: `# ${title}\n\n${text}` }, headers: H });
+  return id;
+}
+/** A question asked in a thread, and its answer waited for. */
+async function asked(request: APIRequestContext, threadId: string, question: string): Promise<void> {
+  const r = await (await request.post(`/api/threads/${threadId}/messages`, { data: { id: ulidish(), content: question }, headers: H })).json();
+  await request.get(`/api/messages/${r.assistant.id}/events`, { headers: H });
 }
 
-test('Concepts: read with AI, the key ideas are suggested, each defined by your own words; kept, dismissed, filled from the tray; in Folders and Path too', async ({
+test('Concepts: every piece of every thing is read for the ideas it discusses, joined across things; kept, dismissed, filled from the tray; in Folders and Path too', async ({
   page,
   request,
 }) => {
-  const ids = await sources(request, ['Moss blanket', 'Winter den', 'Glowfin fur', 'Ice fishing']);
+  const moss = await written(request, 'Moss blanket', '**Moss blanket** is the winter cover of a glowfin. It keeps **body heat** in. A **moss blanket** is shaken out in spring.');
+  const den = await written(request, 'Winter den', '**Winter den** is a hole dug under the roots. The **moss blanket** (MB) lines it. Each **winter den** has one door.');
+  const fur = await written(request, 'Glowfin fur', '**Body heat** is kept by the fur. Thick fur works like a **winter den** for one. A **moss blanket** is warmer still.');
+  const ice = await written(request, 'Ice fishing', 'Glowfins fish through holes in the ice.');
   const big = await room(
     request,
     'Glowfin winters',
-    ids.map((id) => ({ kind: 'source', id })),
+    [moss, den, fur, ice].map((id) => ({ kind: 'source', id })),
   );
   await page.goto(`/#/room/${big}`);
   await page.getByTestId('room-mode-concepts').click();
@@ -235,65 +248,76 @@ test('Concepts: read with AI, the key ideas are suggested, each defined by your 
   await page.getByTestId('concepts-read').click();
   const nodes = page.getByTestId('concept-node');
   await expect(nodes).toHaveCount(3);
-  await expect(page.getByTestId('concepts-bar')).toHaveText('3 concepts from your 4 things · 3 suggested');
+  await expect(page.getByTestId('concepts-bar')).toHaveText('3 concepts in your 4 things · 3 suggested');
   await expect(nodes.first()).toHaveAttribute('data-status', 'suggested');
-  // Laid out by what comes first: the second builds on the first; the third stands beside the second.
-  await expect(page.getByTestId('concepts-lane').nth(0).getByTestId('concept-node')).toHaveText([/Fake concept 1/]);
-  await expect(page.getByTestId('concepts-lane').nth(1).getByTestId('concept-node')).toHaveText([/Fake concept 2/, /Fake concept 3/]);
+  // Each where its things discuss it: the one in most of them first, then by what builds on what.
+  await expect(named(page, 'moss blanket').getByTestId('concept-where')).toHaveText('in 3 materials · 4 places');
+  await expect(named(page, 'winter den').getByTestId('concept-where')).toHaveText('in 2 materials · 3 places');
+  await expect(page.getByTestId('concepts-lane').nth(0).getByTestId('concept-node')).toHaveText([/moss blanket/]);
   await expect(page.getByTestId('concept-line-label')).toHaveText(['builds on', 'contrasts']);
-  // Nothing lost: the last thing is in the tray.
+  // Nothing lost: what discusses none is in the tray.
   await expect(page.getByTestId('tray-item')).toHaveText([/Ice fishing/]);
 
-  // The first concept: defined by the words of a source, which open where they are.
-  await nodes.first().click();
+  // A concept: named as the field does, with its other names; defined by the words of a source; where it is discussed.
+  await named(page, 'moss blanket').click();
   const drawer = page.getByTestId('concept-drawer');
-  await expect(drawer.getByTestId('concept-rename')).toContainText('Fake concept 1');
-  await expect(drawer.getByTestId('concept-quote')).toContainText('“Moss blanket”');
-  await expect(drawer.getByTestId('concept-thing')).toHaveText([/Moss blanket/, /Winter den/]);
+  await expect(drawer.getByTestId('concept-rename')).toContainText('moss blanket');
+  await expect(drawer.getByTestId('concept-names')).toHaveText('Also called “MB”');
+  await expect(drawer.getByTestId('concept-quote')).toContainText('“Moss blanket is the winter cover of a glowfin.”');
+  await expect(drawer.getByTestId('concept-quote')).toContainText('your source “Moss blanket”');
+  await expect(drawer.getByTestId('concept-source')).toHaveCount(3);
+  const inDen = drawer.getByTestId('concept-source').filter({ has: page.locator('.concepts-thing-open', { hasText: /^\W*Winter den$/ }) });
+  await expect(inDen.getByTestId('concept-place')).toHaveText([/uses it.*“The moss blanket \(MB\) lines it\.”/]);
+  // It shares a thing with each of the others: they say so.
+  await expect(named(page, 'body heat').getByTestId('concept-shares')).toHaveText('shares 2');
+  await expect(inDen.getByTestId('also-under')).toContainText('winter den');
 
   // Not this: gone. Keep all: the rest are kept.
-  await nodes.filter({ hasText: 'Fake concept 3' }).getByTestId('concept-not-this').click();
+  await named(page, 'body heat').getByTestId('concept-not-this').click();
   await expect(nodes).toHaveCount(2);
   await page.getByTestId('concepts-keep-all').click();
-  await expect(page.getByTestId('concepts-bar')).toHaveText('2 concepts from your 4 things');
+  await expect(page.getByTestId('concepts-bar')).toHaveText('2 concepts in your 4 things');
   await expect(nodes.first()).toHaveAttribute('data-status', 'kept');
+  await expect(page.getByTestId('tray-item')).toHaveText([/Ice fishing/]);
 
   // From the tray onto a concept.
-  await drag(page, page.getByTestId('tray-item').first(), nodes.filter({ hasText: 'Fake concept 2' }));
-  await expect(page.getByTestId('concepts-status')).toContainText('“Ice fishing” is under “Fake concept 2” now.');
-  await expect(page.getByTestId('tray-item')).toHaveCount(0);
+  await drag(page, page.getByTestId('tray-item').filter({ hasText: 'Ice fishing' }), named(page, 'winter den'));
+  await expect(page.getByTestId('concepts-status')).toContainText('“Ice fishing” is under “winter den” now.');
   await expect(page.getByTestId('room-meta')).toContainText('2 concepts');
 
-  // Read again: kept stay, the dismissed one is not suggested again.
+  // Read again: nothing changed, so nothing is read; kept stay, the dismissed one is not suggested again.
+  await expect(page.getByTestId('concepts-changed')).toHaveCount(0);
   await page.getByTestId('concepts-read').click();
   await expect(page.getByTestId('concepts-read')).toHaveText(/Read again/);
-  await expect(nodes.filter({ hasText: 'Fake concept 3' })).toHaveCount(0);
-  await expect(nodes.filter({ hasText: 'Fake concept 1' })).toHaveAttribute('data-status', 'kept');
+  await expect(named(page, 'body heat')).toHaveCount(0);
+  await expect(named(page, 'moss blanket')).toHaveAttribute('data-status', 'kept');
 
-  // Folders: kept concepts are folders of their things.
+  // Folders: kept concepts are folders of their things; a thing under two says so.
   await page.getByTestId('room-mode-folders').click();
-  const conceptRow = page.locator('[data-testid=folder-row][data-key^="concept:"]').filter({ hasText: 'Fake concept 2' });
-  await expect(conceptRow).toContainText('Concept · 2');
+  const conceptRow = page.locator('[data-testid=folder-row][data-key^="concept:"]').filter({ hasText: 'winter den' });
+  await expect(conceptRow).toContainText('Concept · 3');
   await conceptRow.getByTestId('folder-toggle').click();
-  await expect(page.locator('[data-testid=folder-row][data-depth="1"] .folders-title')).toHaveText(['Glowfin fur', 'Ice fishing']);
+  await expect(page.locator('[data-testid=folder-row][data-depth="1"] .folders-title')).toHaveText(['Glowfin fur', 'Ice fishing', 'Winter den']);
+  await expect(page.locator('[data-testid=folder-row][data-depth="1"]').filter({ hasText: 'Winter den' }).getByTestId('folder-also-under')).toContainText('moss blanket');
   // Opened: shown in Concepts.
   await conceptRow.dblclick();
   await expect(page.getByTestId('room-mode-concepts')).toHaveAttribute('aria-pressed', 'true');
-  await expect(drawer.getByTestId('concept-rename')).toContainText('Fake concept 2');
+  await expect(drawer.getByTestId('concept-rename')).toContainText('winter den');
 
-  // Path: concept by concept.
+  // Path: concept by concept; a thing on two steps says where else.
   await page.getByTestId('room-mode-path').click();
-  await expect(page.getByTestId('path-step').locator('.path-title')).toHaveText([/Fake concept 1/, /Fake concept 2/]);
-  await expect(page.getByTestId('path-step').nth(1).getByTestId('path-after')).toHaveText('builds on 1');
-  await expect(page.getByTestId('path-step').nth(1).getByTestId('path-thing')).toHaveText([/Glowfin fur/, /Ice fishing/]);
+  await expect(page.getByTestId('path-step').locator('.path-title')).toHaveCount(2);
+  await expect(page.getByTestId('path-thing').filter({ hasText: 'Winter den' }).first()).toContainText(/also \d/);
 });
 
 test('a concept is split, merged back, linked by hand, asked about, and made a room of its own', async ({ page, request }) => {
-  const ids = await sources(request, ['Moss blanket', 'Winter den', 'Glowfin fur']);
+  const raft = await written(request, 'Reed raft', '**Reed raft** is a mat the otters float on. It drifts near the **tide pool**.');
+  const pool = await written(request, 'Tide pool', '**Tide pool** is water left by the sea. Salt dries into a **salt crust** there.');
+  const crust = await written(request, 'Salt crust', '**Salt crust** is the white rim on the rocks. Otters lick it from the **reed raft**.');
   const big = await room(
     request,
-    'Glowfin homes',
-    ids.map((id) => ({ kind: 'source', id })),
+    'Otter shores',
+    [raft, pool, crust].map((id) => ({ kind: 'source', id })),
   );
   await page.goto(`/#/room/${big}`);
   await page.getByTestId('room-mode-concepts').click();
@@ -301,45 +325,119 @@ test('a concept is split, merged back, linked by hand, asked about, and made a r
   const nodes = page.getByTestId('concept-node');
   await expect(nodes).toHaveCount(3);
   await page.getByTestId('concepts-keep-all').click();
-  await expect(page.getByTestId('concepts-bar')).toHaveText('3 concepts from your 3 things');
+  await expect(page.getByTestId('concepts-bar')).toHaveText('3 concepts in your 3 things');
   const drawer = page.getByTestId('concept-drawer');
 
-  // Split: "Winter den" to a new concept.
-  await nodes.filter({ hasText: 'Fake concept 1' }).click();
+  // Split: "Salt crust" to a new concept; the words stay with the thing.
+  await named(page, 'reed raft').click();
+  await expect(drawer.getByTestId('concept-source')).toHaveText([/Reed raft/, /Salt crust/]);
   await drawer.getByTestId('concept-split').click();
   await drawer.getByTestId('concept-split-pick').nth(1).check();
-  await drawer.getByTestId('concept-split-title').fill('Dens');
+  await drawer.getByTestId('concept-split-title').fill('Licking spots');
   await drawer.getByTestId('concept-split-save').click();
   await expect(nodes).toHaveCount(4);
-  await expect(drawer.getByTestId('concept-rename')).toContainText('Dens');
-  await expect(drawer.getByTestId('concept-thing')).toHaveText([/Winter den/]);
-  await expect(nodes.filter({ hasText: 'Fake concept 1' })).toContainText('1');
+  await expect(drawer.getByTestId('concept-rename')).toContainText('Licking spots');
+  await expect(drawer.getByTestId('concept-source')).toHaveText([/Salt crust/]);
+  await expect(drawer.getByTestId('concept-place')).toHaveText([/“Otters lick it from the reed raft\.”/]);
+  await expect(named(page, 'reed raft').getByTestId('concept-where')).toHaveText('in 1 material · 1 place');
 
-  // Linked by hand: Dens builds on Fake concept 1.
+  // Linked by hand: Licking spots builds on reed raft.
   await drawer.getByTestId('concept-link-to').click();
   await drawer.getByTestId('concept-link-kind').selectOption('builds-on');
-  await drawer.getByTestId('concept-link-other').selectOption({ label: 'Fake concept 1' });
+  await drawer.getByTestId('concept-link-other').selectOption({ label: 'reed raft' });
   await drawer.getByTestId('concept-link-save').click();
-  await expect(drawer.getByTestId('concept-link')).toContainText('builds on “Fake concept 1”');
+  await expect(drawer.getByTestId('concept-link')).toContainText('builds on “reed raft”');
 
-  // Merged back.
+  // Merged back: its name stays as another name.
   await drawer.getByTestId('concept-merge').click();
-  await drawer.getByTestId('concept-merge-into').filter({ hasText: 'Fake concept 1' }).click();
+  await drawer.getByTestId('concept-merge-into').filter({ hasText: 'reed raft' }).click();
   await expect(nodes).toHaveCount(3);
-  await expect(drawer.getByTestId('concept-rename')).toContainText('Fake concept 1');
-  await expect(drawer.getByTestId('concept-thing')).toHaveText([/Moss blanket/, /Winter den/]);
+  await expect(drawer.getByTestId('concept-rename')).toContainText('reed raft');
+  await expect(drawer.getByTestId('concept-source')).toHaveText([/Reed raft/, /Salt crust/]);
+  await expect(drawer.getByTestId('concept-names')).toContainText('Licking spots');
 
   // Asked about: the question waits in the bar at the foot, to finish and send.
   await drawer.getByTestId('concept-ask').click();
-  await expect(page.getByTestId('room-ask')).toHaveValue('About “Fake concept 1”: ');
+  await expect(page.getByTestId('room-ask')).toHaveValue('About “reed raft”: ');
   await expect(page.getByTestId('room-ask')).toBeFocused();
 
-  // Made a room: a room inside now, in the sidebar's list.
-  await nodes.filter({ hasText: 'Fake concept 3' }).click();
+  // Made a room: a room inside now, in the sidebar's list; no longer a concept anywhere.
+  await named(page, 'salt crust').click();
   await drawer.getByTestId('concept-to-room').click();
   await expect(nodes).toHaveCount(2);
   await page.getByTestId('room-mode-folders').click();
-  await expect(page.locator('[data-testid=folder-row][data-key^="room:"]')).toHaveText([/Fake concept 3/]);
+  await expect(page.locator('[data-testid=folder-row][data-key^="room:"]')).toHaveText([/salt crust/]);
   const { rooms } = await (await request.get(`/api/notebooks/${await notebookId(request)}/rooms`)).json();
-  expect(rooms.map((r: { title: string }) => r.title).sort()).toEqual(['Fake concept 3', 'Glowfin homes']);
+  expect(rooms.map((r: { title: string }) => r.title).sort()).toEqual(['Otter shores', 'salt crust']);
+  const { concepts } = await (await request.get(`/api/notebooks/${await notebookId(request)}/concepts`)).json();
+  expect(concepts.map((c: { title: string }) => c.title)).not.toContain('salt crust');
+});
+
+test('a thing that changes is read again, only what changed; its concepts show from its side, and words are put under one by hand', async ({
+  page,
+  request,
+}) => {
+  const lantern = await written(request, 'Lantern moss', '**Lantern moss** is a moss that glows at night. It grows on old stones.');
+  const thread = await freshThread(request);
+  await asked(request, thread, 'Why does **lantern moss** glow?');
+  const big = await room(request, 'Night garden', [
+    { kind: 'source', id: lantern },
+    { kind: 'thread', id: thread },
+  ]);
+  await page.goto(`/#/room/${big}`);
+  await page.getByTestId('room-mode-concepts').click();
+  await page.getByTestId('concepts-read').click();
+  const nodes = page.getByTestId('concept-node');
+  await expect(nodes).toHaveCount(1);
+  await page.getByTestId('concepts-keep-all').click();
+  // The source defines it; the thread asks, and its answer uses it.
+  await expect(nodes.first().getByTestId('concept-where')).toHaveText('in 2 materials · 3 places');
+  await expect(page.getByTestId('concepts-changed')).toHaveCount(0);
+
+  // The thread grows: the room says so, and Update reads that thread again.
+  await asked(request, thread, 'Where does **lantern moss** grow best?');
+  await page.reload();
+  await expect(page.getByTestId('concepts-changed')).toContainText('1 material changed since its concepts were read');
+  await expect(page.getByTestId('concepts-read')).toHaveText(/Update/);
+  await page.getByTestId('concepts-update').click();
+  await expect(page.getByTestId('concepts-changed')).toHaveCount(0);
+  // Its new question asks, its answer uses: the thread's three places at most for one concept (the skill's rule).
+  await expect(nodes.first().getByTestId('concept-where')).toHaveText('in 2 materials · 4 places');
+  await expect(nodes.first()).toHaveAttribute('data-status', 'kept');
+
+  // From the source's side: its concepts under its title, each a click away from its words there.
+  await page.goto(`/#/s/${lantern}`);
+  const here = page.getByTestId('concepts-here-chip');
+  await expect(here).toHaveText([/lantern moss · 1 place/]);
+  await here.click();
+  await expect.poll(() => highlighted(page, 'noema-found')).toContain('is a moss that glows at night.');
+
+  // Words put under it by hand: a place of its own, kept when the AI reads again.
+  await page.getByTestId('source-text').evaluate((root) => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const i = n.textContent?.indexOf('It grows on old stones.') ?? -1;
+      if (i >= 0) {
+        const r = document.createRange();
+        r.setStart(n, i);
+        r.setEnd(n, i + 'It grows on old stones.'.length);
+        window.getSelection()?.removeAllRanges();
+        window.getSelection()?.addRange(r);
+        return;
+      }
+    }
+  });
+  await page.getByTestId('under-concept').click();
+  await page.getByTestId('concept-picker-find').fill('lantern');
+  await page.getByTestId('concept-picker-item').filter({ hasText: 'lantern moss' }).click();
+  await expect(page.getByTestId('room-notice')).toHaveText('Put under lantern moss');
+  await expect(here).toHaveText([/lantern moss · 2 places/]);
+
+  await page.goto(`/#/room/${big}`);
+  await nodes.first().click();
+  const yours = page.getByTestId('concept-drawer').getByTestId('concept-place').filter({ hasText: 'you put it here' });
+  await expect(yours).toContainText('“It grows on old stones.”');
+  await page.getByTestId('concepts-read').click();
+  await expect(page.getByTestId('concepts-read')).toHaveText(/Read again/);
+  await expect(yours).toHaveCount(1);
 });

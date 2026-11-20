@@ -33,6 +33,7 @@ import { MergeCard, MergePicker, OPEN_MERGE_EVENT, OutgoingMerges } from './Merg
 import { MessageView } from './MessageView.tsx';
 import { PINS_CHANGED_EVENT, PinnedList } from './Pinned.tsx';
 import { Outline, type OutlineItem, scrollRangeIntoView, shortLabel } from './Outline.tsx';
+import { ConceptsHere, UnderConcept } from './conceptsHere.tsx';
 import { highlight, selectionToSource, sourceToRange } from './markdown/selection.ts';
 import { keys, storage } from './storage.ts';
 
@@ -813,6 +814,7 @@ export function ThreadView({
             onOpenNote={onOpenNote}
           />
         )}
+        {thread && <ConceptsHere kind="thread" id={thread.id} version={`${messages.length}:${messages.at(-1)?.status ?? ''}`} />}
         {thread?.deletedAt && (
           <div className="in-trash" role="status" data-testid="in-trash">
             This thread is in the Trash.
@@ -1009,6 +1011,16 @@ export function ThreadView({
           >
             Ask in a branch
           </button>
+          {thread && (
+            <UnderConcept
+              at={{ top: selection.rect.bottom + 8, left: selection.rect.left + selection.rect.width / 2 }}
+              target={() => {
+                const message = byId.get(selection.messageId);
+                if (!message) return null;
+                return { kind: 'thread', threadId: thread.id, messageId: message.id, title: thread.title, quote: message.content.slice(selection.start, selection.end) };
+              }}
+            />
+          )}
           {!thread?.deletedAt && (
             <button
               type="button"

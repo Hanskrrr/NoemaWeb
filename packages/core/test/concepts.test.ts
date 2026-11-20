@@ -1,95 +1,206 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { conceptsRequest, readConcepts } from '../src/concepts.ts';
+import {
+  becomesConcept,
+  bestMention,
+  CONCEPT_SKILL,
+  commonName,
+  conceptKey,
+  conceptLinksRequest,
+  joinRequest,
+  type MentionRole,
+  pieceHashInput,
+  pieceRequest,
+  piecesOf,
+  readConceptLinks,
+  readJoin,
+  readMentions,
+  SKILL_VERSION,
+  targetAt,
+} from '../src/concepts.ts';
+import type { ItemText } from '../src/gists.ts';
 
-// Concepts (ADR 0036): what the AI is asked, and what of its reply is kept.
+// The concept-reading skill (ADR 0037): pieces cut the same way every time,
+// mentions only where the words are, names made plain, new names judged,
+// links read. Made-up text.
 
-const opts = { things: 4, points: [2, 1, 0, 3], kept: [] as string[], dismissed: [] as string[], most: 12 };
+const thread = (messages: string[]): ItemText => {
+  let text = '';
+  const segments: ItemText['segments'] = [];
+  messages.forEach((m, i) => {
+    if (text) text += '\n\n';
+    segments.push({ start: text.length, end: text.length + m.length, target: { kind: 'thread', threadId: 't1', messageId: `m${i}`, title: 'Glow' } });
+    text += m;
+  });
+  return { kind: 'thread', title: 'Glow', text, segments };
+};
+const source = (text: string): ItemText => ({
+  kind: 'source',
+  title: 'Moss',
+  text,
+  segments: [{ start: 0, end: text.length, target: { kind: 'source', sourceId: 's1', versionId: 'v1', at: 0, title: 'Moss' } }],
+});
 
-test('the request numbers the things with their points lettered, the kept concepts first, the dismissed by name', () => {
-  const [system, user] = conceptsRequest(
-    'Glowfin winters',
+test("a thread's pieces pack its messages in order; a new question changes only the last piece", () => {
+  const a = 'Q: Why does the glowfin glow? '.padEnd(60, '.');
+  const b = 'A: Its scales hold luciferin. '.padEnd(60, '.');
+  const before = piecesOf(thread([a, b, a, b]), 130);
+  assert.deepEqual(
+    before.map((p) => [p.start, p.end]),
     [
-      { kind: 'source', title: 'Moss blanket', gist: 'Moss keeps it warm.', points: ['Moss is layered', 'It is warm'] },
-      { kind: 'thread', title: 'Why moss?', gist: 'Asked why moss.', points: [] },
+      [0, 122],
+      [124, 246],
     ],
-    [{ name: 'Warmth', definition: 'Keeping heat in.', things: [1] }],
-    ['Fur'],
-    11,
   );
-  assert.match(system?.content ?? '', /concepts/);
-  assert.equal(
-    user?.content,
-    'The room “Glowfin winters”:\n1. source “Moss blanket”: Moss keeps it warm.\n   a) Moss is layered\n   b) It is warm\n2. thread “Why moss?”: Asked why moss.\n\nConcepts the learner kept:\n[1] “Warmth”: Keeping heat in. (things 1)\n\nNot these, the learner dismissed them: “Fur”.\n\nGive at most 11 new concepts.',
-  );
+  assert.equal(before[0]?.text, `${a}\n\n${b}`);
+  const after = piecesOf(thread([a, b, a, b, a]), 130);
+  assert.deepEqual(after[0], before[0], 'the first piece is the same');
+  assert.equal(after.length, 3);
 });
 
-test('concepts are read with their things and the point that defines them; links follow them when some are left out', () => {
+test("a source's pieces are cut where headings start, packed; an edit in one section leaves the others' pieces as they were", () => {
+  const sec = (h: string, n: number) => `## ${h}\n\n${'Moss keeps the den warm. '.repeat(n)}\n\n`;
+  const text = sec('Page 1', 3) + sec('Page 2', 3) + sec('Page 3', 3) + sec('Page 4', 3);
+  const pieces = piecesOf(source(text), 200);
+  // Two sections (about 90 characters each) to a piece.
+  assert.equal(pieces.length, 2);
+  assert.ok(pieces.every((p) => p.text.startsWith('## Page')));
+  const edited = sec('Page 1', 3) + sec('Page 2', 3) + sec('Page 3', 3).replace('den', 'nest') + sec('Page 4', 3);
+  const again = piecesOf(source(edited), 200);
+  assert.equal(again[0]?.text, pieces[0]?.text);
+  assert.notEqual(again[1]?.text, pieces[1]?.text);
+  // A section longer than a piece is cut at its paragraphs, then at a space.
+  const long = `## Long\n\n${'word '.repeat(30)}\n\n${'word '.repeat(30)}`;
+  const cut = piecesOf(source(long), 100);
+  assert.ok(cut.length >= 3);
+  assert.ok(cut.every((p) => p.end - p.start <= 100));
+  assert.equal(cut.map((p) => p.text).join('').replace(/\s/g, ''), long.replace(/\s/g, ''));
+  // Nothing but white space: no piece.
+  assert.deepEqual(piecesOf(source('  \n\n  ')), []);
+});
+
+test('a piece hashes its words with the skill version; a place in the text is a message, a block or the source from an offset', () => {
+  assert.equal(pieceHashInput('Moss.'), `noema-concept-reading/${SKILL_VERSION}\nMoss.`);
+  const t = thread(['Q: one', 'A: two words']);
+  assert.deepEqual(targetAt(t, 10, 'two'), { kind: 'thread', threadId: 't1', messageId: 'm1', title: 'Glow', quote: 'two' });
+  const s = source('# Moss\n\nMoss keeps it warm.');
+  assert.deepEqual(targetAt(s, 8, 'Moss keeps'), { kind: 'source', sourceId: 's1', versionId: 'v1', at: 8, title: 'Moss', quote: 'Moss keeps' });
+  assert.equal(targetAt(t, 999, 'x'), null);
+});
+
+test('names made plain: case, hyphens, quotes, a leading "the", plurals', () => {
+  assert.equal(conceptKey('Gradient-Checkpointing'), 'gradient checkpointing');
+  assert.equal(conceptKey('the vanishing gradients problem'), 'vanishing gradient problem');
+  assert.equal(conceptKey('  “Attention”  '), 'attention');
+  assert.equal(conceptKey('Transformers'), 'transformer');
+  assert.equal(conceptKey('Loss'), 'loss');
+  assert.equal(conceptKey('Analysis'), 'analysis');
+  assert.equal(conceptKey('Dynamics'), 'dynamics');
+  assert.equal(conceptKey('Activation memories'), 'activation memory');
+  assert.equal(conceptKey('ZeRO'), 'zero');
+});
+
+test("a piece's request carries the skill, the material and the known concepts", () => {
+  const [system, user] = pieceRequest({ kind: 'source', title: 'Moss' }, 'Moss keeps it warm.', { n: 2, of: 3 }, ['moss blanket', 'den']);
+  assert.equal(system?.content, CONCEPT_SKILL);
+  assert.equal(user?.content, 'A source, “Moss”, piece 2 of 3:\n\n<<<\nMoss keeps it warm.\n>>>\n\nKnown concepts: “moss blanket”, “den”.');
+  assert.match(pieceRequest({ kind: 'note', title: '' }, 'x', { n: 1, of: 1 }, [])[1]?.content ?? '', /^A note, “Untitled”:\n[\s\S]*Known concepts: none yet\.$/);
+});
+
+test('mentions are kept only where their words are in the piece; three places of a concept at most; roles and names checked', () => {
+  const piece = 'A moss blanket keeps the glowfin warm.\n\nThe moss blanket is woven, the den is dug. Why is the den so deep?';
   const raw = `Here: ${JSON.stringify({
-    concepts: [
-      { name: 'Warmth', definition: ' Keeping  heat in. ', defined_by: '1b', things: [1, 2, 2, 9] },
-      { name: 'Nothing about it', definition: 'x', defined_by: null, things: [] },
-      { name: 'Dens', definition: 'Where it sleeps.', defined_by: '3a', things: [3] },
-      { name: 'warmth', definition: 'the same name again', things: [4] },
+    mentions: [
+      { name: 'Moss Blanket', also: ['MB', 'moss-blanket'], role: 'defines', quote: 'A moss  blanket keeps the glowfin warm.', says: 'It keeps it warm.' },
+      { name: 'moss blanket', role: 'uses', quote: 'The moss blanket is woven,' },
+      { name: 'moss blanket', role: 'uses', quote: 'The moss blanket is woven,' },
+      { name: 'den', role: 'asks', quote: 'Why is the den so deep?' },
+      { name: 'den', role: 'shouts', quote: 'the den is dug' },
+      { name: 'ice', role: 'uses', quote: 'Ice is cold.' },
+      { name: '', role: 'uses', quote: 'the den is dug' },
     ],
-    links: [
-      { from: 3, to: 1, kind: 'builds-on', why: 'Dens need warmth.' },
-      { from: 2, to: 1, kind: 'builds-on' },
-      { from: 3, to: 1, kind: 'part-of' },
-      { from: 1, to: 3, kind: 'related' },
-    ],
-    place: [{ thing: 4, concept: 1 }],
   })}`;
-  const d = readConcepts(raw, opts);
-  assert.deepEqual(d?.concepts, [
-    { name: 'Warmth', definition: 'Keeping heat in.', definedBy: { thing: 1, point: 1 }, things: [1, 2] },
-    // Thing 3 has no points: no definition by one.
-    { name: 'Dens', definition: 'Where it sleeps.', definedBy: null, things: [3] },
-  ]);
-  // "Dens" was 3rd in the reply and is 2nd now; the link to the concept left out goes; a pair once; kinds concepts use.
-  assert.deepEqual(d?.links, [{ from: 2, to: 1, kind: 'builds-on', why: 'Dens need warmth.' }]);
-  assert.deepEqual(d?.place, [], 'no kept concepts to place things in');
+  const m = readMentions(raw, piece);
+  assert.deepEqual(
+    m?.map((x) => [x.key, x.role, x.quote, x.offset, x.also]),
+    [
+      ['moss blanket', 'defines', 'A moss blanket keeps the glowfin warm.', 0, ['MB']],
+      ['moss blanket', 'uses', 'The moss blanket is woven,', 40, []],
+      ['den', 'asks', 'Why is the den so deep?', piece.indexOf('Why'), []],
+    ],
+  );
+  assert.equal(m?.[0]?.says, 'It keeps it warm.');
+  assert.equal(readMentions('no json', piece), null);
+  assert.deepEqual(readMentions('{"mentions": []}', piece), []);
+  // A thread's "Q: " is the reading's label, not the learner's words: the quote starts after it.
+  const thread = 'Q: Why is the den so deep?\n\nA: The den is deep to stay warm.';
+  const t = readMentions(JSON.stringify({ mentions: [{ name: 'den', role: 'asks', quote: 'Q: Why is the den so deep?' }, { name: 'den', role: 'explains', quote: 'The den is deep to stay warm.' }] }), thread);
+  assert.deepEqual(
+    t?.map((x) => [x.quote, x.offset]),
+    [
+      ['Why is the den so deep?', 3],
+      ['The den is deep to stay warm.', thread.indexOf('The den')],
+    ],
+  );
 });
 
-test('kept and dismissed names are not given again; kept concepts come first in the numbers; the AI does not link two kept ones', () => {
+test('the judge: each new name the same as a known one, or new; answers about names not asked are ignored', () => {
+  const [, user] = joinRequest(['activation checkpointing'], ['gradient checkpointing', 'attention']);
+  assert.equal(user?.content, 'Known concepts:\n- gradient checkpointing\n- attention\n\nNew names:\n- activation checkpointing');
+  const r = readJoin(
+    JSON.stringify({
+      same: { 'Activation Checkpointing': 'Gradient checkpointing', moss: null, other: 'attention', gc: 'not known', 'moss blanket': 'moss', den: 'den' },
+    }),
+    ['activation checkpointing', 'moss', 'gc', 'moss blanket', 'den'],
+    ['gradient checkpointing', 'attention'],
+  );
+  assert.deepEqual(
+    [...(r ?? [])],
+    [
+      ['activation checkpointing', 'gradient checkpointing'],
+      ['moss', null],
+      ['gc', null],
+      // The same as another new name; never as itself.
+      ['moss blanket', 'moss'],
+      ['den', null],
+    ],
+  );
+  assert.equal(readJoin('nothing', [], []), null);
+});
+
+test('a name becomes a concept when a material defines or explains it, or two materials discuss it', () => {
+  const m = (role: MentionRole, material: string) => ({ role, material });
+  assert.equal(becomesConcept([m('uses', 'a')]), false);
+  assert.equal(becomesConcept([m('uses', 'a'), m('asks', 'a')]), false);
+  assert.equal(becomesConcept([m('explains', 'a')]), true);
+  assert.equal(becomesConcept([m('uses', 'a'), m('uses', 'b')]), true);
+  const best = bestMention([
+    { role: 'uses' as MentionRole, at: '1' },
+    { role: 'explains' as MentionRole, at: '3' },
+    { role: 'explains' as MentionRole, at: '2' },
+  ]);
+  assert.deepEqual(best, { role: 'explains', at: '2' });
+  assert.equal(commonName([{ name: 'GC' }, { name: 'gradient checkpointing' }, { name: 'gradient checkpointing' }]), 'gradient checkpointing');
+});
+
+test('links between concepts: kinds concepts use, a pair once, none between two kept ones', () => {
+  const [, user] = conceptLinksRequest('Glowfin', [
+    { name: 'moss blanket', says: ['It keeps it warm.'] },
+    { name: 'den', says: [] },
+  ]);
+  assert.equal(user?.content, 'The subject “Glowfin”:\n1. moss blanket: It keeps it warm.\n2. den');
   const raw = JSON.stringify({
-    concepts: [
-      { name: 'Fur', things: [1] },
-      { name: 'Warmth', things: [1] },
-      { name: 'Ice', defined_by: '4c', things: [4] },
-    ],
     links: [
-      { from: 3, to: 1, kind: 'contrasts-with' },
-      { from: 2, to: 1, kind: 'builds-on' },
-      { from: 5, to: 1, kind: 'builds-on' },
-    ],
-    place: [
-      { thing: 2, concept: 1 },
-      { thing: 2, concept: 1 },
-      { thing: 3, concept: 3 },
-      { thing: 9, concept: 1 },
+      { from: 2, to: 1, kind: 'builds-on', why: 'Needs it.' },
+      { from: 1, to: 2, kind: 'part-of' },
+      { from: 3, to: 1, kind: 'builds-on' },
+      { from: 1, to: 3, kind: 'related' },
+      { from: 3, to: 4, kind: 'builds-on' },
     ],
   });
-  const d = readConcepts(raw, { ...opts, kept: ['Warmth', 'Dens'], dismissed: ['fur'] });
-  assert.deepEqual(
-    d?.concepts.map((c) => [c.name, c.definedBy]),
-    [['Ice', { thing: 4, point: 2 }]],
-  );
-  // The reply numbered "Fur" 3 and "Ice" 5 (after two kept): "Fur" is left out, so is its link; "Ice" is 3 now.
-  // 2 → 1 is between two kept concepts: the AI does not link those.
-  assert.deepEqual(
-    d?.links.map((l) => [l.from, l.kind, l.to]),
-    [[3, 'builds-on', 1]],
-  );
-  assert.deepEqual(d?.place, [{ thing: 2, concept: 1 }]);
-});
-
-test('no more new concepts than asked; an unreadable reply is null', () => {
-  const raw = JSON.stringify({ concepts: [1, 2, 3].map((i) => ({ name: `C${i}`, things: [i] })) });
-  assert.deepEqual(
-    readConcepts(raw, { ...opts, most: 2 })?.concepts.map((c) => c.name),
-    ['C1', 'C2'],
-  );
-  assert.equal(readConcepts('no json', opts), null);
-  assert.equal(readConcepts('{"links": []}', opts), null);
+  assert.deepEqual(readConceptLinks(raw, 4, new Set([3, 4])), [
+    { from: 2, to: 1, kind: 'builds-on', why: 'Needs it.' },
+    { from: 3, to: 1, kind: 'builds-on', why: '' },
+  ]);
+  assert.equal(readConceptLinks('{}', 2), null);
 });

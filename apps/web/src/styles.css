@@ -7509,242 +7509,12 @@ button.room-fold:hover {
   align-self: flex-end;
 }
 
-/* Concepts as a map you zoom (ADR 0038): topics from far, concepts closer; a review of new ideas beside it. */
+/* Concepts topic by topic, as cards (ADR 0038 addendum); a review of new ideas beside them. */
 .concepts-main {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
   min-width: 0;
-}
-.concepts-mapbox {
-  position: relative;
-  height: clamp(26rem, 64vh, 48rem);
-}
-.concept-map {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  border: 1px solid var(--rule);
-  border-radius: 14px;
-  background:
-    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ink-faint) 22%, transparent) 1px, transparent 0) 0 0 / 22px 22px,
-    color-mix(in srgb, var(--paper) 70%, var(--sheet));
-  outline: none;
-  touch-action: none;
-  cursor: grab;
-  user-select: none;
-}
-.concept-map.is-dragging {
-  cursor: grabbing;
-}
-.concept-map-svg {
-  display: block;
-}
-.concept-map-node {
-  cursor: pointer;
-  outline: none;
-}
-.concept-map-node circle {
-  fill: var(--sheet);
-  stroke: color-mix(in srgb, var(--lk-explains) 55%, var(--rule));
-  stroke-width: 1.5;
-}
-.concept-map-node.is-topic circle {
-  fill: color-mix(in srgb, var(--lk-explains) 8%, var(--paper));
-  stroke: color-mix(in srgb, var(--lk-explains) 40%, var(--rule));
-}
-.concept-map-node.depth-1:not(.is-topic) circle {
-  fill: color-mix(in srgb, var(--sheet) 92%, var(--lk-explains));
-}
-.concept-map-node.depth-2 circle,
-.concept-map-node.depth-3 circle {
-  fill: color-mix(in srgb, var(--sheet) 85%, var(--lk-explains));
-}
-.concept-map-node.is-suggested circle {
-  stroke: color-mix(in srgb, var(--lf-b) 75%, var(--rule));
-  stroke-dasharray: 6 4;
-}
-.concept-map-node:hover > circle {
-  stroke: color-mix(in srgb, var(--lk-explains) 85%, var(--rule));
-}
-.concept-map-node.is-selected > circle,
-.concept-map-node:focus-visible > circle {
-  stroke: var(--accent);
-  stroke-width: 2.6;
-}
-.concept-map-node.is-target > circle {
-  stroke: var(--k-room);
-  stroke-width: 2.6;
-  fill: color-mix(in srgb, var(--k-room) 12%, var(--sheet));
-}
-.concept-map-node.is-dim {
-  opacity: 0.32;
-}
-.concept-map-node text {
-  pointer-events: none;
-}
-.concept-map .concept-name {
-  fill: var(--ink);
-  font-weight: 600;
-  letter-spacing: -0.005em;
-}
-.concept-map-node.is-topic .concept-name {
-  font-weight: 650;
-}
-.concept-map-counts {
-  fill: var(--ink-faint);
-  font-size: 10.5px;
-}
-.concept-map-kids {
-  fill: var(--ink-soft);
-  font-size: 11px;
-}
-.concept-map-line line {
-  stroke: color-mix(in srgb, var(--ink-faint) 75%, transparent);
-  stroke-width: 1.4;
-}
-.concept-map-line.is-many line {
-  stroke-width: 2.2;
-}
-.concept-map-line.is-suggested line {
-  stroke-dasharray: 4 3;
-  opacity: 0.75;
-}
-.concept-map-line text {
-  fill: var(--ink-faint);
-  font-size: 10.5px;
-  paint-order: stroke;
-  stroke: var(--paper);
-  stroke-width: 3px;
-}
-.concept-map defs path {
-  fill: color-mix(in srgb, var(--ink-faint) 85%, transparent);
-}
-.concept-map-top {
-  position: absolute;
-  top: 0.6rem;
-  left: 0.75rem;
-  right: 0.75rem;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.6rem;
-  pointer-events: none;
-}
-.concept-map-top > * {
-  pointer-events: auto;
-}
-.concept-map-trail {
-  margin: 0;
-  padding: 0.15rem 0.6rem;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--sheet) 88%, transparent);
-  color: var(--ink-soft);
-  font-size: 0.84rem;
-}
-.concept-map-find {
-  position: relative;
-}
-.concept-map-find input {
-  width: 12rem;
-  padding: 0.25rem 0.7rem;
-  border: 1px solid var(--rule);
-  border-radius: 999px;
-  background: var(--sheet);
-  color: var(--ink);
-  font: inherit;
-  font-size: 0.84rem;
-}
-.concept-map-matches {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 0.25rem);
-  z-index: 3;
-  min-width: 12rem;
-  margin: 0;
-  padding: 0.3rem;
-  list-style: none;
-  border: 1px solid var(--rule);
-  border-radius: 10px;
-  background: var(--sheet);
-  box-shadow: 0 10px 24px -14px rgb(0 0 0 / 0.4);
-}
-.concept-map-matches button {
-  width: 100%;
-  text-align: left;
-}
-.concept-map-zoom {
-  position: absolute;
-  right: 0.75rem;
-  bottom: 0.6rem;
-  display: flex;
-  gap: 0.1rem;
-  padding: 0.1rem;
-  border: 1px solid var(--rule);
-  border-radius: 999px;
-  background: var(--sheet);
-}
-.concept-map-zoom button {
-  min-width: 1.9rem;
-  border-radius: 999px;
-}
-.concept-map-hint {
-  position: absolute;
-  left: 50%;
-  bottom: 0.7rem;
-  transform: translateX(-50%);
-  margin: 0;
-  padding: 0.25rem 0.75rem;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--sheet);
-  font-size: 0.84rem;
-}
-.concepts-map-hint {
-  margin: 0;
-  font-size: 0.8rem;
-  text-align: left;
-}
-.concepts-review {
-  position: absolute;
-  top: 3rem;
-  right: 0.75rem;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  width: min(19rem, 46%);
-  max-height: calc(100% - 4.5rem);
-  overflow: auto;
-  padding: 0.65rem 0.8rem;
-  border: 1px solid var(--rule);
-  border-radius: 12px;
-  background: var(--sheet);
-  box-shadow: 0 12px 30px -20px rgb(0 0 0 / 0.45);
-  font-size: 0.88rem;
-}
-.concepts-review header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.concepts-review .hint {
-  margin: 0;
-  text-align: left;
-  font-size: 0.78rem;
-}
-.concepts-review ul {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.concepts-review li {
-  display: flex;
-  flex-direction: column;
 }
 .review-name {
   align-self: flex-start;
@@ -7759,17 +7529,6 @@ button.room-fold:hover {
 .review-alone {
   color: var(--ink-soft);
   font-size: 0.82rem;
-}
-.concepts-review-pill {
-  position: absolute;
-  left: 0.75rem;
-  bottom: 0.6rem;
-  padding: 0.2rem 0.8rem;
-  border: 1px solid color-mix(in srgb, var(--lf-b) 70%, var(--rule));
-  border-radius: 999px;
-  background: var(--sheet);
-  color: var(--ink);
-  font-size: 0.84rem;
 }
 .concepts-progress {
   height: 3px;
@@ -7901,5 +7660,101 @@ button.room-fold:hover {
 }
 .concepts-drawer .hint,
 .concepts-side .hint {
+  text-align: left;
+}
+.concepts-find {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+.concepts-find input {
+  width: min(18rem, 100%);
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--sheet);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+}
+.concepts-find .hint {
+  margin: 0;
+  font-size: 0.84rem;
+}
+.concepts-topic {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 0.9rem 0 1.4rem;
+  border-top: 1px solid var(--rule);
+}
+.concepts-topic:first-of-type {
+  border-top: 0;
+  padding-top: 0.2rem;
+}
+.concepts-topic-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.3rem;
+  padding: 0.15rem 0.4rem;
+  margin-left: -0.4rem;
+  border: 1.5px solid transparent;
+  border-radius: 8px;
+}
+.concepts-topic-head .hint {
+  margin: 0;
+  font-size: 0.84rem;
+}
+.concepts-topic-name {
+  font-weight: 650;
+  font-size: 1.02rem;
+  color: var(--ink);
+}
+.concepts-topic-head.is-suggested .concepts-topic-name {
+  text-decoration: underline dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  text-underline-offset: 0.25em;
+}
+.concepts-topic-head.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--rule));
+}
+.concepts-topic-head.is-target {
+  border-color: var(--accent);
+  border-style: dashed;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.concepts-topic-toggle {
+  width: 1.2rem;
+  color: var(--ink-faint);
+}
+.concepts-topic-scope {
+  max-width: 36rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.concepts-topic-suggest {
+  margin-left: 0.3rem;
+  font-size: 0.86rem;
+}
+.concepts-topic .concepts-more {
+  align-self: flex-start;
+  margin-top: 0;
+}
+.concept-under {
+  margin: -0.15rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+.concept-under.is-suggested {
+  font-style: italic;
+}
+.concept-inside-line {
+  margin: 0;
+  font-size: 0.8rem;
   text-align: left;
 }

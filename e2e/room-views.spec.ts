@@ -213,27 +213,21 @@ test('Path: the order to study a room in, from the links kept; side by side what
   await expect(page.getByTestId('rename')).toContainText('What does checkpointing trade?');
 });
 
-/** A concept (or topic) on the map, by its name. */
+/** A concept's card, by its name (not by words elsewhere in it). */
 function node(page: Page, name: string): Locator {
-  return page.locator(`[data-testid="concept-node"][aria-label="Concept ${name}"], [data-testid="concept-node"][aria-label="Topic ${name}"]`);
+  return page.getByTestId('concept-node').filter({ has: page.locator('.concept-name', { hasText: new RegExp(`^\\W*${name}$`) }) });
 }
-/** A point on a concept's circle that is its own: its middle, or, if it holds others, near its top, above them. */
-async function spot(page: Page, name: string): Promise<{ x: number; y: number }> {
-  const n = node(page, name);
-  const b = await n.boundingBox();
-  if (!b) throw new Error(`“${name}” is not on the map`);
-  const holds = Number(await n.getAttribute('data-holds')) > 0;
-  return { x: b.x + b.width / 2, y: holds ? b.y + Math.max(14, b.height * 0.12) : b.y + b.height / 2 };
+/** A topic's heading, by its name. */
+function topic(page: Page, name: string): Locator {
+  return page.getByTestId('concepts-topic').filter({ has: page.locator('.concepts-topic-name', { hasText: new RegExp(`^\\W*${name}$`) }) });
 }
-/** The map in view (the ask bar at the foot covers its lower edge otherwise). */
-async function mapInView(page: Page): Promise<void> {
-  await page.getByTestId('concept-map').evaluate((el) => el.scrollIntoView({ block: 'start' }));
+/** The cards under a topic's heading (or under "In no topic"). */
+function inTopic(page: Page, name: string): Locator {
+  return page.getByTestId('concepts-section').filter({ has: topic(page, name) }).getByTestId('concept-node');
 }
-/** A concept chosen on the map: a click on its circle. */
+/** A concept chosen: a click on its card. */
 async function pick(page: Page, name: string): Promise<void> {
-  await mapInView(page);
-  const at = await spot(page, name);
-  await page.mouse.click(at.x, at.y);
+  await node(page, name).click();
 }
 /** A source with its own words. Sources are not read for concepts (ADR 0038); their words are found by search. */
 async function written(request: APIRequestContext, title: string, text: string): Promise<string> {
@@ -301,13 +295,14 @@ test('Concepts: read from threads and notes only, in levels (a topic holds conce
   await expect(page.getByTestId('concepts-empty')).toContainText('What is this room about?');
   await page.getByTestId('concepts-read').click();
   const nodes = page.getByTestId('concept-node');
-  await expect(nodes).toHaveCount(4);
-  // Three concepts in a topic the AI suggests; what was asked and written about most comes first in Review.
+  await expect(nodes).toHaveCount(3);
+  // Three concepts in a topic the AI suggests (its heading dashed until kept); a kind of one says so on its card.
   await expect(page.getByTestId('concepts-bar')).toHaveText('3 concepts in 1 topic · your 5 things · 4 to review');
-  await expect(node(page, 'Glowfin winters basics')).toHaveAttribute('data-status', 'suggested');
-  await expect(node(page, 'Glowfin winters basics')).toHaveAttribute('data-depth', '0');
-  await expect(node(page, 'moss blanket')).toHaveAttribute('data-depth', '1');
-  await expect(node(page, 'spring moss blanket')).toHaveAttribute('data-depth', '2');
+  await expect(topic(page, 'Glowfin winters basics')).toHaveAttribute('data-status', 'suggested');
+  await expect(inTopic(page, 'Glowfin winters basics')).toHaveCount(3);
+  await expect(node(page, 'spring moss blanket').getByTestId('concept-under')).toHaveText('a kind of moss blanket · suggested');
+  // In the topic, laid out by what comes first: a kind of a concept after it.
+  await expect(page.getByTestId('concepts-lane').last().getByTestId('concept-node')).toContainText(['spring moss blanket']);
   const review = page.getByTestId('concepts-review');
   await expect(review.getByTestId('review-idea')).toHaveText([/winter den/, /^\W*moss blanket/, /spring moss blanket/, /Glowfin winters basics/]);
   await expect(review.getByTestId('review-idea').nth(2)).toContainText('a kind of moss blanket');
@@ -318,17 +313,14 @@ test('Concepts: read from threads and notes only, in levels (a topic holds conce
 
   // Not this: gone. The topic kept; then the rest.
   await review.getByTestId('review-idea').filter({ hasText: 'spring moss blanket' }).getByTestId('review-not-this').click();
-  await expect(nodes).toHaveCount(3);
+  await expect(nodes).toHaveCount(2);
   await expect(page.getByTestId('concepts-bar')).toHaveText('2 concepts in 1 topic · your 5 things · 3 to review');
-  await review
-    .getByTestId('review-idea')
-    .filter({ has: page.locator('.review-name', { hasText: /^\W*Glowfin winters basics$/ }) })
-    .getByTestId('review-keep')
-    .click();
-  await expect(node(page, 'Glowfin winters basics')).toHaveAttribute('data-status', 'kept');
+  await topic(page, 'Glowfin winters basics').getByTestId('topic-keep').click();
+  await expect(topic(page, 'Glowfin winters basics')).toHaveAttribute('data-status', 'kept');
+  await expect(review.getByTestId('review-idea')).toHaveCount(2);
   await page.getByTestId('concepts-keep-all').click();
   await expect(page.getByTestId('concepts-bar')).toHaveText('2 concepts in 1 topic · your 5 things');
-  await expect(review).toContainText('Choose a concept on the map');
+  await expect(review).toContainText('Choose a concept to see');
 
   // A concept: where it is in the tree, your work on it, the words that define it, and where your sources use its words.
   await pick(page, 'moss blanket');
@@ -343,12 +335,12 @@ test('Concepts: read from threads and notes only, in levels (a topic holds conce
   await drawer.getByTestId('concept-words-place').first().click();
   await expect(page).toHaveURL(new RegExp(`#/s/${almanac}`));
   await expect.poll(() => highlighted(page, 'noema-found')).toContain('moss blanket');
-  // Back: the review is beside the map again when nothing is chosen.
+  // Back: the review is beside the cards again when nothing is chosen.
   await page.goBack();
   await expect(page.getByTestId('room-mode-concepts')).toHaveAttribute('aria-pressed', 'true');
 });
 
-test('the map: a concept put under another (by its list, or dragged onto it) and back at the top; found by name; zoomed into and out of; a concept you make gets materials found for it', async ({
+test('the cards: a concept put under another (by its list, or its card dragged onto another), in a topic (dragged onto its heading) and in none; found by name; a topic folded; a concept you make gets materials found for it', async ({
   page,
   request,
 }) => {
@@ -361,47 +353,44 @@ test('the map: a concept put under another (by its list, or dragged onto it) and
   await expect(page.getByTestId('concepts-bar')).toHaveText('3 concepts in 1 topic · your 5 things');
   const drawer = page.getByTestId('concept-drawer');
   const status = page.getByTestId('concepts-status');
+  const nodes = page.getByTestId('concept-node');
 
-  // Put under by its list, and back at the top.
+  // Put under by its list: a kind of it; then in no topic, under nothing.
   await pick(page, 'fern quilt');
   await drawer.getByTestId('concept-put-under').selectOption({ label: 'reed burrow' });
   await expect(drawer.getByTestId('concept-home')).toContainText('reed burrow');
-  await expect(node(page, 'fern quilt')).toHaveAttribute('data-depth', '2');
-  await drawer.getByTestId('concept-put-under').selectOption({ label: 'The top of the map' });
-  await expect(drawer.getByTestId('concept-home')).toHaveText('At the top of the map');
-  await expect(node(page, 'fern quilt')).toHaveAttribute('data-depth', '0');
-  // Dragged onto another.
-  await mapInView(page);
-  const from = await spot(page, 'summer fern quilt');
-  await page.mouse.move(from.x, from.y + 4);
-  await page.mouse.down();
-  const to = await spot(page, 'reed burrow');
-  await page.mouse.move(to.x, to.y + 6, { steps: 10 });
-  await expect(page.getByTestId('concept-map-drop-hint')).toHaveText('Put “summer fern quilt” under “reed burrow”');
-  await page.mouse.up();
+  await expect(node(page, 'fern quilt').getByTestId('concept-under')).toHaveText('a kind of reed burrow');
+  await drawer.getByTestId('concept-put-under').selectOption({ label: 'Nothing: in no topic' });
+  await expect(drawer.getByTestId('concept-home')).toHaveText('In no topic, under no concept');
+  await expect(inTopic(page, 'In no topic')).toContainText(['fern quilt']);
+  // A card dragged onto another: under it.
+  await drag(page, node(page, 'summer fern quilt'), node(page, 'reed burrow'));
   await expect(status).toContainText('“summer fern quilt” is under “reed burrow” now.');
-  await expect(node(page, 'summer fern quilt')).toHaveAttribute('data-depth', '2');
+  await expect(node(page, 'summer fern quilt').getByTestId('concept-under')).toHaveText('a kind of reed burrow');
+  // Onto a topic's heading: in it (the window tall enough for both to be seen as the card is carried).
+  await page.setViewportSize({ width: 1280, height: 1500 });
+  await page.getByTestId('concepts-find').evaluate((el) => el.scrollIntoView({ block: 'start' }));
+  await drag(page, node(page, 'fern quilt'), topic(page, 'Glowfin summers basics'));
+  await expect(status).toContainText('“fern quilt” is in “Glowfin summers basics” now.');
+  await expect(inTopic(page, 'Glowfin summers basics')).toHaveCount(3);
 
-  // Found by name: chosen, and the map zooms to it; Esc goes up to what holds it.
-  const map = page.getByTestId('concept-map');
-  const far = Number(await map.getAttribute('data-zoom'));
-  await page.getByTestId('concept-map-find').fill('burrow');
-  await expect(page.getByTestId('concept-map-match')).toHaveText([/reed burrow/]);
-  await page.getByTestId('concept-map-match').click();
-  await expect(drawer.getByTestId('concept-rename')).toContainText('reed burrow');
-  await expect(page.getByTestId('concept-map-trail')).toHaveText('All › Glowfin summers basics › reed burrow');
-  await expect.poll(async () => Number(await map.getAttribute('data-zoom'))).toBeGreaterThan(far);
-  await map.focus();
-  await page.keyboard.press('Escape');
-  await expect(page.getByTestId('concept-map-trail')).toHaveText('All › Glowfin summers basics');
-  await page.keyboard.press('Escape');
-  await expect(page.getByTestId('concept-map-trail')).toHaveText('All');
+  // Found by name: only the cards that match; then all again.
+  await page.getByTestId('concepts-find').fill('burrow');
+  await expect(nodes).toHaveCount(1);
+  await expect(page.getByTestId('concepts-found')).toContainText('1 concept found');
+  await page.getByTestId('concepts-found').getByRole('button', { name: 'Show all' }).click();
+  await expect(nodes).toHaveCount(3);
+  // A topic folded shut, and open again.
+  await topic(page, 'Glowfin summers basics').getByTestId('concepts-topic-toggle').click();
+  await expect(nodes).toHaveCount(0);
+  await topic(page, 'Glowfin summers basics').getByTestId('concepts-topic-toggle').click();
+  await expect(nodes).toHaveCount(3);
+  // The topic chosen: what it covers and what is in it.
+  await topic(page, 'Glowfin summers basics').getByTestId('concepts-topic-name').click();
+  await expect(drawer.getByTestId('concept-rename')).toContainText('Glowfin summers basics');
+  await expect(drawer.getByTestId('concept-inside-chip')).toHaveCount(2);
+  await drawer.getByTestId('concept-drawer-close').click();
   await expect(page.getByTestId('concepts-review')).toBeVisible();
-  const all = Number(await map.getAttribute('data-zoom'));
-  await page.getByTestId('concept-map-in').click();
-  await expect.poll(async () => Number(await map.getAttribute('data-zoom'))).toBeGreaterThan(all);
-  await page.getByTestId('concept-map-fit').click();
-  await expect.poll(async () => Number(await map.getAttribute('data-zoom'))).toBeCloseTo(all, 2);
 
   // A concept you make: the AI says what it covers, and finds what goes inside it and where your materials discuss it,
   // each waiting until you keep it.
@@ -409,7 +398,7 @@ test('the map: a concept put under another (by its list, or dragged onto it) and
   await page.getByTestId('concept-new-title').fill('quilt');
   await page.getByTestId('concept-new-title').press('Enter');
   await expect(drawer.getByTestId('concept-rename')).toContainText('quilt');
-  await expect(node(page, 'quilt')).toHaveCount(1);
+  await expect(node(page, 'quilt')).toContainText('Nothing under it yet');
   await drawer.getByTestId('concept-find').click();
   await expect(status).toContainText(/Found for “quilt”: .*dashed until you keep them\./);
   await expect(drawer.getByTestId('concept-scope')).toContainText('Fake scope: what “quilt” covers.');
@@ -443,7 +432,7 @@ test('a concept is split, merged back, linked by hand, asked about, and made a r
   await page.getByTestId('room-mode-concepts').click();
   await page.getByTestId('concepts-read').click();
   const nodes = page.getByTestId('concept-node');
-  await expect(nodes).toHaveCount(4);
+  await expect(nodes).toHaveCount(3);
   await page.getByTestId('concepts-keep-all').click();
   await expect(page.getByTestId('concepts-bar')).toHaveText('3 concepts in 1 topic · your 3 things');
   const drawer = page.getByTestId('concept-drawer');
@@ -455,7 +444,7 @@ test('a concept is split, merged back, linked by hand, asked about, and made a r
   await drawer.getByTestId('concept-split-pick').nth(1).check();
   await drawer.getByTestId('concept-split-title').fill('Licking spots');
   await drawer.getByTestId('concept-split-save').click();
-  await expect(nodes).toHaveCount(5);
+  await expect(nodes).toHaveCount(4);
   await expect(drawer.getByTestId('concept-rename')).toContainText('Licking spots');
   await expect(drawer.getByTestId('concept-source')).toHaveText([/Salt crust/]);
   await expect(drawer.getByTestId('concept-place')).toHaveText([/“Otters lick it from the reed raft\.”/]);
@@ -470,7 +459,7 @@ test('a concept is split, merged back, linked by hand, asked about, and made a r
   // Merged back: its name stays as another name.
   await drawer.getByTestId('concept-merge').click();
   await drawer.getByTestId('concept-merge-into').filter({ hasText: 'reed raft' }).click();
-  await expect(nodes).toHaveCount(4);
+  await expect(nodes).toHaveCount(3);
   await expect(drawer.getByTestId('concept-rename')).toContainText('reed raft');
   await expect(drawer.getByTestId('concept-source')).toHaveText([/Reed raft/, /Salt crust/]);
   await expect(drawer.getByTestId('concept-names')).toContainText('Licking spots');
@@ -483,7 +472,7 @@ test('a concept is split, merged back, linked by hand, asked about, and made a r
   // Made a room: a room inside now, in the sidebar's list; no longer a concept anywhere.
   await pick(page, 'salt crust');
   await drawer.getByTestId('concept-to-room').click();
-  await expect(nodes).toHaveCount(3);
+  await expect(nodes).toHaveCount(2);
   await page.getByTestId('room-mode-folders').click();
   await expect(page.locator('[data-testid=folder-row][data-key^="room:"]')).toHaveText([/salt crust/]);
   const { rooms } = await (await request.get(`/api/notebooks/${await notebookId(request)}/rooms`)).json();
@@ -580,4 +569,31 @@ test('a thread that grows is read again, only what changed; a concept shows from
   await page.getByTestId('concepts-read').click();
   await expect(page.getByTestId('concepts-read')).toHaveText(/Read again/);
   await expect(yours).toHaveCount(1);
+});
+
+test('a topic with many concepts shows the most worked with; the rest fold under “N more”', async ({ page, request }) => {
+  const stones = ['Amber', 'Basalt', 'Chert', 'Dolomite', 'Flint', 'Gneiss', 'Jasper', 'Marble', 'Onyx', 'Quartz'];
+  const beach = await noteWith(request, 'Beach stones', ...stones.map((s) => `**${s}** is a stone found on the shingle beach.`));
+  const asked1 = await freshThread(request);
+  await asked(request, asked1, 'Why is **Quartz** so common on the beach?');
+  const big = await room(request, 'Shingle beach', [
+    { kind: 'note', id: beach },
+    { kind: 'thread', id: asked1 },
+  ]);
+  await request.post(`/api/rooms/${big}/read`, { headers: H });
+  await expect.poll(async () => (await (await request.get(`/api/rooms/${big}`)).json()).reading?.phase, { timeout: 30_000 }).toBe('done');
+  await page.goto(`/#/room/${big}`);
+  await page.getByTestId('room-mode-concepts').click();
+  const cards = inTopic(page, 'Shingle beach basics');
+  await expect(cards).toHaveCount(8);
+  // The one asked about is among those shown.
+  await expect(node(page, 'quartz')).toHaveCount(1);
+  await expect(page.getByTestId('concepts-more')).toHaveText('▸ 2 more in Shingle beach basics, less worked with');
+  await page.getByTestId('concepts-more').click();
+  await expect(cards).toHaveCount(10);
+  // Found by name, a folded one shows too.
+  await page.getByRole('button', { name: /Show the 8 most worked with/ }).click();
+  await expect(cards).toHaveCount(8);
+  await page.getByTestId('concepts-find').fill('onyx');
+  await expect(page.getByTestId('concept-node')).toHaveText([/onyx/]);
 });

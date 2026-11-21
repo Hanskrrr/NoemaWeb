@@ -351,7 +351,6 @@ export const api = {
   conceptWords: (id: string) => call(ConceptWords, 'GET', `/api/concepts/${id}/words`),
   findForConcept: (id: string) => call(z.object({ inside: z.number(), materials: z.number() }), 'POST', `/api/concepts/${id}/find`, {}),
   keepConceptPlace: (id: string) => call(Ok, 'POST', `/api/concept-places/${id}/keep`, {}),
-  placeConcept: (roomId: string, id: string, x: number, y: number) => call(Ok, 'PUT', `/api/rooms/${roomId}/concept-xy`, { id, x, y }),
   materialConcepts: (kind: RoomItemRef['kind'], id: string) => call(MaterialConcepts, 'GET', `/api/items/${kind}/${id}/concepts`),
   notebookConcepts: (notebookId: string) =>
     call(

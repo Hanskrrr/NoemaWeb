@@ -75,3 +75,18 @@ He said "go ahead", then "go build it".
 - **To read sources again.** Stop leaving them out where the reader takes a room's materials (`RoomReader.findConcepts`) and where the room counts what is left to read (`roomView`'s `conceptsToRead`); the passage a thread asked about can stay.
 - **To drop the levels.** Stop calling the order step and ignore `concept_home`. The map then shows every concept at the top.
 - **To undo the migration.** Migration 028 only adds tables and columns, apart from its three deletes. Those can be undone only from a backup; the suggestions they removed come back if sources are read again.
+
+## Addendum, 2026-11-21: cards, topic by topic, instead of the map
+
+**Why.** The founder tried the map the same day: "its even harder to navigate and confusing. can we use the card preview instead". Asked which cards, he chose the concept cards of ADR 0037, grouped under topic headings.
+
+**What changed.**
+- **The map is gone.** `ConceptMap.tsx` and `conceptMap.ts` (with its tests) are removed. The Concepts view is cards again, as in ADR 0037: each card has its name, its definition, its things by kind, "in N materials · M places", what is still open, and Keep / Not this when suggested.
+- **Topic by topic.** Each topic is a heading: its name (chosen, it shows in the drawer), how many concepts, what it covers, and Keep / Not this when the AI suggested it. The heading folds the topic shut. Concepts in no topic come last, under "In no topic".
+- **In a topic, lanes by what comes first.** "Start here", "Builds on it", "Goes further" come from the links, as before; a kind or part of a concept is placed after it. Its card says "a kind of adam", and the concept it is under says "inside: adamw". Lines are drawn between cards of the same topic.
+- **Many concepts.** A topic shows its 8 most worked with (and the one chosen); the rest fold under "▸ N more in Optimization, less worked with". "Find a concept" filters the cards by name, across topics.
+- **Moving.** A card dragged onto another card puts it under that concept; onto a topic's heading, in that topic. "Put under…" in the drawer still does both, and "Nothing: in no topic" takes it out.
+- **Unchanged.** Review beside the cards (the drawer when a concept is chosen), Find materials, words found in sources, Stop, Folders and Path.
+- **Left in the server.** Where a concept was moved on the map (`concept_xy`, `PUT /api/rooms/:id/concept-xy`, `RoomView.conceptXY`) is no longer used by the app. It stays: migrations are not edited. It can be dropped with a later migration.
+
+**How to reverse.** Bring back `ConceptMap.tsx` and `conceptMap.ts` from commit `340b543` and render `ConceptMap` in `RoomConcepts` in place of the topic sections.

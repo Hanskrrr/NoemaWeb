@@ -6,13 +6,13 @@ How each push to GitHub (`Hanskrrr/NoemaWeb`) was made, so the next one can be m
 
 - **What.** The commits on top of `ca717e6`:
   - the concept-reading skill (ADR 0037: concepts read from every piece of every material, joined notebook-wide, updated by hash; migration 027), with its fix and docs;
-  - concepts in levels on a map that zooms (ADR 0038: threads and notes only, topics and kinds, a concept you make filled, Stop; migration 028), with its docs and this entry.
+  - concepts in levels (ADR 0038: threads and notes only, topics and kinds, a concept you make filled, Stop; migration 028), shown first on a map, then as cards topic by topic (its addendum), with its docs and this entry.
 
   No force needed: `origin/notebook-features` (`ca717e6`) is an ancestor.
 - **Checks before pushing.** See the handoffs 2026-11-20-concept-reading and 2026-11-21-concept-levels:
-  - `node --test` 401 pass in the sandbox, and on the Mac (its Linux shell) after the bundle;
+  - `node --test` 396 pass in the sandbox, and on the Mac (its Linux shell) after the bundle (401 before the map's tests went with it);
   - tsc clean;
-  - Playwright 92 of 92 in the sandbox;
+  - Playwright 93 of 93 in the sandbox (after the addendum);
   - `pnpm lint` (Biome) not run.
   - No `data/`, `.env`, `*.db`, settings, keys or local paths in the range; made-up text only.
   - The uncommitted `pnpm-lock.yaml` and AOCI setup on the Mac are left out, as before.

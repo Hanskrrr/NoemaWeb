@@ -102,3 +102,37 @@
   - whether the cost was what the room said.
 - **Find materials** on a concept he makes: are the materials found worth keeping, and are passing mentions left out?
 - **Later, if the map works:** a minimap, a page of the notebook's topics, and the Assistant seeing concepts.
+
+## Later the same day: cards, topic by topic, instead of the map
+
+**Why.** The founder found the map "even harder to navigate and confusing", and asked for the card preview instead. Asked which, he chose the concept cards of ADR 0037, grouped under topic headings. ADR 0038's addendum.
+
+**What changed.**
+- **Removed:** `ConceptMap.tsx`, `conceptMap.ts` and `conceptMap.test.ts`; the map's styles; `api.placeConcept`.
+- **`RoomConcepts.tsx`.**
+  - **The cards are back.** Name, definition, things by kind, "in N materials · M places", what is open, Keep / Not this. New on them: "a kind of adam" (under another concept), "inside: adamw", and "shares N" for the one chosen.
+  - **Topic by topic.**
+    - A heading per topic: name, count, what it covers, Keep / Not this when suggested; it folds.
+    - Topics with the most work first; "In no topic" last.
+    - In a topic, lanes by what comes first, with a kind or part after its concept, and lines between cards of the same topic.
+  - **Many concepts:** the 8 most worked with, the rest under "▸ N more in T, less worked with".
+  - **Find a concept:** filters the cards.
+  - **Dragging:** a card onto a card puts it under that concept; onto a heading, in that topic.
+  - **"Put under…"** has "Nothing: in no topic".
+  - **Review and the drawer** are unchanged, beside the cards.
+- **Left in the server:** `concept_xy` and its route, unused by the app now.
+
+**Verified.**
+- `node --test`: 396 pass (the 5 map tests went with the map).
+- tsc clean.
+- Playwright:
+  - `room-views.spec.ts`, 8 of 8. Concept tests:
+    - reading in levels: topic heading, kind-of on the card, lanes, Review, the topic kept from its heading;
+    - the cards: Put under by the list, a card dragged onto a card, a card dragged onto a topic heading, "In no topic", Find, folding a topic, the topic chosen, + Concept and Find materials, Folders and Path;
+    - split, merge, link, ask, make a room;
+    - a thread that grows;
+    - new: a topic of 10 concepts shows 8, then all, then 8, and Find shows a folded one.
+  - The full suite: 93 of 93.
+- Screenshots, light and dark: the cards from the top, scrolled, a concept chosen, Find.
+
+**Next.** On the Mac, read the room that seemed stuck, and see whether the cards topic by topic are easy to go through.

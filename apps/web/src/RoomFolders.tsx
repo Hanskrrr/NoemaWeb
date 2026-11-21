@@ -140,24 +140,50 @@ export function RoomFolders({
     const concepts = v.concepts.filter((c) => c.status === 'kept');
     const under = new Set(concepts.flatMap((c) => c.members as string[]));
     for (const c of concepts) conceptOf.set(c.id, holder);
-    const conceptRows: Row[] = concepts.map((c) => {
+    // The tree (ADR 0038): a kept concept is a folder at the top, or inside the kept concept (or topic) it is under.
+    const keptIds = new Set(concepts.map((c) => c.id));
+    const childrenOf = (id: string) => concepts.filter((c) => c.home?.id === id);
+    const conceptRow = (c: Concept, d: number, pre: string): Row => {
       const mine = c.members.flatMap((k) => byKey.get(k) ?? []);
+      const kids = childrenOf(c.id);
+      const topic = mine.length === 0 && kids.length > 0;
       return {
-        id: `${prefix}/concept:${c.id}`,
+        id: `${pre}/concept:${c.id}`,
         key: `concept:${c.id}`,
         folder: true,
-        depth,
+        depth: d,
         holder,
         chain,
         title: c.title,
-        kind: `Concept · ${mine.length}`,
+        kind: topic ? `Topic · ${kids.length}` : `Concept · ${mine.length}`,
         at: mine.reduce((at, x) => (x.marks.at > at ? x.marks.at : at), ''),
         open: mine.reduce((n, x) => n + (x.kind === 'note' ? 0 : x.marks.open), 0),
         also: c.also.flatMap((id) => rooms.rooms.find((r) => r.id === id) ?? []),
         concept: c,
         of: v,
       };
-    });
+    };
+    const conceptRows: Row[] = concepts.filter((c) => !c.home || !keptIds.has(c.home.id)).map((c) => conceptRow(c, depth, prefix));
+    /** What is inside an opened concept: the concepts under it (themselves folders), then its things. */
+    const insideConcept = (c: Concept, d: number, pre: string, seen: Set<string>): Row[] => {
+      const rowsHere: Row[] = [];
+      for (const k of sortRows(
+        childrenOf(c.id)
+          .filter((x) => !seen.has(x.id))
+          .map((x) => conceptRow(x, d, pre)),
+        sort,
+      )) {
+        rowsHere.push(k);
+        if (k.concept && opened.has(k.id)) rowsHere.push(...insideConcept(k.concept, d + 1, k.id, new Set([...seen, k.concept.id])));
+      }
+      const things = c.members
+        .flatMap((k) => byKey.get(k) ?? [])
+        .map((x) => ({
+          ...fileRow(v, x, d, chain, pre, c.id),
+          under: concepts.filter((o) => o.id !== c.id && o.members.includes(`${x.kind}:${x.id}` as never)),
+        }));
+      return [...rowsHere, ...sortRows(things, sort)];
+    };
     const folders: Row[] = v.doors.map((d) => {
       const total = d.counts.sources + d.counts.threads + d.counts.notes + d.counts.rooms;
       return {
@@ -180,16 +206,7 @@ export function RoomFolders({
     const out: Row[] = [];
     for (const r of sortRows([...conceptRows, ...folders, ...files], sort)) {
       out.push(r);
-      if (r.concept && opened.has(r.id)) {
-        const c = r.concept;
-        const inside = c.members
-          .flatMap((k) => byKey.get(k) ?? [])
-          .map((x) => ({
-            ...fileRow(v, x, depth + 1, chain, r.id, c.id),
-            under: concepts.filter((o) => o.id !== c.id && o.members.includes(`${x.kind}:${x.id}` as never)),
-          }));
-        out.push(...sortRows(inside, sort));
-      }
+      if (r.concept && opened.has(r.id)) out.push(...insideConcept(r.concept, r.depth + 1, r.id, new Set([r.concept.id])));
       if (r.door && opened.has(r.id)) {
         const child = inner.get(r.door.id);
         // Never round in circles (a room cannot be inside itself, but be safe).

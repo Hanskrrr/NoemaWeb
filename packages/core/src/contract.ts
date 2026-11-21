@@ -1209,6 +1209,8 @@ export const AddConceptPlaceRequest = z.object({ target: VaultTarget });
 /** A concept put under another, or in a topic (by you); `parent` null takes it to the top. */
 export const PutConceptUnderRequest = z.object({ parent: Id.nullable(), how: ConceptHowSchema.optional() });
 export const ConceptScopeRequest = z.object({ scope: z.string().trim().max(400) });
+/** A suggested place in the tree, kept or not: the concept's main one, or the one under `parent`. */
+export const ConceptHomeRequest = z.object({ parent: Id.optional() });
 /** Where a concept is on a room's map, if you moved it: relative to what it is under. */
 export const ConceptXYRequest = z.object({ id: Id, x: z.number().finite(), y: z.number().finite() });
 /** Where a concept's words appear in the notebook's sources (ADR 0038), by plain text search. */

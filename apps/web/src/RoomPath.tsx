@@ -29,10 +29,13 @@ export function RoomPath({
   links,
   empty,
   footer,
+  compact = false,
 }: {
   nodes: PathNode[];
   links: PathLink[];
   empty: ReactNode;
+  /** One of several paths (a topic's): with no order yet, a line of what is in it, not the whole explanation. */
+  compact?: boolean;
   /** Said under the path: with concepts, the things under none. */
   footer?: ReactNode;
 }) {
@@ -120,7 +123,18 @@ export function RoomPath({
   };
   return (
     <div className="room-path-view" data-testid="room-path-view">
-      {path.steps.length === 0 ? (
+      {path.steps.length === 0 && compact ? (
+        <p className="path-loose" data-testid="path-loose">
+          <span className="hint">No order yet:</span>
+          {nodes.map((n) => (
+            <button key={n.key} type="button" className="path-chip" onClick={n.onOpen} onContextMenu={n.onMenu} data-testid="path-loose-item">
+              <span aria-hidden>{n.glyph} </span>
+              {n.title || 'Untitled'}
+            </button>
+          ))}
+          <span className="hint">Keep links between them (what builds on what), and they take their order.</span>
+        </p>
+      ) : path.steps.length === 0 ? (
         <div className="path-empty" data-testid="path-empty">
           <p className="empty-title">No order yet</p>
           <p className="hint">

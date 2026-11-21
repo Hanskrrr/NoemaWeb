@@ -1,30 +1,32 @@
-// A room by its concepts (ADRs 0036, 0037): the key ideas its materials
-// discuss, read from every piece of them, as nodes laid out by what comes
-// first. A concept belongs to the notebook: it says how many materials discuss
-// it and in how many places, and its drawer lists each material with its places
-// (what it does there, what it says, the words, which open where they are).
-// Things under several concepts say so, and choosing a concept lights up those
-// it shares things with. Suggested concepts are dashed: Keep, Not this, Keep
-// all. When materials change, the bar says so: Update reads only what changed.
-// Drag a thing onto a concept to move it there (its places go with it); with ⌥
-// it stays in both.
+// A room by its concepts (ADRs 0036 to 0038): the key ideas its threads and
+// notes discuss, on a map you zoom: topics from far, the concepts in them
+// closer, concepts inside concepts closer still, each sized by the learner's
+// work on it. A concept belongs to the notebook: it says how many materials
+// discuss it and in how many places, and its drawer lists each material with its
+// places, where its words appear in the sources, what it is under and what is
+// inside it. New ideas and new places wait in Review. When threads or notes
+// change, the bar says so: Update reads only what changed. Drag a thing onto a
+// concept to move it there (its places go with it); with ⌥ it stays in both.
 
 import {
-  CONCEPTS_SHOWN,
   type Concept,
   type ConceptLink,
   type ConceptPlace,
+  type ConceptWords,
+  HOW_WORDS,
   LINK_WORDS,
   type LinkKind,
-  pathOrder,
   type RoomItemRef,
   type RoomKind,
+  type RoomReading,
   type RoomView as RoomViewData,
   ulid,
   type VaultTarget,
+  workWeight,
 } from '@noema/core';
-import { type DragEvent, type MouseEvent, type ReactNode, useLayoutEffect, useRef, useState } from 'react';
+import { type DragEvent, type MouseEvent, type ReactNode, useEffect, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
+import { ConceptMap } from './ConceptMap.tsx';
 import { openMenu } from './ContextMenu.tsx';
 import { draggableItem, draggedFrom, droppedItem, FROM_ROOM_MIME, isItemDrag } from './drag.ts';
 import { EditableTitle } from './EditableTitle.tsx';
@@ -33,17 +35,21 @@ import { Orb } from './LivingFrame.tsx';
 import { roomMenu, useRooms } from './Rooms.tsx';
 import { asRead, CONCEPT_GLYPH, GLYPH, plural, type RoomCard, refOf } from './roomText.ts';
 
-const LANES = ['Start here', 'Builds on it', 'Goes further'];
 const QUOTE_FROM: Record<VaultTarget['kind'], string> = { thread: 'your thread', source: 'your source', note: 'your note' };
 const ROLE_WORD: Record<ConceptPlace['role'], string> = { defines: 'defines it', explains: 'explains it', uses: 'uses it', example: 'an example', asks: 'asks about it' };
-type Box = { x: number; y: number; w: number; h: number };
+const CONCEPT_LINK_CHOICES: LinkKind[] = ['builds-on', 'contrasts-with', 'example-of', 'explains'];
+
+/** A topic: a concept that holds others and no thing of its own (ADR 0038). */
+export const isTopic = (c: Concept, all: readonly Concept[]) => c.members.length === 0 && all.some((o) => o.home?.id === c.id);
 
 export function RoomConcepts({
   view,
   selected,
   onSelect,
   busy,
+  reading,
   onRead,
+  onStop,
   onOpen,
   onOpenTarget,
   onAskAbout,
@@ -52,8 +58,10 @@ export function RoomConcepts({
   selected: string | null;
   onSelect: (id: string | null) => void;
   busy: boolean;
+  reading: RoomReading | null;
   /** Read the room with AI: summaries, links, concepts (only what changed), brief. */
   onRead: () => void;
+  onStop: () => void;
   onOpen: (kind: RoomKind, id: string) => void;
   onOpenTarget: (target: VaultTarget) => void;
   /** Start a question in the room about something. */
@@ -65,69 +73,46 @@ export function RoomConcepts({
   const [over, setOver] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [naming, setNaming] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
-  const [boxes, setBoxes] = useState<Map<string, Box>>(new Map());
-  const map = useRef<HTMLDivElement>(null);
 
   const cards = new Map<string, RoomCard>(view.clusters.flatMap((c) => c.cards.map((x) => [`${x.kind}:${x.id}`, x] as const)));
   const all = view.concepts;
-  // Kept ones always; suggested ones, the most present first, up to a readable number. The rest fold away.
-  const kept = all.filter((c) => c.status === 'kept');
-  const room = Math.max(0, CONCEPTS_SHOWN - kept.length);
-  const suggestedAll = all.filter((c) => c.status === 'suggested');
-  const concepts = [...kept, ...suggestedAll.slice(0, room)];
-  const more = suggestedAll.slice(room);
   const byId = new Map(all.map((c) => [c.id, c]));
-  const shown = new Set(concepts.map((c) => c.id));
-  const current = (selected && byId.get(selected)) || concepts[0] || null;
-  const suggested = suggestedAll.length;
-  const under = new Set(concepts.flatMap((c) => c.members as string[]));
+  const ideas = all.filter((c) => !isTopic(c, all));
+  const topics = all.filter((c) => isTopic(c, all));
+  const current = (selected && byId.get(selected)) || null;
+  const under = new Set(all.flatMap((c) => c.members as string[]));
   const tray = [...cards.keys()].filter((k) => !under.has(k));
+  const shown = new Set(all.map((c) => c.id));
   const links = view.conceptLinks.filter((l) => shown.has(l.from) && shown.has(l.to));
-  /** The other concepts shown that hold a thing. */
-  const alsoUnder = (key: string, except: string) => concepts.filter((c) => c.id !== except && (c.members as string[]).includes(key));
-  /** How many things the concept chosen shares with each other one. */
-  const sharing = new Map<string, number>();
-  if (current) {
-    for (const c of concepts) {
-      if (c.id === current.id) continue;
-      const n = c.members.filter((k) => current.members.includes(k)).length;
-      if (n > 0) sharing.set(c.id, n);
-    }
-  }
+  /** The other concepts that hold a thing. */
+  const alsoUnder = (key: string, except: string) => all.filter((c) => c.id !== except && (c.members as string[]).includes(key));
 
-  // Laid out by what comes first: the lanes are the path's depths (ADR 0035), the third holds all that go further.
-  const path = pathOrder(
-    concepts.map((c) => c.id),
-    links.map((l) => ({ from: l.from, to: l.to, kind: l.kind })),
-  );
-  const lanes: string[][] = [[], [], []];
-  for (const s of path.steps) for (const id of [s.key, ...s.beside]) lanes[Math.min(2, s.level)]?.push(id);
-  for (const id of path.loose) lanes[0]?.push(id);
-  const laneCount = lanes[2]?.length ? 3 : lanes[1]?.length ? 2 : 1;
-
-  // Where each concept is, for the lines between them.
-  useLayoutEffect(() => {
-    if (!map.current) return;
-    const origin = map.current.getBoundingClientRect();
-    const next = new Map<string, Box>();
-    for (const el of map.current.querySelectorAll<HTMLElement>('[data-concept-id]')) {
-      const r = el.getBoundingClientRect();
-      next.set(el.dataset.conceptId as string, { x: r.left - origin.left, y: r.top - origin.top, w: r.width, h: r.height });
-    }
-    const same =
-      next.size === boxes.size &&
-      [...next].every(([k, b]) => {
-        const o = boxes.get(k);
-        return o && Math.abs(o.x - b.x) < 1 && Math.abs(o.y - b.y) < 1 && Math.abs(o.w - b.w) < 1 && Math.abs(o.h - b.h) < 1;
-      });
-    if (!same) setBoxes(next);
+  // Review (ADR 0038): new ideas and new places, the most worked with first; and things that connect to nothing here.
+  const newIdeas = all.filter((c) => c.status === 'suggested').sort((a, b) => workWeight(b.work) - workWeight(a.work) || a.title.localeCompare(b.title));
+  const newPlaces = all
+    .filter((c) => c.status === 'kept')
+    .flatMap((c) => [...(c.home?.status === 'suggested' ? [{ c, home: c.home, main: true }] : []), ...c.alsoUnder.filter((h) => h.status === 'suggested').map((home) => ({ c, home, main: false }))])
+    .filter((x) => byId.has(x.home.id));
+  const alone = [...cards.keys()].filter((k) => {
+    const mine = ideas.filter((c) => (c.members as string[]).includes(k));
+    if (mine.length === 0) return false;
+    const others = ideas.filter((c) => !mine.includes(c) && c.members.some((m) => m !== k));
+    const near = new Set(others.flatMap((c) => (c.home ? [c.id, c.home.id] : [c.id])));
+    return mine.every(
+      (c) =>
+        c.members.every((m) => m === k) &&
+        !links.some((l) => l.from === c.id || l.to === c.id) &&
+        !(c.home && near.has(c.home.id)) &&
+        !others.some((o) => o.home?.id === c.id),
+    );
   });
+  const reviewCount = newIdeas.length + newPlaces.length;
 
   const run = async (what: () => Promise<unknown>, problem: string) => {
+    // What the last change said goes as the next one starts; what this one says (set inside it) stays.
+    setStatus(null);
     try {
       await what();
-      setStatus(null);
       await rooms.refresh();
     } catch (err) {
       setStatus(err instanceof ApiFailure ? err.message : problem);
@@ -191,147 +176,28 @@ export function RoomConcepts({
       </span>
     );
   };
-
-  const counts = (c: Concept) => {
-    const n: Record<RoomKind, number> = { thread: 0, source: 0, note: 0 };
-    for (const k of c.members) n[refOf(k).kind] += 1;
-    return (['thread', 'source', 'note'] as const)
-      .filter((k) => n[k] > 0)
-      .map((k) => (
-        <span key={k} className={`concept-count kind-${k}`}>
-          {GLYPH[k]} {n[k]}
-        </span>
-      ));
-  };
   const openOf = (c: Concept) =>
     (view.brief?.open ?? [])
       .filter((o) => o.item && o.item.kind !== 'room' && c.members.includes(`${o.item.kind}:${o.item.id}` as never))
       .map((o) => o.question);
 
-  const node = (c: Concept) => {
-    const isOn = current?.id === c.id;
-    const shares = sharing.get(c.id);
-    const open = openOf(c);
-    return (
-      // biome-ignore lint/a11y/useSemanticElements: a node that takes things dropped on it, with buttons in it
-      <div
-        key={c.id}
-        role="button"
-        tabIndex={0}
-        className={`concept-node${c.status === 'suggested' ? ' is-suggested' : ''}${isOn ? ' is-selected' : ''}${over === c.id ? ' is-target' : ''}${shares ? ' is-sharing' : ''}`}
-        onClick={() => onSelect(c.id)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            onSelect(c.id);
-          }
-        }}
-        onDragOver={(e) => {
-          if (!accepts(e)) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = e.altKey ? 'copy' : 'move';
-          setOver(c.id);
-        }}
-        onDragLeave={() => setOver((o) => (o === c.id ? null : o))}
-        onDrop={(e) => {
-          if (!accepts(e)) return;
-          e.preventDefault();
-          setOver(null);
-          void dropOn(e, c.id);
-        }}
-        data-concept-id={c.id}
-        data-status={c.status}
-        data-testid="concept-node"
-      >
-        {shares && (
-          <span className="concept-shares" data-testid="concept-shares">
-            shares {shares}
-          </span>
-        )}
-        <p className="concept-name">
-          <span className="concept-glyph" aria-hidden>
-            {CONCEPT_GLYPH}
-          </span>{' '}
-          {c.title}
-        </p>
-        {c.definition && <p className="concept-def">{c.definition}</p>}
-        <p className="concept-counts">
-          {c.members.length ? counts(c) : <span className="hint">Nothing under it yet</span>}
-          <span className="concept-where" data-testid="concept-where">
-            {c.lost ? 'no longer found in your materials' : `in ${plural(c.materials, 'material')} · ${plural(c.places, 'place')}`}
-          </span>
-        </p>
-        {open[0] && <p className="concept-open">? {open[0]}</p>}
-        {c.status === 'suggested' && (
-          <p className="concept-suggest">
-            <span>Suggested by the AI ·</span>
-            <button
-              type="button"
-              className="quiet inline"
-              onClick={(e) => {
-                e.stopPropagation();
-                void run(() => api.keepConcept(c.id), 'It could not be kept.');
-              }}
-              data-testid="concept-keep"
-            >
-              Keep
-            </button>
-            <span>·</span>
-            <button
-              type="button"
-              className="quiet inline"
-              onClick={(e) => {
-                e.stopPropagation();
-                void run(() => api.dropConcept(c.id), 'It could not be dismissed.');
-              }}
-              data-testid="concept-not-this"
-            >
-              Not this
-            </button>
-          </p>
-        )}
-      </div>
-    );
-  };
-
-  // The lines: from what comes first to what follows; side by side, dashed. Suggested ones fainter.
-  const lines = links.flatMap((l) => {
-    const a = boxes.get(l.to);
-    const b = boxes.get(l.from);
-    if (!a || !b) return [];
-    const across = Math.abs(a.x - b.x) > 20;
-    let d: string;
-    let mid: { x: number; y: number };
-    if (across) {
-      const right = b.x > a.x;
-      const p1 = { x: right ? a.x + a.w : a.x, y: a.y + Math.min(a.h / 2, 34) };
-      const p2 = { x: right ? b.x : b.x + b.w, y: b.y + Math.min(b.h / 2, 34) };
-      const bend = Math.max(30, Math.abs(p2.x - p1.x) / 2) * (right ? 1 : -1);
-      d = `M${p1.x},${p1.y} C${p1.x + bend},${p1.y} ${p2.x - bend},${p2.y} ${p2.x},${p2.y}`;
-      mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-    } else {
-      const down = b.y > a.y;
-      const p1 = { x: a.x + a.w * 0.62, y: down ? a.y + a.h : a.y };
-      const p2 = { x: b.x + b.w * 0.62, y: down ? b.y : b.y + b.h };
-      d = `M${p1.x},${p1.y} L${p2.x},${p2.y}`;
-      mid = { x: p1.x, y: (p1.y + p2.y) / 2 };
-    }
-    return [{ l, d, mid }];
-  });
-
   const toRead = view.conceptsToRead;
   const things = cards.size;
   const keepAll = () => void run(() => api.keepAllConcepts(roomId), 'They could not be kept.');
+  const reading_ = reading?.phase === 'concepts' && reading.total > 0 ? reading : null;
 
   return (
     <div className="room-concepts" data-testid="room-concepts">
       <div className="concepts-bar">
         <Orb size="small" />
         <p className="concepts-bar-text" data-testid="concepts-bar">
-          {all.length > 0 ? (
+          {busy && reading_ ? (
+            `Reading your threads and notes: ${Math.min(reading_.done, reading_.total)} of ${plural(reading_.total, 'piece')}`
+          ) : all.length > 0 ? (
             <>
-              <b>{plural(all.length, 'concept')}</b> in your {plural(things, 'thing')}
-              {suggested > 0 && ` · ${suggested} suggested`}
+              <b>{plural(ideas.length, 'concept')}</b>
+              {topics.length > 0 && ` in ${plural(topics.length, 'topic')}`} · your {plural(things, 'thing')}
+              {reviewCount > 0 && ` · ${reviewCount} to review`}
             </>
           ) : busy ? (
             'Reading the room…'
@@ -339,7 +205,12 @@ export function RoomConcepts({
             'No concepts yet'
           )}
         </p>
-        {suggested > 0 && (
+        {busy && (
+          <button type="button" className="quiet" onClick={onStop} data-testid="concepts-stop">
+            Stop
+          </button>
+        )}
+        {reviewCount > 0 && !busy && (
           <button type="button" className="ai-button is-strong" onClick={keepAll} data-testid="concepts-keep-all">
             <Orb size="small" />
             Keep all
@@ -373,6 +244,16 @@ export function RoomConcepts({
           </button>
         )}
       </div>
+      {busy && reading_ && (
+        <div className="concepts-progress" aria-hidden>
+          <span style={{ width: `${Math.round((100 * reading_.done) / reading_.total)}%` }} />
+        </div>
+      )}
+      {!busy && reading?.stopped && (
+        <p className="concepts-changed" data-testid="concepts-stopped">
+          Stopped. What was read is kept; Read again carries on from there.
+        </p>
+      )}
       {all.length > 0 && toRead.materials > 0 && !busy && (
         <p className="concepts-changed" data-testid="concepts-changed">
           {toRead.changed > 0
@@ -395,77 +276,40 @@ export function RoomConcepts({
         <div className="concepts-empty" data-testid="concepts-empty">
           <p className="empty-title">What is this room about?</p>
           <p className="hint">
-            Read with AI, and it reads every piece of your threads, sources and notes for the ideas they discuss, with the
-            words where they do, and joins them across your notebook: the same idea in a paper and in a thread is one
-            concept. You keep them, rename, merge or split them. When a material changes, only what changed is read again
-            {toRead.pieces > 0 && ` (this room: about ${plural(toRead.pieces + 2, 'call')} the first time)`}.
+            Read with AI, and it reads every piece of your threads and notes for the ideas they discuss, with the words
+            where they do, joins them across your notebook, and puts them in order: a few topics, the concepts in them.
+            Sources are not read: each concept shows where its words appear in them. You keep, rename, merge or split
+            them. When a thread or note changes, only what changed is read again
+            {toRead.pieces > 0 && ` (this room: about ${plural(toRead.pieces + 3, 'call')} the first time)`}.
           </p>
         </div>
       ) : (
-        <div className="concepts-body">
-          <div className="concepts-map" ref={map}>
-            <svg className="concepts-lines" aria-hidden>
-              <defs>
-                <marker id="concept-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-                  <path d="M0,0 L10,5 L0,10 z" />
-                </marker>
-              </defs>
-              {lines.map(({ l, d }) => (
-                <path
-                  key={l.id}
-                  d={d}
-                  className={`concept-line kind-${l.kind}${l.status === 'suggested' ? ' is-suggested' : ''}`}
-                  markerEnd={l.kind === 'contrasts-with' ? undefined : 'url(#concept-arrow)'}
-                />
-              ))}
-            </svg>
-            {lines.map(({ l, mid }) => (
-              <span
-                key={l.id}
-                className={`concept-line-label kind-${l.kind}${l.status === 'suggested' ? ' is-suggested' : ''}`}
-                style={{ left: mid.x, top: mid.y }}
-                title={l.why ?? undefined}
-                data-testid="concept-line-label"
-              >
-                {l.kind === 'contrasts-with' ? 'contrasts' : LINK_WORDS[l.kind]}
-              </span>
-            ))}
-            <div className="concepts-lanes" style={{ gridTemplateColumns: `repeat(${laneCount}, minmax(0, 1fr))` }}>
-              {lanes.slice(0, laneCount).map((lane, i) => (
-                <div key={LANES[i]} className="concepts-lane" data-testid="concepts-lane">
-                  <p className="concepts-lanehead">{laneCount === 1 ? 'Not in an order yet' : LANES[i]}</p>
-                  {lane.map((id) => {
-                    const c = byId.get(id);
-                    return c ? node(c) : null;
-                  })}
-                </div>
-              ))}
+        <div className="concepts-body has-drawer">
+          <div className="concepts-main">
+            <div className="concepts-mapbox">
+              <ConceptMap
+                concepts={all}
+                links={links}
+                selected={current?.id ?? null}
+                onSelect={onSelect}
+                saved={view.conceptXY}
+                onMove={(id, x, y) => void run(() => api.placeConcept(roomId, id, x, y), 'It could not be moved.')}
+                onPutUnder={(id, parent) =>
+                  void run(async () => {
+                    await api.putConceptUnder(id, parent);
+                    setStatus(`“${byId.get(id)?.title}” is under “${byId.get(parent)?.title}” now.`);
+                  }, 'It could not be put there.')
+                }
+                over={over}
+                onOverChange={setOver}
+                acceptsThing={accepts}
+                onDropThing={(e, id) => void dropOn(e, id)}
+              />
             </div>
-            {more.length > 0 && (
-              <div className="concepts-more" data-testid="concepts-more">
-                <button type="button" className="quiet inline" onClick={() => setMoreOpen((o) => !o)} aria-expanded={moreOpen}>
-                  {moreOpen ? '▾' : '▸'} More ideas here · {more.length}
-                </button>
-                {moreOpen && (
-                  <ul className="concepts-more-list">
-                    {more.map((c) => (
-                      <li key={c.id}>
-                        <button type="button" className="quiet inline" onClick={() => onSelect(c.id)}>
-                          {CONCEPT_GLYPH} {c.title}
-                        </button>
-                        <span className="hint">
-                          {' '}
-                          · {plural(c.materials, 'material')} ·{' '}
-                        </span>
-                        <button type="button" className="quiet inline" onClick={() => void run(() => api.keepConcept(c.id), 'It could not be kept.')}>
-                          Keep
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
+            <p className="hint concepts-map-hint">
+              Scroll or pinch to zoom · drag to move around · double-click a concept to go in, Esc to come out · drag a
+              concept onto another to put it under it.
+            </p>
             {/* biome-ignore lint/a11y/noStaticElementInteractions: a place to drop a thing to take it out of its concept */}
             <div
               className={`concepts-tray${over === 'tray' ? ' is-target' : ''}`}
@@ -516,14 +360,81 @@ export function RoomConcepts({
               )}
             </div>
           </div>
+          {!current && (
+            <aside className="concepts-side" aria-label="To review" data-testid="concepts-review">
+              {reviewCount + alone.length > 0 ? (
+                <>
+                  <p className="concepts-kicker">Review · {plural(reviewCount, 'new idea')}</p>
+                  <p className="hint">The most worked with first; on the map they are dashed. Choose one to see it.</p>
+                  <ul className="concepts-review-list">
+                    {newIdeas.map((c) => (
+                      <li key={c.id} data-testid="review-idea">
+                        <button type="button" className="quiet inline review-name" onClick={() => onSelect(c.id)}>
+                          {CONCEPT_GLYPH} {c.title}
+                        </button>
+                        <span className="hint review-where">
+                          {isTopic(c, all) ? 'a topic' : c.home ? `${HOW_WORDS[c.home.how]} ${byId.get(c.home.id)?.title ?? ''}` : 'at the top'}
+                          {!isTopic(c, all) && ` · ${workLine(c)}`}
+                        </span>
+                        <span className="review-actions">
+                          <button type="button" className="quiet inline" onClick={() => void run(() => api.keepConcept(c.id), 'It could not be kept.')} data-testid="review-keep">
+                            Keep
+                          </button>
+                          {' · '}
+                          <button type="button" className="quiet inline" onClick={() => void run(() => api.dropConcept(c.id), 'It could not be dismissed.')} data-testid="review-not-this">
+                            Not this
+                          </button>
+                        </span>
+                      </li>
+                    ))}
+                    {newPlaces.map(({ c, home, main }) => (
+                      <li key={`${c.id}>${home.id}`} data-testid="review-place">
+                        <button type="button" className="quiet inline review-name" onClick={() => onSelect(c.id)}>
+                          ↳ {c.title}
+                        </button>
+                        <span className="hint review-where">
+                          {HOW_WORDS[home.how]} {byId.get(home.id)?.title}
+                          {main ? '' : ' (also)'}
+                        </span>
+                        <span className="review-actions">
+                          <button type="button" className="quiet inline" onClick={() => void run(() => api.keepConceptHome(c.id, home.id), 'It could not be kept.')} data-testid="review-place-keep">
+                            Keep
+                          </button>
+                          {' · '}
+                          <button type="button" className="quiet inline" onClick={() => void run(() => api.dismissConceptHome(c.id, home.id), 'It could not be dismissed.')} data-testid="review-place-not">
+                            Not this
+                          </button>
+                        </span>
+                      </li>
+                    ))}
+                    {alone.map((k) => (
+                      <li key={k} className="review-alone" data-testid="review-alone">
+                        “{cards.get(k)?.title || 'Untitled'}” shares no concept with the rest of this room.
+                      </li>
+                    ))}
+                  </ul>
+                  {reviewCount > 0 && (
+                    <button type="button" className="ai-button is-strong" onClick={keepAll}>
+                      <Orb size="small" />
+                      Keep all
+                    </button>
+                  )}
+                </>
+              ) : (
+                <p className="hint">Choose a concept on the map to see what it is, where your materials discuss it, and what is inside it.</p>
+              )}
+            </aside>
+          )}
           {current && (
             <ConceptDrawer
               key={current.id}
               concept={current}
-              others={concepts.filter((c) => c.id !== current.id)}
+              all={all}
+              others={all.filter((c) => c.id !== current.id)}
               links={links.filter((l) => l.from === current.id || l.to === current.id)}
               open={openOf(current)}
               run={run}
+              say={setStatus}
               roomId={roomId}
               onOpen={onOpen}
               onOpenTarget={onOpenTarget}
@@ -533,6 +444,7 @@ export function RoomConcepts({
               chips={chips}
               drag={drag}
               thingMenu={thingMenu}
+              reviewCount={reviewCount}
             />
           )}
         </div>
@@ -541,13 +453,26 @@ export function RoomConcepts({
   );
 }
 
+/** The learner's work on a concept, in words. */
+export function workLine(c: Concept): string {
+  return [
+    c.work.questions ? plural(c.work.questions, 'question') : '',
+    c.work.notes ? plural(c.work.notes, 'note') : '',
+    `in ${plural(c.materials, 'material')}`,
+  ]
+    .filter((s) => s)
+    .join(' · ');
+}
+
 /** The concept chosen: its words, the materials that discuss it and where, its links, and what can be done with it. */
 function ConceptDrawer({
   concept: c,
+  all,
   others,
   links,
   open,
   run,
+  say,
   roomId,
   onOpen,
   onOpenTarget,
@@ -557,12 +482,16 @@ function ConceptDrawer({
   chips,
   drag,
   thingMenu,
+  reviewCount,
 }: {
+  reviewCount: number;
   concept: Concept;
+  all: Concept[];
   others: Concept[];
   links: ConceptLink[];
   open: string[];
   run: (what: () => Promise<unknown>, problem: string) => Promise<void>;
+  say: (text: string | null) => void;
   roomId: string;
   onOpen: (kind: RoomKind, id: string) => void;
   onOpenTarget: (target: VaultTarget) => void;
@@ -577,11 +506,44 @@ function ConceptDrawer({
   const [split, setSplit] = useState<Set<string>>(new Set());
   const [splitName, setSplitName] = useState('');
   const [linkTo, setLinkTo] = useState<{ to: string; kind: LinkKind }>({ to: others[0]?.id ?? '', kind: 'builds-on' });
+  const [scoping, setScoping] = useState(false);
+  const [finding, setFinding] = useState(false);
+  const [words, setWords] = useState<ConceptWords | null>(null);
   const suggested = c.status === 'suggested';
+  const topic = isTopic(c, all);
+  const byId = new Map(all.map((x) => [x.id, x]));
+  // What is inside it: concepts it holds, its main place or another.
+  const inside = all.filter((x) => x.home?.id === c.id || x.alsoUnder.some((h) => h.id === c.id));
+  // Where it could go: not itself, nor anything inside it.
+  const insideAll = new Set<string>();
+  const down = (id: string) => {
+    for (const x of all) if (x.home?.id === id && !insideAll.has(x.id)) {
+      insideAll.add(x.id);
+      down(x.id);
+    }
+  };
+  down(c.id);
+  const places = others.filter((o) => !insideAll.has(o.id) && o.id !== c.home?.id);
+  // Where its words appear in the sources: plain text search, asked for when it is opened.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: asked again when its names change
+  useEffect(() => {
+    let live = true;
+    if (topic) return;
+    void api.conceptWords(c.id).then(
+      (w) => live && setWords(w),
+      () => live && setWords(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [c.id, c.title, c.names.join('|'), topic]);
   return (
     <aside className="concepts-drawer" aria-label={`The concept “${c.title}”`} data-testid="concept-drawer">
+      <button type="button" className="quiet inline concepts-back" onClick={() => onSelect(null)} data-testid="concept-drawer-close">
+        ← {reviewCount > 0 ? `Review · ${plural(reviewCount, 'new idea')}` : 'Close'}
+      </button>
       <p className="concepts-kicker">
-        {CONCEPT_GLYPH} Concept · {suggested ? 'suggested by the AI' : c.by === 'ai' ? 'kept' : 'yours'}
+        {CONCEPT_GLYPH} {topic ? 'Topic' : 'Concept'} · {suggested ? 'suggested by the AI' : c.by === 'ai' ? 'kept' : 'yours'}
       </p>
       <EditableTitle
         title={c.title}
@@ -594,6 +556,114 @@ function ConceptDrawer({
         <p className="concept-names hint" data-testid="concept-names">
           Also called {c.names.map((n) => `“${n}”`).join(', ')}
         </p>
+      )}
+      <p className={`concept-home${c.home?.status === 'suggested' ? ' is-suggested' : ''}`} data-testid="concept-home">
+        {c.home ? (
+          <>
+            {c.home.how === 'in' ? 'In' : HOW_WORDS[c.home.how].replace(/^a/, 'A')}{' '}
+            <button type="button" className="quiet inline" onClick={() => c.home && onSelect(c.home.id)}>
+              {CONCEPT_GLYPH} {byId.get(c.home.id)?.title ?? ''}
+            </button>
+            {c.home.status === 'suggested' && (
+              <>
+                <span className="hint"> · suggested · </span>
+                <button type="button" className="quiet inline" onClick={() => void run(() => api.keepConceptHome(c.id), 'It could not be kept.')} data-testid="concept-home-keep">
+                  Keep
+                </button>
+                <span className="hint"> · </span>
+                <button type="button" className="quiet inline" onClick={() => void run(() => api.dismissConceptHome(c.id), 'It could not be dismissed.')} data-testid="concept-home-not">
+                  Not this
+                </button>
+              </>
+            )}
+          </>
+        ) : (
+          <span className="hint">At the top of the map</span>
+        )}
+        {c.alsoUnder.length > 0 && (
+          <span className="hint">
+            {' '}
+            · also under {c.alsoUnder.map((h) => `${byId.get(h.id)?.title ?? ''}${h.status === 'suggested' ? ' (suggested)' : ''}`).join(', ')}
+          </span>
+        )}
+      </p>
+      <p className="concept-put">
+        <select
+          value=""
+          onChange={(e) => {
+            const to = e.target.value;
+            if (!to) return;
+            void run(() => api.putConceptUnder(c.id, to === '-' ? null : to), 'It could not be put there.');
+          }}
+          aria-label="Put it under another concept or in a topic"
+          data-testid="concept-put-under"
+        >
+          <option value="">Put under…</option>
+          {c.home && <option value="-">The top of the map</option>}
+          {places.map((o) => (
+            <option key={o.id} value={o.id}>
+              {isTopic(o, all) ? 'in ' : ''}
+              {o.title}
+            </option>
+          ))}
+        </select>
+      </p>
+      {(c.scope || scoping) &&
+        (scoping ? (
+          <form
+            className="concept-scope-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const scope = String(new FormData(e.currentTarget).get('scope') ?? '').trim();
+              setScoping(false);
+              void run(() => api.setConceptScope(c.id, scope), 'It could not be changed.');
+            }}
+          >
+            {/* biome-ignore lint/a11y/noAutofocus: typed into at once, after the click that opened it */}
+            <input name="scope" defaultValue={c.scope ?? ''} aria-label="What it covers" autoFocus data-testid="concept-scope-input" />
+            <button type="submit">Save</button>
+          </form>
+        ) : (
+          <p className="concept-scope" data-testid="concept-scope">
+            <span className="hint">Covers: </span>
+            {c.scope}{' '}
+            <button type="button" className="quiet inline" onClick={() => setScoping(true)} data-testid="concept-scope-edit">
+              Edit
+            </button>
+          </p>
+        ))}
+      {!topic && (
+        <p className="concept-work hint" data-testid="concept-work">
+          Your work: {workLine(c)}
+        </p>
+      )}
+      {inside.length > 0 && (
+        <div className="concept-inside" data-testid="concept-inside">
+          <p className="concepts-label">Inside · {inside.length}</p>
+          <p className="concept-inside-list">
+            {inside.map((x) => {
+              const home = x.home?.id === c.id ? x.home : x.alsoUnder.find((h) => h.id === c.id);
+              return (
+                <span key={x.id} className={`concept-chip${home?.status === 'suggested' || x.status === 'suggested' ? ' is-suggested' : ''}`} data-testid="concept-inside-chip">
+                  <button type="button" className="quiet inline" onClick={() => onSelect(x.id)}>
+                    {CONCEPT_GLYPH} {x.title}
+                  </button>
+                  {home?.status === 'suggested' && (
+                    <>
+                      {' '}
+                      <button type="button" className="quiet inline" onClick={() => void run(() => api.keepConceptHome(x.id, c.id), 'It could not be kept.')} aria-label={`Keep “${x.title}” inside`} data-testid="concept-inside-keep">
+                        ✓
+                      </button>
+                      <button type="button" className="quiet inline" onClick={() => void run(() => api.dismissConceptHome(x.id, c.id), 'It could not be dismissed.')} aria-label={`Not inside: “${x.title}”`}>
+                        ×
+                      </button>
+                    </>
+                  )}
+                </span>
+              );
+            })}
+          </p>
+        </div>
       )}
       {c.quote?.quote && (
         <blockquote className="concept-quote" data-testid="concept-quote">
@@ -640,8 +710,8 @@ function ConceptDrawer({
                 {x.places.length > 0 ? (
                   <ul className="concept-places">
                     {x.places.map((p) => (
-                      <li key={p.id} className={p.target ? '' : 'is-lost'} data-testid="concept-place">
-                        <span className="concept-place-role">{p.by === 'you' ? 'you put it here' : ROLE_WORD[p.role]}</span>
+                      <li key={p.id} className={`${p.target ? '' : 'is-lost'}${p.kept ? '' : ' is-found'}`} data-testid="concept-place">
+                        <span className="concept-place-role">{!p.kept ? 'found for it' : p.by === 'you' ? 'you put it here' : ROLE_WORD[p.role]}</span>
                         {p.says && <span className="concept-place-says"> · {p.says}</span>}
                         <button
                           type="button"
@@ -653,7 +723,12 @@ function ConceptDrawer({
                         >
                           “{asRead(p.quote)}”{!p.target && <span className="hint"> (not found)</span>}
                         </button>
-                        {p.by === 'you' && (
+                        {!p.kept && (
+                          <button type="button" className="quiet inline" onClick={() => void run(() => api.keepConceptPlace(p.id), 'It could not be kept.')} data-testid="concept-place-keep">
+                            Keep
+                          </button>
+                        )}
+                        {(p.by === 'you' || !p.kept) && (
                           <button
                             type="button"
                             className="quiet inline"
@@ -674,7 +749,34 @@ function ConceptDrawer({
           })}
         </ul>
       ) : (
-        <p className="hint">Drag things here from the tray, or from another concept.</p>
+        <p className="hint">{topic ? 'A topic holds concepts: open one of them for its things.' : 'Drag things here from the tray, or from another concept, or find materials for it.'}</p>
+      )}
+      {words && words.sources.length > 0 && (
+        <div className="concept-words" data-testid="concept-words">
+          <p className="concepts-label">In your sources · words found</p>
+          <ul>
+            {words.sources.map((w) => (
+              <li key={w.id} data-testid="concept-words-source">
+                <b>{w.title || 'Untitled'}</b>
+                <span className="hint"> · {plural(w.count, 'place')}</span>
+                {w.places.slice(0, 3).map((p, i) => (
+                  <button
+                    // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list
+                    key={i}
+                    type="button"
+                    className="concept-words-place"
+                    onClick={() => onOpenTarget(p.target)}
+                    title="Open where these words are"
+                    data-testid="concept-words-place"
+                  >
+                    {p.page !== null && <span className="hint">p. {p.page} · </span>}
+                    {asRead(p.quote)}
+                  </button>
+                ))}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
       {open.length > 0 && (
         <ul className="concept-open-list">
@@ -717,6 +819,27 @@ function ConceptDrawer({
             Keep
           </button>
         )}
+        <button
+          type="button"
+          className="ai-button"
+          disabled={finding}
+          onClick={() => {
+            setFinding(true);
+            void run(async () => {
+              const found = await api.findForConcept(c.id);
+              say(
+                found.inside + found.materials === 0
+                  ? `Nothing more found for “${c.title}”.`
+                  : `Found for “${c.title}”: ${[found.inside ? plural(found.inside, 'concept') : '', found.materials ? plural(found.materials, 'material') : ''].filter((x) => x).join(' and ')}, dashed until you keep them.`,
+              );
+            }, 'Nothing could be found: try again.').finally(() => setFinding(false));
+          }}
+          title="The AI finds the concepts that go inside it and the materials that discuss it, for you to keep"
+          data-testid="concept-find"
+        >
+          <Orb size="small" />
+          {finding ? 'Finding…' : 'Find materials'}
+        </button>
         {others.length > 0 && (
           <button type="button" className={doing === 'link' ? 'active' : 'quiet'} onClick={() => setDoing((d) => (d === 'link' ? null : 'link'))} data-testid="concept-link-to">
             Link to…
@@ -773,7 +896,7 @@ function ConceptDrawer({
         >
           <span>“{c.title}”</span>
           <select value={linkTo.kind} onChange={(e) => setLinkTo((x) => ({ ...x, kind: e.target.value as LinkKind }))} aria-label="How it links" data-testid="concept-link-kind">
-            {(['builds-on', 'part-of', 'contrasts-with', 'example-of', 'explains'] as const).map((k) => (
+            {CONCEPT_LINK_CHOICES.map((k) => (
               <option key={k} value={k}>
                 {LINK_WORDS[k]}
               </option>

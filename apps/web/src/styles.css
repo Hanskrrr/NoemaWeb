@@ -6972,12 +6972,16 @@ button.room-fold:hover {
 }
 .concepts-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(16rem, 21rem);
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.2rem;
   align-items: start;
 }
+.concepts-body.has-drawer {
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 21rem);
+}
 @container (max-width: 50rem) {
-  .concepts-body {
+  .concepts-body,
+  .concepts-body.has-drawer {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -7503,4 +7507,399 @@ button.room-fold:hover {
 }
 .concept-picker-close {
   align-self: flex-end;
+}
+
+/* Concepts as a map you zoom (ADR 0038): topics from far, concepts closer; a review of new ideas beside it. */
+.concepts-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+}
+.concepts-mapbox {
+  position: relative;
+  height: clamp(26rem, 64vh, 48rem);
+}
+.concept-map {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ink-faint) 22%, transparent) 1px, transparent 0) 0 0 / 22px 22px,
+    color-mix(in srgb, var(--paper) 70%, var(--sheet));
+  outline: none;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+}
+.concept-map.is-dragging {
+  cursor: grabbing;
+}
+.concept-map-svg {
+  display: block;
+}
+.concept-map-node {
+  cursor: pointer;
+  outline: none;
+}
+.concept-map-node circle {
+  fill: var(--sheet);
+  stroke: color-mix(in srgb, var(--lk-explains) 55%, var(--rule));
+  stroke-width: 1.5;
+}
+.concept-map-node.is-topic circle {
+  fill: color-mix(in srgb, var(--lk-explains) 8%, var(--paper));
+  stroke: color-mix(in srgb, var(--lk-explains) 40%, var(--rule));
+}
+.concept-map-node.depth-1:not(.is-topic) circle {
+  fill: color-mix(in srgb, var(--sheet) 92%, var(--lk-explains));
+}
+.concept-map-node.depth-2 circle,
+.concept-map-node.depth-3 circle {
+  fill: color-mix(in srgb, var(--sheet) 85%, var(--lk-explains));
+}
+.concept-map-node.is-suggested circle {
+  stroke: color-mix(in srgb, var(--lf-b) 75%, var(--rule));
+  stroke-dasharray: 6 4;
+}
+.concept-map-node:hover > circle {
+  stroke: color-mix(in srgb, var(--lk-explains) 85%, var(--rule));
+}
+.concept-map-node.is-selected > circle,
+.concept-map-node:focus-visible > circle {
+  stroke: var(--accent);
+  stroke-width: 2.6;
+}
+.concept-map-node.is-target > circle {
+  stroke: var(--k-room);
+  stroke-width: 2.6;
+  fill: color-mix(in srgb, var(--k-room) 12%, var(--sheet));
+}
+.concept-map-node.is-dim {
+  opacity: 0.32;
+}
+.concept-map-node text {
+  pointer-events: none;
+}
+.concept-map .concept-name {
+  fill: var(--ink);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+.concept-map-node.is-topic .concept-name {
+  font-weight: 650;
+}
+.concept-map-counts {
+  fill: var(--ink-faint);
+  font-size: 10.5px;
+}
+.concept-map-kids {
+  fill: var(--ink-soft);
+  font-size: 11px;
+}
+.concept-map-line line {
+  stroke: color-mix(in srgb, var(--ink-faint) 75%, transparent);
+  stroke-width: 1.4;
+}
+.concept-map-line.is-many line {
+  stroke-width: 2.2;
+}
+.concept-map-line.is-suggested line {
+  stroke-dasharray: 4 3;
+  opacity: 0.75;
+}
+.concept-map-line text {
+  fill: var(--ink-faint);
+  font-size: 10.5px;
+  paint-order: stroke;
+  stroke: var(--paper);
+  stroke-width: 3px;
+}
+.concept-map defs path {
+  fill: color-mix(in srgb, var(--ink-faint) 85%, transparent);
+}
+.concept-map-top {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.75rem;
+  right: 0.75rem;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+  pointer-events: none;
+}
+.concept-map-top > * {
+  pointer-events: auto;
+}
+.concept-map-trail {
+  margin: 0;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sheet) 88%, transparent);
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+}
+.concept-map-find {
+  position: relative;
+}
+.concept-map-find input {
+  width: 12rem;
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--sheet);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.84rem;
+}
+.concept-map-matches {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.25rem);
+  z-index: 3;
+  min-width: 12rem;
+  margin: 0;
+  padding: 0.3rem;
+  list-style: none;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--sheet);
+  box-shadow: 0 10px 24px -14px rgb(0 0 0 / 0.4);
+}
+.concept-map-matches button {
+  width: 100%;
+  text-align: left;
+}
+.concept-map-zoom {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.6rem;
+  display: flex;
+  gap: 0.1rem;
+  padding: 0.1rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--sheet);
+}
+.concept-map-zoom button {
+  min-width: 1.9rem;
+  border-radius: 999px;
+}
+.concept-map-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 0.7rem;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--sheet);
+  font-size: 0.84rem;
+}
+.concepts-map-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  text-align: left;
+}
+.concepts-review {
+  position: absolute;
+  top: 3rem;
+  right: 0.75rem;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  width: min(19rem, 46%);
+  max-height: calc(100% - 4.5rem);
+  overflow: auto;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--sheet);
+  box-shadow: 0 12px 30px -20px rgb(0 0 0 / 0.45);
+  font-size: 0.88rem;
+}
+.concepts-review header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.concepts-review .hint {
+  margin: 0;
+  text-align: left;
+  font-size: 0.78rem;
+}
+.concepts-review ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.concepts-review li {
+  display: flex;
+  flex-direction: column;
+}
+.review-name {
+  align-self: flex-start;
+  font-weight: 600;
+}
+.review-where {
+  font-size: 0.78rem;
+}
+.review-actions {
+  font-size: 0.82rem;
+}
+.review-alone {
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+.concepts-review-pill {
+  position: absolute;
+  left: 0.75rem;
+  bottom: 0.6rem;
+  padding: 0.2rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--lf-b) 70%, var(--rule));
+  border-radius: 999px;
+  background: var(--sheet);
+  color: var(--ink);
+  font-size: 0.84rem;
+}
+.concepts-progress {
+  height: 3px;
+  margin-top: -0.4rem;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--ink-faint) 20%, transparent);
+  overflow: hidden;
+}
+.concepts-progress span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.concept-home,
+.concept-put,
+.concept-scope,
+.concept-work {
+  margin: 0;
+  font-size: 0.88rem;
+  text-align: left;
+}
+.concept-home.is-suggested {
+  padding-left: 0.4rem;
+  border-left: 2px dashed color-mix(in srgb, var(--lf-b) 70%, var(--rule));
+}
+.concept-put select,
+.concept-scope-form input {
+  font: inherit;
+  font-size: 0.84rem;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+}
+.concept-scope-form {
+  display: flex;
+  gap: 0.4rem;
+}
+.concept-scope-form input {
+  flex: 1;
+  min-width: 0;
+}
+.concept-inside-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.15rem 0 0;
+}
+.concept-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--lk-explains) 45%, var(--rule));
+  border-radius: 999px;
+  font-size: 0.84rem;
+}
+.concept-chip.is-suggested {
+  border-style: dashed;
+}
+.concept-places li.is-found {
+  padding-left: 0.4rem;
+  border-left: 2px dashed color-mix(in srgb, var(--lf-b) 70%, var(--rule));
+}
+.concept-words ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.2rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.86rem;
+}
+.concept-words-place {
+  display: block;
+  margin: 0.15rem 0 0;
+  padding: 0 0 0 0.5rem;
+  border: 0;
+  border-left: 2px solid var(--rule);
+  background: none;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+}
+.concept-words-place:hover {
+  color: var(--accent);
+}
+.room-path-topics {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.path-topic-title {
+  margin: 0 0 0.3rem;
+  font-size: 1rem;
+}
+
+.concepts-side {
+  position: sticky;
+  top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.2rem 0 0 1rem;
+  border-left: 1px solid var(--rule);
+  font-size: 0.9rem;
+}
+.concepts-side .hint {
+  margin: 0;
+  text-align: left;
+}
+.concepts-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.concepts-review-list li {
+  display: flex;
+  flex-direction: column;
+}
+.concepts-back {
+  align-self: flex-start;
+  font-size: 0.84rem;
+}
+.concepts-drawer .hint,
+.concepts-side .hint {
+  text-align: left;
 }

@@ -1629,22 +1629,20 @@ export class Repo {
     });
   }
 
-  /** Keep the place the AI suggested for a concept. */
-  keepConceptHome(id: string): boolean {
-    return (
-      Number(
-        this.db.sql.prepare("UPDATE concept_home SET status = 'kept' WHERE child_id = ? AND main = 1 AND status = 'suggested'").run(id).changes,
-      ) > 0
-    );
+  /** Keep the place the AI suggested for a concept: its main one, or the one under `parent`. */
+  keepConceptHome(id: string, parent?: string): boolean {
+    const r = parent
+      ? this.db.sql.prepare("UPDATE concept_home SET status = 'kept' WHERE child_id = ? AND parent_id = ? AND status = 'suggested'").run(id, parent)
+      : this.db.sql.prepare("UPDATE concept_home SET status = 'kept' WHERE child_id = ? AND main = 1 AND status = 'suggested'").run(id);
+    return Number(r.changes) > 0;
   }
 
-  /** Not this place: the concept is at the top again, and is not suggested there again. */
-  dismissConceptHome(id: string): boolean {
-    return (
-      Number(
-        this.db.sql.prepare("UPDATE concept_home SET status = 'dismissed', main = 0 WHERE child_id = ? AND main = 1 AND status = 'suggested'").run(id).changes,
-      ) > 0
-    );
+  /** Not this place (its main one, or the one under `parent`): it is not suggested there again. */
+  dismissConceptHome(id: string, parent?: string): boolean {
+    const r = parent
+      ? this.db.sql.prepare("UPDATE concept_home SET status = 'dismissed', main = 0 WHERE child_id = ? AND parent_id = ? AND status = 'suggested'").run(id, parent)
+      : this.db.sql.prepare("UPDATE concept_home SET status = 'dismissed', main = 0 WHERE child_id = ? AND main = 1 AND status = 'suggested'").run(id);
+    return Number(r.changes) > 0;
   }
 
   /**

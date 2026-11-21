@@ -20,7 +20,9 @@ import {
   FolderTree,
   Health,
   ConceptLink,
+  type ConceptHome,
   ConceptPlace,
+  ConceptWords,
   type VaultTarget,
   MaterialConcepts,
   ItemLink,
@@ -318,6 +320,8 @@ export const api = {
   placeDoors: (id: string, doors: Array<{ room: string; x: number; y: number }>) => call(Ok, 'PUT', `/api/rooms/${id}/door-places`, { doors }),
   // Reading a room (ADR 0027): summaries, then suggested links; and links drawn by hand.
   readRoom: (id: string) => call(z.object({ reading: RoomReading }), 'POST', `/api/rooms/${id}/read`, {}),
+  /** Stop the reading under way (ADR 0038): what was read is kept. */
+  stopReading: (id: string) => call(z.object({ reading: RoomReading.nullable() }), 'POST', `/api/rooms/${id}/read/stop`, {}),
   createLink: (notebookId: string, id: string, from: RoomItemRef, to: RoomItemRef, kind: LinkKind, label: string | null = null) =>
     call(ItemLink, 'POST', `/api/notebooks/${notebookId}/links`, { id, from, to, kind, label }),
   updateLink: (id: string, patch: { kind?: LinkKind; label?: string | null; status?: 'accepted' | 'dismissed'; flip?: boolean }) =>
@@ -338,6 +342,16 @@ export const api = {
     call(Room, 'POST', `/api/concepts/${from}/split`, { id, title, items }),
   addConceptPlace: (id: string, target: VaultTarget) => call(ConceptPlace, 'POST', `/api/concepts/${id}/places`, { target }),
   removeConceptPlace: (id: string) => call(Ok, 'DELETE', `/api/concept-places/${id}`),
+  /** The tree of concepts (ADR 0038): under another or in a topic (null: to the top); a suggested place kept or not. */
+  putConceptUnder: (id: string, parent: string | null, how?: ConceptHome['how']) =>
+    call(Room, 'POST', `/api/concepts/${id}/under`, how ? { parent, how } : { parent }),
+  keepConceptHome: (id: string, parent?: string) => call(z.object({ ok: z.boolean() }), 'POST', `/api/concepts/${id}/home/keep`, parent ? { parent } : {}),
+  dismissConceptHome: (id: string, parent?: string) => call(z.object({ ok: z.boolean() }), 'POST', `/api/concepts/${id}/home/dismiss`, parent ? { parent } : {}),
+  setConceptScope: (id: string, scope: string) => call(Room, 'POST', `/api/concepts/${id}/scope`, { scope }),
+  conceptWords: (id: string) => call(ConceptWords, 'GET', `/api/concepts/${id}/words`),
+  findForConcept: (id: string) => call(z.object({ inside: z.number(), materials: z.number() }), 'POST', `/api/concepts/${id}/find`, {}),
+  keepConceptPlace: (id: string) => call(Ok, 'POST', `/api/concept-places/${id}/keep`, {}),
+  placeConcept: (roomId: string, id: string, x: number, y: number) => call(Ok, 'PUT', `/api/rooms/${roomId}/concept-xy`, { id, x, y }),
   materialConcepts: (kind: RoomItemRef['kind'], id: string) => call(MaterialConcepts, 'GET', `/api/items/${kind}/${id}/concepts`),
   notebookConcepts: (notebookId: string) =>
     call(

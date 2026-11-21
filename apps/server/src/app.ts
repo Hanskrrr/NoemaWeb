@@ -30,6 +30,7 @@ import {
   UpdateLinkRequest,
   MergeRoomRequest,
   AddConceptPlaceRequest,
+  ConceptHomeRequest,
   ConceptScopeRequest,
   ConceptXYRequest,
   PutConceptUnderRequest,
@@ -515,9 +516,15 @@ export function createApp(deps: AppDeps): App {
     if (body.parent) concept(body.parent);
     sendJson(ctx.res, 200, repo.putConceptUnder(ctx.params.id as string, body.parent, body.how));
   });
-  router.on('POST', '/api/concepts/:id/home/keep', ({ res, params }) => {
-    concept(params.id as string);
-    sendJson(res, 200, { ok: repo.keepConceptHome(params.id as string) });
+  router.on('POST', '/api/concepts/:id/home/keep', async (ctx) => {
+    const body = await ctx.body(ConceptHomeRequest);
+    concept(ctx.params.id as string);
+    sendJson(ctx.res, 200, { ok: repo.keepConceptHome(ctx.params.id as string, body.parent) });
+  });
+  router.on('POST', '/api/concepts/:id/home/dismiss', async (ctx) => {
+    const body = await ctx.body(ConceptHomeRequest);
+    concept(ctx.params.id as string);
+    sendJson(ctx.res, 200, { ok: repo.dismissConceptHome(ctx.params.id as string, body.parent) });
   });
   router.on('DELETE', '/api/concepts/:id/home', ({ res, params }) => {
     concept(params.id as string);

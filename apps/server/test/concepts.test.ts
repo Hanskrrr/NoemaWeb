@@ -402,6 +402,18 @@ test('a concept you make is filled: its scope written, the concepts inside it an
   // Inside it: the concepts whose names hold it, waiting to be kept.
   const inside = v.concepts.filter((c) => c.home?.id === raft || c.alsoUnder.some((h) => h.id === raft));
   assert.deepEqual(inside.map((c) => c.title).sort(), ['kelp raft', 'reed raft']);
+  // Each place inside it kept, or not, by itself (the one under it, whichever of the concept's places that is).
+  const under = (c: Concept) => (c.home?.id === raft ? c.home : c.alsoUnder.find((h) => h.id === raft));
+  const kelp = byTitle(v, 'kelp raft');
+  const reed = byTitle(v, 'reed raft');
+  assert.equal(under(kelp)?.status, 'suggested');
+  assert.deepEqual((await api(s, 'POST', `/api/concepts/${kelp.id}/home/keep`, { parent: raft })).json, { ok: true });
+  assert.deepEqual((await api(s, 'POST', `/api/concepts/${reed.id}/home/dismiss`, { parent: raft })).json, { ok: true });
+  assert.deepEqual((await api(s, 'POST', `/api/concepts/${reed.id}/home/dismiss`, { parent: raft })).json, { ok: false }, 'once');
+  v = await view(id);
+  assert.equal(under(byTitle(v, 'kelp raft'))?.status, 'kept');
+  assert.equal(under(byTitle(v, 'reed raft')), undefined);
+  assert.notEqual(byTitle(v, 'reed raft').home?.id, raft);
   // Materials found, with the words that show it; not in it until kept.
   const waiting = made.sources.filter((x) => x.places.some((p) => !p.kept));
   assert.ok(waiting.some((x) => x.item === `thread:${t}`));

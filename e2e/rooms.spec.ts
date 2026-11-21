@@ -381,8 +381,9 @@ test('a room you work in: its brief and what is still open; asked, written and a
   // Not read yet: the brief invites reading, and says what it costs.
   const brief = page.getByTestId('room-brief');
   await expect(brief).toContainText('Read this room');
-  // Two summaries, the links and the brief; each thing read for its concepts, new names, their links.
-  await expect(brief).toContainText('about 8 calls, 2 of them reading its things for concepts');
+  // Two summaries, the links and the brief; the note read for its concepts (not the source), then their names,
+  // their places in the tree and their links.
+  await expect(brief).toContainText('about 8 calls, 1 of them reading its threads and notes for concepts');
   await brief.getByTestId('room-read').click();
   await expect(page.getByTestId('room-brief-text')).toHaveText('Fake brief of “ML systems”: 2 things, read in order.');
   await expect(brief).toContainText('What this room adds up to');

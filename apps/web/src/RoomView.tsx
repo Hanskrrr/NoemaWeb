@@ -11,6 +11,7 @@ import {
   type Curve,
   type ItemLink,
   LINK_KINDS,
+  type Concept,
   LINK_WORDS,
   type LinkKind,
   type NoteSummary,
@@ -49,7 +50,7 @@ import { addDropped, droppedItem, droppedRoom, isItemDrag, isOutsideDrag, isRoom
 import { EditableTitle } from './EditableTitle.tsx';
 import { Orb } from './LivingFrame.tsx';
 import { WebFinds } from './MessageView.tsx';
-import { RoomConcepts } from './RoomConcepts.tsx';
+import { isTopic, RoomConcepts } from './RoomConcepts.tsx';
 import { RoomFolders } from './RoomFolders.tsx';
 import { type PathNode, RoomPath } from './RoomPath.tsx';
 import { roomMenu, useRooms } from './Rooms.tsx';
@@ -231,6 +232,15 @@ export function RoomView({
       setView((v) => (v ? { ...v, reading: r.reading } : v));
     } catch (err) {
       setStatus(err instanceof ApiFailure ? err.message : 'The room could not be read.');
+    }
+  };
+  /** Stop the reading (ADR 0038): what was read is kept, the next reading carries on. */
+  const stopReading = async () => {
+    try {
+      await api.stopReading(roomId);
+      await load();
+    } catch {
+      setStatus('The reading could not be stopped.');
     }
   };
 
@@ -690,7 +700,22 @@ export function RoomView({
   const suggested = view.itemLinks.filter((l) => l.status === 'suggested');
   const kept = view.itemLinks.filter((l) => l.status === 'accepted');
   // With concepts kept (ADR 0036), Path goes concept by concept.
-  const keptConcepts = view.concepts.filter((c) => c.status === 'kept');
+  // The path, with concepts (ADR 0038): the kept concepts, topic by topic; a topic holds them, it is not a step.
+  const keptConcepts = view.concepts.filter((c) => c.status === 'kept' && !isTopic(c, view.concepts));
+  const conceptById = new Map(view.concepts.map((c) => [c.id, c]));
+  const topicOf = (c: Concept): Concept | null => {
+    let at: Concept | undefined = c;
+    for (let i = 0; at?.home && i < 20; i++) at = conceptById.get(at.home.id);
+    return at && at.id !== c.id && isTopic(at, view.concepts) ? at : null;
+  };
+  const pathGroups: Array<{ topic: Concept | null; concepts: Concept[] }> = [];
+  for (const c of keptConcepts) {
+    const t = topicOf(c);
+    const g = pathGroups.find((x) => x.topic?.id === (t?.id ?? undefined) || (!x.topic && !t));
+    if (g) g.concepts.push(c);
+    else pathGroups.push({ topic: t, concepts: [c] });
+  }
+  pathGroups.sort((a, b) => (a.topic ? 0 : 1) - (b.topic ? 0 : 1));
   const underConcept = new Set(keptConcepts.flatMap((c) => c.members as string[]));
   const looseOfConcepts = [...cards.values()].filter((c) => !underConcept.has(`${c.kind}:${c.id}`));
   const byId = new Map(threads.map((t) => [t.id, t]));
@@ -916,6 +941,7 @@ export function RoomView({
           }}
           reviewing={reviewing}
           onRead={() => void startReading()}
+          onStop={() => void stopReading()}
           onReview={() => setReviewing((r) => !r)}
           onOpen={(item) => (item.kind === 'room' ? rooms.openRoom(item.id, through) : onOpen(item.kind, item.id))}
           titles={cards}
@@ -971,17 +997,38 @@ export function RoomView({
           selected={conceptOn}
           onSelect={setConceptOn}
           busy={busy}
+          reading={reading}
           onRead={() => void startReading()}
+          onStop={() => void stopReading()}
           onOpen={onOpen}
           onOpenTarget={onOpenTarget}
           onAskAbout={(text) => setAskSeed((s) => ({ text, n: (s?.n ?? 0) + 1 }))}
         />
       )}
-      {mode === 'path' && (
-        <RoomPath
-          nodes={
-            keptConcepts.length > 0
-              ? keptConcepts.map(
+      {mode === 'path' && keptConcepts.length > 0 && (
+        <div className="room-path-topics" data-testid="room-path-topics">
+          {pathGroups.map((g) => (
+            <section key={g.topic?.id ?? 'none'} className="path-topic" data-testid="path-topic">
+              {pathGroups.length > 1 || g.topic ? (
+                <h3 className="path-topic-title">
+                  {g.topic ? (
+                    <button
+                      type="button"
+                      className="quiet inline"
+                      onClick={() => {
+                        setConceptOn(g.topic?.id ?? null);
+                        show('concepts');
+                      }}
+                    >
+                      {CONCEPT_GLYPH} {g.topic.title}
+                    </button>
+                  ) : (
+                    'Not in a topic'
+                  )}
+                </h3>
+              ) : null}
+              <RoomPath
+                nodes={g.concepts.map(
                   (c): PathNode => ({
                     key: c.id,
                     title: c.title,
@@ -999,39 +1046,42 @@ export function RoomView({
                       return card ? [{ key: k, glyph: GLYPH[card.kind], kind: card.kind, title: card.title, onOpen: () => onOpen(card.kind, card.id) }] : [];
                     }),
                   }),
-                )
-              : [...cards.values()].map(
-                  (c): PathNode => ({
-                    key: `${c.kind}:${c.id}`,
-                    title: c.title,
-                    glyph: GLYPH[c.kind],
-                    kind: c.kind,
-                    text: view.gists[`${c.kind}:${c.id}`]?.text ?? null,
-                    open: (view.brief?.open ?? []).filter((o) => o.item?.kind === c.kind && o.item.id === c.id).map((o) => o.question),
-                    sides: c.kind === 'note' ? 0 : c.marks.open,
-                    onOpen: () => onOpen(c.kind, c.id),
-                    onMenu: cardMenu(c),
-                  }),
-                )
-          }
-          links={
-            keptConcepts.length > 0
-              ? view.conceptLinks.filter((l) => l.status === 'accepted').map((l) => ({ from: l.from, to: l.to, kind: l.kind }))
-              : kept.map((l) => ({ from: `${l.from.kind}:${l.from.id}`, to: `${l.to.kind}:${l.to.id}`, kind: l.kind }))
-          }
-          footer={
-            keptConcepts.length > 0 && looseOfConcepts.length > 0 ? (
-              <p className="path-loose" data-testid="path-unplaced">
-                <span className="hint">Under no concept yet:</span>
-                {looseOfConcepts.map((c) => (
-                  <button key={`${c.kind}:${c.id}`} type="button" className="path-chip" onClick={() => onOpen(c.kind, c.id)} onContextMenu={cardMenu(c)}>
-                    <span aria-hidden>{GLYPH[c.kind]} </span>
-                    {c.title || 'Untitled'}
-                  </button>
-                ))}
-              </p>
-            ) : null
-          }
+                )}
+                links={view.conceptLinks.filter((l) => l.status === 'accepted').map((l) => ({ from: l.from, to: l.to, kind: l.kind }))}
+                empty={null}
+                compact={pathGroups.length > 1}
+              />
+            </section>
+          ))}
+          {looseOfConcepts.length > 0 && (
+            <p className="path-loose" data-testid="path-unplaced">
+              <span className="hint">Under no concept yet:</span>
+              {looseOfConcepts.map((c) => (
+                <button key={`${c.kind}:${c.id}`} type="button" className="path-chip" onClick={() => onOpen(c.kind, c.id)} onContextMenu={cardMenu(c)}>
+                  <span aria-hidden>{GLYPH[c.kind]} </span>
+                  {c.title || 'Untitled'}
+                </button>
+              ))}
+            </p>
+          )}
+        </div>
+      )}
+      {mode === 'path' && keptConcepts.length === 0 && (
+        <RoomPath
+          nodes={[...cards.values()].map(
+            (c): PathNode => ({
+              key: `${c.kind}:${c.id}`,
+              title: c.title,
+              glyph: GLYPH[c.kind],
+              kind: c.kind,
+              text: view.gists[`${c.kind}:${c.id}`]?.text ?? null,
+              open: (view.brief?.open ?? []).filter((o) => o.item?.kind === c.kind && o.item.id === c.id).map((o) => o.question),
+              sides: c.kind === 'note' ? 0 : c.marks.open,
+              onOpen: () => onOpen(c.kind, c.id),
+              onMenu: cardMenu(c),
+            }),
+          )}
+          links={kept.map((l) => ({ from: `${l.from.kind}:${l.from.id}`, to: `${l.to.kind}:${l.to.id}`, kind: l.kind }))}
           empty={
             <div className="room-empty" data-testid="room-empty">
               <p className="empty-title">Nothing in this room yet</p>
@@ -1290,6 +1340,7 @@ function RoomBrief({
   onFindSources,
   reviewing,
   onRead,
+  onStop,
   onReview,
   onOpen,
   titles,
@@ -1300,6 +1351,7 @@ function RoomBrief({
   onFindSources: () => Promise<void>;
   reviewing: boolean;
   onRead: () => void;
+  onStop: () => void;
   onReview: () => void;
   onOpen: (item: { kind: RoomKind | 'room'; id: string }) => void;
   titles: Map<string, RoomCard>;
@@ -1307,7 +1359,8 @@ function RoomBrief({
   const { brief, reading, unread } = view;
   const [finding, setFinding] = useState<string | null>(null);
   const things = view.clusters.reduce((n, c) => n + c.cards.length, 0);
-  // Reading for concepts (ADR 0037): one call a piece not read yet, then one for new names and one for links.
+  // Reading for concepts (ADRs 0037, 0038): one call a piece of a thread or note not read yet, then one for new
+  // names, one to put them in order and one for links.
   const pieces = view.conceptsToRead.pieces;
   const doors = view.doors.length;
   const held = [...(things ? [plural(things, 'thing')] : []), ...(doors ? [plural(doors, 'room')] : [])].join(' · ');
@@ -1320,12 +1373,16 @@ function RoomBrief({
       : reading.phase === 'links'
         ? 'Looking for links between them…'
         : reading.phase === 'concepts'
-          ? 'Finding the concepts: the key ideas it is about…'
+          ? reading.total > 0
+            ? `Reading your threads and notes for concepts: ${Math.min(reading.done, reading.total)} of ${plural(reading.total, 'piece')}…`
+            : 'Putting the concepts in order…'
           : reading.phase === 'brief'
           ? 'Writing the brief: what the room adds up to…'
           : reading.phase === 'failed'
             ? reading.error
-            : `Read. ${reading.total ? `${reading.total === 1 ? '1 summary' : `${reading.total} summaries`} written` : 'Nothing new to summarize'}; ${plural(reading.suggested, 'link')} suggested${reading.suggested ? ': in Review, to keep or dismiss' : ''}.${reading.concepts ? ` ${plural(reading.concepts, 'concept')} suggested: in Concepts.` : ''}${reading.error ? ` ${reading.error}` : ''}`;
+            : reading.stopped
+              ? 'Stopped. What was read is kept; Read again carries on from there.'
+              : `Read. ${reading.total ? `${reading.total === 1 ? '1 summary' : `${reading.total} summaries`} written` : 'Nothing new to summarize'}; ${plural(reading.suggested, 'link')} suggested${reading.suggested ? ': in Review, to keep or dismiss' : ''}.${reading.concepts ? ` ${plural(reading.concepts, 'concept')} suggested: in Concepts.` : ''}${reading.error ? ` ${reading.error}` : ''}`;
   const progress =
     reading && busy
       ? reading.phase === 'summaries' && reading.total > 0
@@ -1333,14 +1390,21 @@ function RoomBrief({
         : reading.phase === 'links'
           ? 0.75
           : reading.phase === 'concepts'
-            ? 0.85
+            ? 0.76 + (reading.total > 0 ? (0.16 * Math.min(reading.done, reading.total)) / reading.total : 0.12)
             : 0.94
       : null;
   const readButton = (
-    <button type="button" className={`ai-button${unread > 0 || !brief ? ' is-strong' : ''}${busy ? ' is-busy' : ''}`} onClick={onRead} disabled={busy} data-testid="room-read">
-      <Orb size="small" />
-      {busy ? 'Reading…' : unread > 0 ? `Read with AI · ${unread} new` : 'Read again'}
-    </button>
+    <>
+      <button type="button" className={`ai-button${unread > 0 || !brief ? ' is-strong' : ''}${busy ? ' is-busy' : ''}`} onClick={onRead} disabled={busy} data-testid="room-read">
+        <Orb size="small" />
+        {busy ? 'Reading…' : unread > 0 ? `Read with AI · ${unread} new` : 'Read again'}
+      </button>
+      {busy && (
+        <button type="button" className="quiet" onClick={onStop} title="What was read is kept; the next reading carries on" data-testid="room-read-stop">
+          Stop
+        </button>
+      )}
+    </>
   );
   return (
     <section className={`room-brief${busy ? ' is-reading' : ''}${brief ? '' : ' is-empty'}`} aria-label="What the AI made of this room" data-testid="room-brief">
@@ -1363,7 +1427,7 @@ function RoomBrief({
             The AI writes each thing here a short summary, its points linked to the words they come from; then it
             suggests links between them, and writes the room a brief: what it adds up to, and what is still open.
             {doors > 0 && ' The rooms in it go in by their own briefs: read them first for a fuller one.'} It uses your
-            model: about {unread + 2 + (pieces > 0 ? pieces + 2 : 0)} calls{pieces > 0 && `, ${pieces} of them reading its things for concepts`}.
+            model: about {unread + 2 + (pieces > 0 ? pieces + 3 : 0)} calls{pieces > 0 && `, ${pieces} of them reading its threads and notes for concepts`}.
           </p>
         )}
         {status && (

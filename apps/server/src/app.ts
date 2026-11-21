@@ -30,6 +30,9 @@ import {
   UpdateLinkRequest,
   MergeRoomRequest,
   AddConceptPlaceRequest,
+  ConceptScopeRequest,
+  ConceptXYRequest,
+  PutConceptUnderRequest,
   ConceptToRoomRequest,
   CreateConceptRequest,
   CreateConceptLinkRequest,
@@ -358,6 +361,11 @@ export function createApp(deps: AppDeps): App {
     if (!repo.getRoom(params.id as string)) throw notFound('room');
     sendJson(res, 202, { reading: roomReader.start(params.id as string) });
   });
+  // Stop it (ADR 0038): what was read is kept; the next reading carries on.
+  router.on('POST', '/api/rooms/:id/read/stop', ({ res, params }) => {
+    if (!repo.getRoom(params.id as string)) throw notFound('room');
+    sendJson(res, 200, { reading: roomReader.stop(params.id as string) });
+  });
   // Links between things: drawn by the learner (accepted at once), or suggested and then accepted, changed, dismissed.
   router.on('POST', '/api/notebooks/:id/links', async (ctx) => {
     const notebookId = ctx.params.id as string;
@@ -447,7 +455,7 @@ export function createApp(deps: AppDeps): App {
     const room = repo.getRoom(ctx.params.id as string);
     if (!room) throw notFound('room');
     if (room.kind === 'concept') throw new HttpError(400, 'invalid', 'A concept cannot hold concepts: make it a room first.');
-    sendJson(ctx.res, 201, repo.createConcept(room.notebookId, { id: body.id, title: body.title, items: body.items ?? [] }));
+    sendJson(ctx.res, 201, repo.createConcept(room.notebookId, { id: body.id, title: body.title, items: body.items ?? [], inRoom: room.id }));
   });
   router.on('POST', '/api/rooms/:id/concepts/keep', ({ res, params }) => {
     if (!repo.getRoom(params.id as string)) throw notFound('room');
@@ -499,6 +507,51 @@ export function createApp(deps: AppDeps): App {
   router.on('DELETE', '/api/concept-places/:id', ({ res, params }) => {
     if (!repo.removeConceptPlace(params.id as string)) throw notFound('place');
     sendJson(res, 200, { ok: true });
+  });
+  // The tree of concepts (ADR 0038): put under another or in a topic, taken to the top; a suggested place kept or not.
+  router.on('POST', '/api/concepts/:id/under', async (ctx) => {
+    const body = await ctx.body(PutConceptUnderRequest);
+    concept(ctx.params.id as string);
+    if (body.parent) concept(body.parent);
+    sendJson(ctx.res, 200, repo.putConceptUnder(ctx.params.id as string, body.parent, body.how));
+  });
+  router.on('POST', '/api/concepts/:id/home/keep', ({ res, params }) => {
+    concept(params.id as string);
+    sendJson(res, 200, { ok: repo.keepConceptHome(params.id as string) });
+  });
+  router.on('DELETE', '/api/concepts/:id/home', ({ res, params }) => {
+    concept(params.id as string);
+    sendJson(res, 200, { ok: repo.dismissConceptHome(params.id as string) });
+  });
+  router.on('POST', '/api/concepts/:id/scope', async (ctx) => {
+    const body = await ctx.body(ConceptScopeRequest);
+    concept(ctx.params.id as string);
+    sendJson(ctx.res, 200, repo.setConceptScope(ctx.params.id as string, body.scope));
+  });
+  // Where its words appear in the notebook's sources: plain text search.
+  router.on('GET', '/api/concepts/:id/words', ({ res, params }) => {
+    concept(params.id as string);
+    sendJson(res, 200, repo.conceptWords(params.id as string));
+  });
+  // Find materials for it: concepts inside it and materials that discuss it, waiting to be kept.
+  router.on('POST', '/api/concepts/:id/find', async ({ res, params }) => {
+    concept(params.id as string);
+    try {
+      sendJson(res, 200, await roomReader.findForConcept(params.id as string));
+    } catch (err) {
+      if (err instanceof ProviderError) throw new HttpError(409, err.kind, describeError(err.kind));
+      throw err;
+    }
+  });
+  router.on('POST', '/api/concept-places/:id/keep', ({ res, params }) => {
+    if (!repo.keepConceptPlace(params.id as string)) throw notFound('place');
+    sendJson(res, 200, { ok: true });
+  });
+  router.on('PUT', '/api/rooms/:id/concept-xy', async (ctx) => {
+    const body = await ctx.body(ConceptXYRequest);
+    concept(body.id);
+    repo.setConceptXY(ctx.params.id as string, body.id, body.x, body.y);
+    sendJson(ctx.res, 200, { ok: true });
   });
   router.on('DELETE', '/api/concepts/:id', ({ res, params }) => {
     concept(params.id as string);

@@ -225,10 +225,11 @@ export class FakeProvider implements ModelProvider {
       // mentioned in its sentence. A sentence that starts with it and says "is", "are" or "means" defines it; a
       // question asks about it; otherwise it uses it. "(GC)" right after it is another name. A bold phrase whose
       // name is a known concept's other name ("GC") is given the known name. Its own answers' words ("offline fake
-      // model") are not a subject of the learner's, so they are not read as one.
+      // model") are not a subject of the learner's, so they are not read as one. "**X**, a kind of **Y**" (or "a part
+      // of") puts X under Y (ADR 0038).
       if (question.includes('[[fail-concepts]]')) throw new ProviderError('unavailable', 'fake failure: unavailable');
       const piece = /<<<\n([\s\S]*)\n>>>/.exec(question)?.[1] ?? '';
-      const known = [...(/Known concepts: (.*)\.$/m.exec(question)?.[1] ?? '').matchAll(/“(.*?)”/g)].map((m) => m[1] as string);
+      const known = [...(/Known concepts: ([\s\S]*)$/.exec(question)?.[1] ?? '').matchAll(/^\s*- (.*)$/gm)].map((m) => m[1] as string);
       const mentions = [];
       for (const sentence of piece.split(/(?<=[.?!])\s+|\n+/)) {
         for (const m of sentence.matchAll(/\*\*([^*]+)\*\*(?:\s*\(([^)]+)\))?/g)) {
@@ -242,7 +243,15 @@ export class FakeProvider implements ModelProvider {
             : sentence.trim().startsWith(m[0]) && /\b(is|are|means)\b/.test(sentence)
               ? 'defines'
               : 'uses';
-          mentions.push({ name, also: name === phrase.toLowerCase() ? also : [phrase, ...also], role, quote: sentence.trim(), says: `Fake: about ${name}.` });
+          const under = new RegExp(`${m[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^*]*?\\b(kind|part) of \\*\\*([^*]+)\\*\\*`).exec(sentence);
+          mentions.push({
+            name,
+            also: name === phrase.toLowerCase() ? also : [phrase, ...also],
+            role,
+            quote: sentence.trim(),
+            says: `Fake: about ${name}.`,
+            ...(under ? { under: (under[2] as string).toLowerCase(), how: `${under[1]}-of` } : {}),
+          });
         }
       }
       await sleep(this.delayMs, req.signal);
@@ -273,6 +282,63 @@ export class FakeProvider implements ModelProvider {
       if (n >= 3) links.push({ from: 3, to: 2, kind: 'contrasts-with', why: 'Fake: another way.' });
       await sleep(this.delayMs, req.signal);
       yield { type: 'text', text: JSON.stringify({ links }) };
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
+    if (req.purpose === 'concept-order') {
+      // Putting a room in order (ADR 0038), made predictable: a concept whose name ends with another's name ("deep
+      // den", "den") is a kind of it; the others go in the room's topic, "<room> basics", if the notebook has it,
+      // or, two or more, in that topic made new.
+      const room = /^The room “(.*)”/m.exec(question)?.[1] ?? '';
+      const list = [...question.matchAll(/^(\d+)\. ([^:·\n]+?)(?::[^\n]*?)? · \d+ materials?(?: · work \d+)?( · in .*)?$/gm)].map((m) => ({
+        n: Number(m[1]),
+        name: (m[2] as string).trim(),
+        placed: Boolean(m[3]),
+      }));
+      const topics = [...(/^Topics the notebook has: (.*)\.$/m.exec(question)?.[1] ?? '').matchAll(/“(.*?)”/g)].map((m) => m[1] as string);
+      const places: Array<{ n: number; under: string; how: string }> = [];
+      const loose: number[] = [];
+      for (const c of list) {
+        if (c.placed) continue;
+        const parent = list.find((o) => o.n !== c.n && c.name.toLowerCase().endsWith(` ${o.name.toLowerCase()}`));
+        if (parent) places.push({ n: c.n, under: parent.name, how: 'kind-of' });
+        else loose.push(c.n);
+      }
+      const newTopics: Array<{ name: string; says: string }> = [];
+      const known = topics.find((t) => t === `${room} basics`);
+      const topic = known ?? (loose.length >= 2 ? `${room} basics` : null);
+      if (topic && !known) newTopics.push({ name: topic, says: `Fake: what “${room}” is about.` });
+      if (topic) for (const n of loose) places.push({ n, under: topic, how: 'in' });
+      await sleep(this.delayMs, req.signal);
+      yield { type: 'text', text: JSON.stringify({ topics: newTopics, places }) };
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
+    if (req.purpose === 'concept-scope') {
+      const name = /^The concept “(.*?)”/m.exec(question)?.[1] ?? '';
+      await sleep(this.delayMs, req.signal);
+      yield { type: 'text', text: `Fake scope: what “${name}” covers.` };
+      yield { type: 'finish', reason: 'stop' };
+      return;
+    }
+    if (req.purpose === 'concept-find') {
+      // Filling a concept (ADR 0038): concepts whose name holds its name go inside it; materials, by the first
+      // sentence given that names it.
+      const name = (/^The concept “(.*?)”/m.exec(question)?.[1] ?? '').toLowerCase();
+      const inside = [...question.matchAll(/^C(\d+)\. ([^:\n]+)/gm)]
+        .filter((m) => name && (m[2] as string).toLowerCase().includes(name))
+        .map((m) => ({ c: Number(m[1]), how: 'kind-of' }));
+      const materials: Array<{ m: number; quote: string; says: string }> = [];
+      for (const block of question.split(/\n(?=M\d+\. )/)) {
+        const m = /^M(\d+)\. /.exec(block);
+        if (!m || !name) continue;
+        const sentence = [...block.matchAll(/<<<\n([\s\S]*?)\n>>>/g)]
+          .flatMap((x) => (x[1] as string).split(/(?<=[.?!])\s+|\n+/))
+          .find((x) => x.toLowerCase().includes(name) && x.trim().length > 8);
+        if (sentence) materials.push({ m: Number(m[1]), quote: sentence.trim(), says: `Fake: it speaks of ${name}.` });
+      }
+      await sleep(this.delayMs, req.signal);
+      yield { type: 'text', text: JSON.stringify({ inside, materials }) };
       yield { type: 'finish', reason: 'stop' };
       return;
     }

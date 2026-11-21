@@ -7,8 +7,20 @@ import {
   commonName,
   conceptKey,
   conceptLinksRequest,
+  findRequest,
   joinRequest,
+  knownTree,
   type MentionRole,
+  type OrderConcept,
+  orderRequest,
+  pageAt,
+  pagesOf,
+  readFind,
+  readOrder,
+  readScope,
+  scopeRequest,
+  wordsFound,
+  workWeight,
   pieceHashInput,
   pieceRequest,
   piecesOf,
@@ -100,11 +112,42 @@ test('names made plain: case, hyphens, quotes, a leading "the", plurals', () => 
   assert.equal(conceptKey('ZeRO'), 'zero');
 });
 
-test("a piece's request carries the skill, the material and the known concepts", () => {
-  const [system, user] = pieceRequest({ kind: 'source', title: 'Moss' }, 'Moss keeps it warm.', { n: 2, of: 3 }, ['moss blanket', 'den']);
+test("a piece's request carries the skill, the material and the known concepts as a tree", () => {
+  const known = [{ name: 'Winter' }, { name: 'moss blanket', under: 'Winter' }, { name: 'den', under: 'Winter' }, { name: 'deep den', under: 'den' }, { name: 'ice' }];
+  const [system, user] = pieceRequest({ kind: 'thread', title: 'Moss' }, 'Moss keeps it warm.', { n: 2, of: 3 }, known);
   assert.equal(system?.content, CONCEPT_SKILL);
-  assert.equal(user?.content, 'A source, “Moss”, piece 2 of 3:\n\n<<<\nMoss keeps it warm.\n>>>\n\nKnown concepts: “moss blanket”, “den”.');
+  assert.equal(
+    user?.content,
+    'A thread of questions and answers, “Moss”, piece 2 of 3:\n\n<<<\nMoss keeps it warm.\n>>>\n\nKnown concepts: \n- Winter\n  - moss blanket\n  - den\n    - deep den\n- ice',
+  );
   assert.match(pieceRequest({ kind: 'note', title: '' }, 'x', { n: 1, of: 1 }, [])[1]?.content ?? '', /^A note, “Untitled”:\n[\s\S]*Known concepts: none yet\.$/);
+  // At most so many names: the tops first, then a level down.
+  assert.equal(knownTree(known, 3), '- Winter\n  - moss blanket\n- ice');
+  // What is under something not known is at the top; nothing is under itself.
+  assert.equal(knownTree([{ name: 'a', under: 'zz' }, { name: 'b', under: 'b' }]), '- a\n- b');
+});
+
+test('a mention says what it is under only when the piece says so; details are not concepts', () => {
+  assert.match(CONCEPT_SKILL, /Details are not concepts/);
+  const piece = 'AdamW, a variant of Adam, decays the weights apart.';
+  const m = readMentions(
+    JSON.stringify({
+      mentions: [
+        { name: 'AdamW', role: 'defines', quote: 'AdamW, a variant of Adam, decays the weights apart.', under: 'Adam', how: 'kind-of' },
+        { name: 'Adam', role: 'uses', quote: 'AdamW, a variant of Adam, decays the weights apart.', under: 'Adam', how: 'kind-of' },
+        { name: 'decay', role: 'uses', quote: 'decays the weights apart', under: 'AdamW', how: 'sort-of' },
+      ],
+    }),
+    piece,
+  );
+  assert.deepEqual(
+    m?.map((x) => [x.name, x.under, x.how]),
+    [
+      ['AdamW', 'Adam', 'kind-of'],
+      ['Adam', null, null],
+      ['decay', null, null],
+    ],
+  );
 });
 
 test('mentions are kept only where their words are in the piece; three places of a concept at most; roles and names checked', () => {
@@ -203,4 +246,112 @@ test('links between concepts: kinds concepts use, a pair once, none between two 
     { from: 3, to: 1, kind: 'builds-on', why: '' },
   ]);
   assert.equal(readConceptLinks('{}', 2), null);
+});
+
+test('putting a room in order: places for concepts without one, under a concept of the list or a topic; no circles', () => {
+  const concepts: OrderConcept[] = [
+    { name: 'Adam', says: ['Keeps two moments.'], materials: 2, work: 5, home: null },
+    { name: 'AdamW', says: [], materials: 1, work: 1, home: null },
+    { name: 'SGD', says: [], materials: 1, work: 3, home: 'Optimization' },
+    { name: 'momentum', says: [], materials: 1, work: 1, home: null },
+    { name: 'activations', says: [], materials: 1, work: 1, home: null },
+  ];
+  const [, user] = orderRequest({ title: 'Training' }, concepts, ['Optimization']);
+  assert.match(user?.content ?? '', /^The room “Training”\. Its concepts:\n1\. Adam: Keeps two moments\. · 2 materials · work 5\n2\. AdamW · 1 material · work 1\n3\. SGD · 1 material · work 3 · in Optimization\n/);
+  assert.match(user?.content ?? '', /Topics the notebook has: “Optimization”\.$/);
+  const raw = JSON.stringify({
+    topics: [
+      { name: 'Training memory', says: 'What a model keeps while it trains.' },
+      { name: 'Unused', says: 'Nothing goes here.' },
+      { name: 'adam', says: 'A concept, not a topic.' },
+    ],
+    places: [
+      { n: 1, under: 'optimization', how: 'in' },
+      { n: 2, under: 'Adam', how: 'kind-of' },
+      { n: 3, under: 'Training memory', how: 'in' },
+      { n: 4, under: 2, how: 'part-of' },
+      { n: 5, under: 'Training memory', how: 'in' },
+      { n: 1, under: 'Training memory', how: 'in' },
+      { n: 9, under: 'Optimization', how: 'in' },
+      { n: 5, under: 'Nowhere', how: 'in' },
+    ],
+  });
+  const order = readOrder(raw, concepts, ['Optimization']);
+  // New topics as the reply gave them, then those the notebook had; one nothing went in is not made.
+  assert.deepEqual(order?.topics, [
+    { name: 'Training memory', says: 'What a model keeps while it trains.' },
+    { name: 'Optimization', says: '' },
+  ]);
+  assert.deepEqual(order?.places, [
+    { n: 1, under: { topic: 'Optimization' }, how: 'in' },
+    { n: 2, under: { concept: 1 }, how: 'kind-of' },
+    { n: 4, under: { concept: 2 }, how: 'part-of' },
+    { n: 5, under: { topic: 'Training memory' }, how: 'in' },
+  ]);
+  // A place that would go round: Adam under AdamW, when AdamW is under Adam.
+  const circle = readOrder(
+    JSON.stringify({ places: [{ n: 2, under: 'Adam', how: 'kind-of' }, { n: 1, under: 'AdamW', how: 'kind-of' }] }),
+    concepts,
+    [],
+  );
+  assert.deepEqual(circle?.places, [{ n: 2, under: { concept: 1 }, how: 'kind-of' }]);
+  assert.equal(readOrder('nothing', concepts, []), null);
+});
+
+test("a concept's scope is one plain line", () => {
+  const [, user] = scopeRequest({ name: 'Optimizers', also: ['optimiser'], says: ['They update the weights.'] });
+  assert.equal(user?.content, 'The concept “Optimizers”, also called “optimiser”.\nWhat the learner\'s materials say of it:\n- They update the weights.');
+  assert.equal(readScope('  “Methods that update the weights: SGD, Adam.”\n'), 'Methods that update the weights: SGD, Adam.');
+});
+
+test('filling a concept: concepts inside it, and materials whose words are in what was given', () => {
+  const materials = [
+    { kind: 'thread' as const, title: 'Why Adam', snippets: ['Adam keeps two moments of the gradient.', 'It scales each step.'] },
+    { kind: 'note' as const, title: 'Week 3', snippets: ['SGD with momentum smooths the steps.'] },
+  ];
+  const [, user] = findRequest({ name: 'Optimizers', also: [], scope: 'Methods that update the weights.' }, [{ name: 'Adam', says: ['Two moments.'] }, { name: 'dropout', says: [] }], materials);
+  assert.match(user?.content ?? '', /^The concept “Optimizers”\. It covers: Methods that update the weights\.\n\nConcepts:\nC1\. Adam: Two moments\.\nC2\. dropout\n\nMaterials:\nM1\. A thread of questions and answers, “Why Adam”:\n<<<\nAdam keeps two moments of the gradient\.\n>>>/);
+  const found = readFind(
+    JSON.stringify({
+      inside: [{ c: 'C1', how: 'kind-of' }, { c: 7 }, { c: 1 }],
+      materials: [
+        { m: 'M1', quote: 'It scales  each step.', says: 'Adam scales steps.' },
+        { m: 2, quote: 'Words that are not there.' },
+        { m: 2, quote: 'SGD with momentum smooths the steps.' },
+        { m: 1, quote: 'Adam keeps two moments of the gradient.' },
+      ],
+    }),
+    2,
+    materials,
+  );
+  assert.deepEqual(found?.inside, [{ c: 1, how: 'kind-of' }]);
+  assert.deepEqual(
+    found?.materials.map((f) => [f.m, f.snippet, f.quote, f.says]),
+    [
+      [1, 1, 'It scales each step.', 'Adam scales steps.'],
+      [2, 0, 'SGD with momentum smooths the steps.', ''],
+    ],
+  );
+  assert.equal(readFind('no', 1, materials), null);
+});
+
+test("words found in a source: a concept's names, whole, any case, plurals; pages of a PDF", () => {
+  const text = '## Page 1\n\nGradient checkpointing saves memory.\n\n## Page 2\n\nCheckpointing again; the gradients flow. A checkpointer is not it. GC too.';
+  const found = wordsFound(text, ['gradient checkpointing', 'checkpointing', 'GC', 'x']).map((r) => text.slice(r.start, r.end));
+  assert.deepEqual(found, ['Gradient checkpointing', 'Checkpointing', 'GC']);
+  assert.deepEqual(
+    wordsFound(text, ['gradient']).map((r) => text.slice(r.start, r.end)),
+    ['Gradient', 'gradients'],
+  );
+  assert.deepEqual(wordsFound(text, []), []);
+  const pages = pagesOf(text);
+  assert.deepEqual(pages.map((p) => p.page), [1, 2]);
+  assert.equal(pageAt(pages, text.indexOf('saves')), 1);
+  assert.equal(pageAt(pages, text.indexOf('GC')), 2);
+  assert.equal(pageAt(pagesOf('no pages'), 3), null);
+});
+
+test("a concept's size is the learner's work on it: questions most, then notes, then materials", () => {
+  assert.equal(workWeight({ questions: 2, notes: 1, materials: 3 }), 11);
+  assert.equal(workWeight({ questions: 0, notes: 0, materials: 1 }), 1);
 });

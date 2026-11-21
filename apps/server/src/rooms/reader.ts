@@ -26,6 +26,12 @@ import {
   readJoin,
   readLinks,
   readMentions,
+  orderRequest,
+  readOrder,
+  findRequest,
+  readFind,
+  readScope,
+  scopeRequest,
   type RoomItemRef,
   type RoomReading,
   roomKey,
@@ -38,6 +44,11 @@ import type { Repo } from '../store/repo.ts';
 
 /** How many summaries are written at once. */
 const AT_ONCE = 3;
+/** New names judged in one call, and at most so many calls in a reading. */
+const JUDGE_AT_ONCE = 80;
+const JUDGE_CALLS = 4;
+/** At most so many new concepts suggested in one reading: those with the most of the learner's work first. */
+const SUGGEST_MAX = 40;
 
 export class RoomReader {
   private readonly repo: Repo;
@@ -45,6 +56,8 @@ export class RoomReader {
   private readonly log: Logger;
   private readonly readings = new Map<string, RoomReading>();
   private readonly running = new Map<string, Promise<void>>();
+  /** Readings the learner stopped (ADR 0038): what was read stays, the rest waits for the next reading. */
+  private readonly stopping = new Set<string>();
 
   constructor(deps: { repo: Repo; models: ModelSource; log: Logger }) {
     this.repo = deps.repo;
@@ -60,8 +73,9 @@ export class RoomReader {
   start(roomId: string): RoomReading {
     const now = this.readings.get(roomId);
     if (now && this.running.has(roomId)) return now;
-    const first: RoomReading = { phase: 'summaries', done: 0, total: 0, suggested: 0, concepts: 0, error: null, current: [] };
+    const first: RoomReading = { phase: 'summaries', done: 0, total: 0, suggested: 0, concepts: 0, error: null, current: [], stopped: false };
     this.readings.set(roomId, first);
+    this.stopping.delete(roomId);
     const run = this.run(roomId)
       .catch((err: unknown) => {
         const message =
@@ -69,9 +83,24 @@ export class RoomReader {
         if (!(err instanceof ProviderError)) this.log.error('room reading failed', { err });
         this.set(roomId, { phase: 'failed', error: message });
       })
-      .finally(() => this.running.delete(roomId));
+      .finally(() => {
+        this.running.delete(roomId);
+        this.stopping.delete(roomId);
+      });
     this.running.set(roomId, run);
     return first;
+  }
+
+  /** Stop the reading under way: what each call already brought is kept; nothing more is asked. */
+  stop(roomId: string): RoomReading | null {
+    if (this.running.has(roomId)) this.stopping.add(roomId);
+    return this.readings.get(roomId) ?? null;
+  }
+
+  private stopped(roomId: string): boolean {
+    if (!this.stopping.has(roomId)) return false;
+    this.set(roomId, { phase: 'done', stopped: true, current: [] });
+    return true;
   }
 
   /** For tests: wait for the reading under way. */
@@ -80,7 +109,7 @@ export class RoomReader {
   }
 
   private set(roomId: string, patch: Partial<RoomReading>): void {
-    const at = this.readings.get(roomId) ?? { phase: 'summaries' as const, done: 0, total: 0, suggested: 0, concepts: 0, error: null, current: [] };
+    const at = this.readings.get(roomId) ?? { phase: 'summaries' as const, done: 0, total: 0, suggested: 0, concepts: 0, error: null, current: [], stopped: false };
     this.readings.set(roomId, { ...at, ...patch });
   }
 
@@ -103,7 +132,7 @@ export class RoomReader {
     let firstError: string | null = null;
     const queue = [...todo];
     const worker = async () => {
-      for (let item = queue.shift(); item; item = queue.shift()) {
+      for (let item = queue.shift(); item && !this.stopping.has(roomId); item = queue.shift()) {
         const k = key(item);
         this.set(roomId, { current: [...(this.readings.get(roomId)?.current ?? []), k] });
         try {
@@ -123,6 +152,7 @@ export class RoomReader {
       }
     };
     await Promise.all(Array.from({ length: Math.min(AT_ONCE, todo.length) }, worker));
+    if (this.stopped(roomId)) return;
     if (failed > 0 && failed === todo.length && firstError) {
       this.set(roomId, { phase: 'failed', error: firstError });
       return;
@@ -165,13 +195,15 @@ export class RoomReader {
         suggested += 1;
       }
     }
-    // Its concepts (ADR 0036): the key ideas its things are about, suggested for the learner to keep.
+    if (this.stopped(roomId)) return;
+    // Its concepts (ADRs 0036 to 0038): the key ideas its threads and notes discuss, suggested for the learner to keep.
     let concepts = 0;
     try {
       concepts = await this.findConcepts(roomId, room);
     } catch (err) {
       if (!(err instanceof ProviderError)) this.log.warn('the concepts could not be found', { err });
     }
+    if (this.stopped(roomId)) return;
     // The brief: what the room adds up to, and what is still open in it (ADR 0030); with the rooms in it, each
     // by its own brief (ADR 0032). Those rooms are not read again here: each is read in itself.
     const basis = this.repo.roomBriefBasis(roomId);
@@ -221,8 +253,11 @@ export class RoomReader {
       }
     }
     this.repo.logEvent('room.read', roomId, { summaries: todo.length - failed, failed, suggested, concepts, model: provider.model });
+    // Done and total count the summaries again (while reading for concepts, they counted pieces).
     this.set(roomId, {
       phase: 'done',
+      done: todo.length,
+      total: todo.length,
       suggested,
       concepts,
       error: failed > 0 ? `${failed} of ${todo.length} could not be summarized${firstError ? `: ${firstError}` : '.'}` : null,
@@ -264,31 +299,37 @@ export class RoomReader {
   }
 
   /**
-   * The concepts of a room's materials (ADR 0037): every piece not read yet (or changed since) is read with the
-   * concept-reading skill; what is gone from a material goes; then new names are joined to the notebook's concepts
-   * (a judge, for names not known), passing ideas that now count become suggested concepts, each concept is
-   * defined by its best mention, and the room's concepts get links suggested. Returns how many were suggested.
+   * The concepts of a room's threads and notes (ADRs 0037, 0038): every piece not read yet (or changed since) is
+   * read with the concept-reading skill; what is gone from a material goes; new names are joined to the notebook's
+   * concepts (a judge, for names not known); passing ideas that now count become suggested concepts, each defined
+   * by its best mention; what the pieces say a concept is under puts it there; then the room is put in order
+   * (topics, concepts in them) and its concepts get links suggested. Sources are not read. Returns how many
+   * concepts were suggested.
    */
   private async findConcepts(roomId: string, room: { notebookId: string; title: string; members: RoomItemRef[] }): Promise<number> {
     const notebookId = room.notebookId;
-    const plans = room.members.flatMap((item) => {
-      const now = this.repo.materialPieces(item);
-      if (!now) return [];
-      const read = this.repo.readPieces(item);
-      return [{ item, now, joins: this.repo.materialJoins(item), todo: now.pieces.filter((p) => !read.has(p.hash)) }];
-    });
+    const plans = room.members
+      .filter((item) => item.kind !== 'source')
+      .flatMap((item) => {
+        const now = this.repo.materialPieces(item);
+        if (!now) return [];
+        const read = this.repo.readPieces(item);
+        return [{ item, now, joins: this.repo.materialJoins(item), todo: now.pieces.filter((p) => !read.has(p.hash)) }];
+      });
     const total = plans.reduce((n, p) => n + p.todo.length, 0);
     this.set(roomId, { phase: 'concepts', done: 0, total, current: [] });
     this.repo.ensureConceptNames(notebookId);
     for (const p of plans) this.repo.settleMaterial(p.item, p.now);
-    const known = this.repo.conceptKnownNames(notebookId);
+    const known = this.repo.conceptKnownTree(notebookId);
     const provider = this.models.current();
     const queue = plans.flatMap((p) => p.todo.map((piece) => ({ plan: p, piece, n: p.now.pieces.indexOf(piece) + 1 })));
     let failed = 0;
     let stop = false;
     const worker = async () => {
-      for (let job = queue.shift(); job && !stop; job = queue.shift()) {
+      for (let job = queue.shift(); job && !stop && !this.stopping.has(roomId); job = queue.shift()) {
         const { plan, piece, n } = job;
+        const k = roomKey(plan.item.kind, plan.item.id);
+        this.set(roomId, { current: [...(this.readings.get(roomId)?.current ?? []), k] });
         try {
           let raw = '';
           for await (const ev of provider.stream({
@@ -311,37 +352,44 @@ export class RoomReader {
             this.log.warn('a piece could not be read for its concepts', { err });
           }
         }
-        this.set(roomId, { done: (this.readings.get(roomId)?.done ?? 0) + 1 });
+        const at = this.readings.get(roomId);
+        const current = [...(at?.current ?? [])];
+        current.splice(current.indexOf(k), 1);
+        this.set(roomId, { done: (at?.done ?? 0) + 1, current });
       }
     };
     await Promise.all(Array.from({ length: Math.min(AT_ONCE, queue.length) }, worker));
     if (failed > 0) this.log.warn('pieces not read for their concepts', { failed, total });
+    if (this.stopping.has(roomId)) return 0;
+    const threadsAndNotes = room.members.filter((x) => x.kind !== 'source');
 
-    // New names: the same as a concept known (asked when there are concepts), the same as each other, or new.
-    const passing = this.repo.unjoinedMentions(notebookId, room.members);
-    const named = [...passing].map(([key, list]) => ({ key, name: commonName(list), list }));
+    // New names: the same as a concept known (asked when there are concepts), the same as each other, or new;
+    // judged in batches, those with the most evidence first.
+    const passing = this.repo.unjoinedMentions(notebookId, threadsAndNotes);
+    const named = [...passing]
+      .map(([key, list]) => ({ key, name: commonName(list), list }))
+      .sort((a, b) => Number(becomesConcept(b.list)) - Number(becomesConcept(a.list)) || b.list.length - a.list.length);
     const groups = new Map<string, string[]>(named.map((x) => [x.key, [x.key]]));
-    if (named.length > 0) {
+    const keyOf = new Map(named.map((x) => [x.name, x.key]));
+    for (let batch = 0; batch < JUDGE_CALLS && batch * JUDGE_AT_ONCE < named.length && !this.stopping.has(roomId); batch++) {
       const titles = this.repo.conceptKnownNames(notebookId).slice(0, 200);
-      const fresh = named.slice(0, 80).map((x) => x.name);
+      const fresh = named.slice(batch * JUDGE_AT_ONCE, (batch + 1) * JUDGE_AT_ONCE).map((x) => x.name);
+      if (titles.length === 0 && fresh.length < 2) break;
       let raw = '';
       try {
-        if (titles.length > 0 || fresh.length > 1) {
-          for await (const ev of provider.stream({
-            messages: joinRequest(fresh, titles),
-            maxTokens: 1200,
-            light: true,
-            purpose: 'concept-join',
-            signal: AbortSignal.timeout(90_000),
-          })) {
-            if (ev.type === 'text') raw += ev.text;
-          }
+        for await (const ev of provider.stream({
+          messages: joinRequest(fresh, titles),
+          maxTokens: 1200,
+          light: true,
+          purpose: 'concept-join',
+          signal: AbortSignal.timeout(90_000),
+        })) {
+          if (ev.type === 'text') raw += ev.text;
         }
       } catch (err) {
         if (!(err instanceof ProviderError)) this.log.warn('new concept names could not be judged', { err });
       }
       const same = raw ? (readJoin(raw, fresh, titles) ?? new Map()) : new Map<string, string | null>();
-      const keyOf = new Map(named.map((x) => [x.name, x.key]));
       for (const [name, to] of same) {
         if (!to) continue;
         const from = keyOf.get(name);
@@ -360,15 +408,44 @@ export class RoomReader {
         }
       }
     }
+    // Those that count become suggested concepts: at most so many in one reading, the learner's questions first.
+    const ready = [...groups]
+      .map(([key, keys]) => ({ key, keys, list: keys.flatMap((k) => passing.get(k) ?? []) }))
+      .filter((g) => g.list.length > 0 && becomesConcept(g.list))
+      .map((g) => ({ ...g, score: 3 * g.list.filter((m) => m.role === 'asks').length + new Set(g.list.map((m) => m.material)).size }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, SUGGEST_MAX);
     let suggested = 0;
-    for (const [key, keys] of groups) {
-      const list = keys.flatMap((k) => passing.get(k) ?? []);
-      if (list.length === 0 || !becomesConcept(list)) continue;
-      const lead = passing.get(key) ?? list;
-      this.repo.suggestConcept(notebookId, commonName(lead), keys);
+    for (const g of ready) {
+      this.repo.suggestConcept(notebookId, commonName(passing.get(g.key) ?? g.list), g.keys);
       suggested += 1;
     }
     this.repo.refreshConcepts(notebookId);
+    this.repo.applyConceptHints(notebookId);
+    if (this.stopping.has(roomId)) return suggested;
+
+    // The room in order (ADR 0038): topics, and the concepts in them, for those without a place yet.
+    const order = this.repo.orderInput(roomId);
+    if (order && order.concepts.length >= 2 && order.concepts.some((c) => !c.home)) {
+      try {
+        let raw = '';
+        for await (const ev of provider.stream({
+          messages: orderRequest({ title: order.title }, order.concepts, order.topics),
+          maxTokens: 2000,
+          light: true,
+          purpose: 'concept-order',
+          signal: AbortSignal.timeout(120_000),
+        })) {
+          if (ev.type === 'text') raw += ev.text;
+        }
+        const reply = readOrder(raw, order.concepts, order.topics);
+        if (reply) this.repo.applyOrder(notebookId, order.ids, reply);
+        else this.log.warn('could not read the order of the concepts', { chars: raw.length });
+      } catch (err) {
+        if (!(err instanceof ProviderError)) this.log.warn('the concepts could not be put in order', { err });
+      }
+    }
+    if (this.stopping.has(roomId)) return suggested;
 
     // Links among the room's concepts, when there is something new to link.
     const concepts = this.repo.roomConceptsForLinks(roomId);
@@ -399,6 +476,47 @@ export class RoomReader {
       }
     }
     return suggested;
+  }
+
+  /**
+   * Fill a concept (ADR 0038): its scope written when it has none; the notebook's concepts that could go inside it
+   * and the materials whose words name it judged in one call; what belongs comes in waiting to be kept.
+   */
+  async findForConcept(conceptId: string): Promise<{ inside: number; materials: number }> {
+    const provider = this.models.current();
+    if (!provider.configured) throw new ProviderError('not_configured', 'no model');
+    let input = this.repo.findInput(conceptId);
+    if (!input) throw new Error('no such concept');
+    if (!input.concept.scope) {
+      let raw = '';
+      for await (const ev of provider.stream({
+        messages: scopeRequest({ name: input.concept.name, also: input.concept.also, says: this.repo.conceptSays(conceptId) }),
+        maxTokens: 120,
+        light: true,
+        purpose: 'concept-scope',
+        signal: AbortSignal.timeout(60_000),
+      })) {
+        if (ev.type === 'text') raw += ev.text;
+      }
+      const scope = readScope(raw);
+      if (scope) this.repo.setConceptScope(conceptId, scope);
+      input = this.repo.findInput(conceptId);
+      if (!input) throw new Error('no such concept');
+    }
+    if (input.concepts.length === 0 && input.materials.length === 0) return { inside: 0, materials: 0 };
+    let raw = '';
+    for await (const ev of provider.stream({
+      messages: findRequest(input.concept, input.concepts, input.materials),
+      maxTokens: 1800,
+      light: true,
+      purpose: 'concept-find',
+      signal: AbortSignal.timeout(120_000),
+    })) {
+      if (ev.type === 'text') raw += ev.text;
+    }
+    const found = readFind(raw, input.concepts.length, input.materials);
+    if (!found) throw new Error('what was found could not be read');
+    return this.repo.applyFind(conceptId, input, found);
   }
 
   private async summarize(item: RoomItemRef, basis: string): Promise<void> {

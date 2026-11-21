@@ -1115,6 +1115,8 @@ export const RoomReading = z.object({
   /** Concepts suggested this time (ADR 0036). */
   concepts: z.number().int().default(0),
   error: z.string().nullable(),
+  /** Stopped by the learner (ADR 0038): what was read is kept, and the next reading carries on. */
+  stopped: z.boolean().default(false),
 });
 export type RoomReading = z.infer<typeof RoomReading>;
 
@@ -1127,8 +1129,20 @@ export const ConceptPlace = z.object({
   /** Null when its words are no longer found in the material. */
   target: VaultTarget.nullable(),
   by: z.enum(['you', 'ai']),
+  /** False for a place found for the concept (ADR 0038), waiting to be kept: its material is not in the concept yet. */
+  kept: z.boolean().default(true),
 });
 export type ConceptPlace = z.infer<typeof ConceptPlace>;
+
+export const ConceptHowSchema = z.enum(['kind-of', 'part-of', 'in']);
+/** Where a concept is in the tree (ADR 0038): under another concept (a kind or a part of it), or in a topic. */
+export const ConceptHome = z.object({
+  id: Id,
+  how: ConceptHowSchema,
+  status: z.enum(['suggested', 'kept']),
+  by: z.enum(['you', 'ai']),
+});
+export type ConceptHome = z.infer<typeof ConceptHome>;
 
 /**
  * A concept (ADRs 0036, 0037): a key idea of the notebook, a small room holding the materials that discuss it.
@@ -1157,6 +1171,13 @@ export const Concept = z.object({
     .default([]),
   /** Kept, but no material discusses it any more. */
   lost: z.boolean().default(false),
+  /** What it covers, in one line (ADR 0038): written by the AI for a concept you make, yours to change. */
+  scope: z.string().nullable().default(null),
+  /** Where it is in the tree: its main home, and others it is also under. */
+  home: ConceptHome.nullable().default(null),
+  alsoUnder: z.array(ConceptHome).default([]),
+  /** The learner's work on it, across the notebook: its size on the map. */
+  work: z.object({ questions: z.number().int(), notes: z.number().int(), materials: z.number().int() }).default({ questions: 0, notes: 0, materials: 0 }),
 });
 export type Concept = z.infer<typeof Concept>;
 export const ConceptLink = z.object({
@@ -1185,6 +1206,23 @@ export const SplitConceptRequest = z.object({ id: Id, title: z.string().trim().m
 export const ConceptToRoomRequest = z.object({ inside: Id.nullable().optional() });
 /** A passage put under a concept by hand: the material and where the words are. */
 export const AddConceptPlaceRequest = z.object({ target: VaultTarget });
+/** A concept put under another, or in a topic (by you); `parent` null takes it to the top. */
+export const PutConceptUnderRequest = z.object({ parent: Id.nullable(), how: ConceptHowSchema.optional() });
+export const ConceptScopeRequest = z.object({ scope: z.string().trim().max(400) });
+/** Where a concept is on a room's map, if you moved it: relative to what it is under. */
+export const ConceptXYRequest = z.object({ id: Id, x: z.number().finite(), y: z.number().finite() });
+/** Where a concept's words appear in the notebook's sources (ADR 0038), by plain text search. */
+export const ConceptWords = z.object({
+  sources: z.array(
+    z.object({
+      id: Id,
+      title: z.string(),
+      count: z.number().int(),
+      places: z.array(z.object({ page: z.number().int().nullable(), quote: z.string(), target: VaultTarget })),
+    }),
+  ),
+});
+export type ConceptWords = z.infer<typeof ConceptWords>;
 /** The concepts a material discusses, with its places for each (ADR 0037). */
 export const MaterialConcepts = z.object({
   concepts: z.array(z.object({ id: Id, title: z.string(), status: z.enum(['suggested', 'kept']), places: z.array(ConceptPlace) })),
@@ -1226,6 +1264,8 @@ export const RoomView = z.object({
   concepts: z.array(Concept).default([]),
   conceptLinks: z.array(ConceptLink).default([]),
   guesses: z.array(z.object({ item: RoomKeySchema, concept: Id })).default([]),
+  /** Where you moved concepts on the room's map (ADR 0038), relative to what they are under. */
+  conceptXY: z.array(z.object({ id: Id, x: z.number(), y: z.number() })).default([]),
   /** What the concept reading has not read yet (ADR 0037): materials changed or never read, and their pieces. */
   conceptsToRead: z.object({ materials: z.number().int(), changed: z.number().int(), pieces: z.number().int() }).default({ materials: 0, changed: 0, pieces: 0 }),
   links: z.array(

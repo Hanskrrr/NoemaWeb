@@ -42,9 +42,23 @@ import {
   type ReadableNotebook,
   bestMention,
   type Concept,
+  type ConceptHow,
   type ConceptLink,
   type ConceptPlace,
+  type ConceptWords,
   conceptKey,
+  FIND_CONCEPTS_MAX,
+  FIND_MATERIALS_MAX,
+  type FindMaterial,
+  type FoundDraft,
+  type KnownConcept,
+  ORDER_MAX,
+  type OrderConcept,
+  type OrderReply,
+  pageAt,
+  pagesOf as pageStarts,
+  wordsFound,
+  workWeight,
   type MaterialConcepts,
   type MentionDraft,
   type MentionRole,
@@ -109,6 +123,7 @@ function toPlace(m: Row): ConceptPlace {
     quote: m.quote as string,
     target,
     by: m.made_by === 'you' ? 'you' : 'ai',
+    kept: m.kept !== 0,
   };
 }
 
@@ -1077,7 +1092,7 @@ export class Repo {
     const out = new Set<string>(rows.filter((x) => x.state === 'out').map((x) => roomKey(x.kind, x.id)));
     const keys = new Set<string>();
     for (const m of this.db.sql
-      .prepare('SELECT kind, item_id FROM concept_mention WHERE concept_id = ? GROUP BY kind, item_id ORDER BY min(created_at)')
+      .prepare('SELECT kind, item_id FROM concept_mention WHERE concept_id = ? AND kept = 1 GROUP BY kind, item_id ORDER BY min(created_at)')
       .all(id) as Row[]) {
       keys.add(roomKey(m.kind as RoomKind, m.item_id as string));
     }
@@ -1366,7 +1381,10 @@ export class Repo {
       concepts,
       conceptLinks: this.conceptLinks(notebookId).filter((l) => shown.has(l.from) && shown.has(l.to)),
       guesses: [],
-      conceptsToRead: this.conceptsToRead(members, this.conceptBases(notebookId, graph, bases)),
+      conceptXY: (this.db.sql.prepare('SELECT concept_id, x, y FROM concept_xy WHERE room_id = ?').all(id) as Row[])
+        .filter((x) => shown.has(x.concept_id as string))
+        .map((x) => ({ id: x.concept_id as string, x: Number(x.x), y: Number(x.y) })),
+      conceptsToRead: this.conceptsToRead(members.filter((k) => !k.startsWith('source:')), this.conceptBases(notebookId, graph, bases)),
     };
   }
 
@@ -1402,38 +1420,91 @@ export class Repo {
     return this.db.sql.prepare("SELECT * FROM room WHERE id = ? AND kind = 'concept'").get(id) as Row | undefined;
   }
 
-  /** The concepts of a room: those its things are in, the most of them first, kept before suggested. */
+  /**
+   * The concepts of a room: those its things are in, the most of them first, kept before suggested; then the
+   * concepts and topics they are under (ADR 0038), so the room can be read from far: a topic is in a room through
+   * what it holds there.
+   */
   private conceptsIn(roomId: string, notebookId: string, graph: RoomGraph, inRoom: Set<string>): Concept[] {
     const rows = this.db.sql.prepare("SELECT * FROM room WHERE notebook_id = ? AND kind = 'concept' ORDER BY created_at, rowid").all(notebookId) as Row[];
     if (rows.length === 0) return [];
+    const byId = new Map(rows.map((r) => [r.id as string, r]));
+    const homes = this.conceptHomeRows(notebookId);
+    const mainHome = new Map<string, Row>();
+    const others = new Map<string, Row[]>();
+    for (const h of homes) {
+      if (h.status === 'dismissed' || !byId.has(h.parent_id as string)) continue;
+      if (h.main === 1 && !mainHome.has(h.child_id as string)) mainHome.set(h.child_id as string, h);
+      else others.set(h.child_id as string, [...(others.get(h.child_id as string) ?? []), h]);
+    }
+    const holds = new Set([...mainHome.values(), ...[...others.values()].flat()].map((h) => h.parent_id as string));
     const titles = new Map<string, string>([
       ...graph.threads.map((t) => [roomKey('thread', t.id), t.title] as const),
       ...graph.sources.map((x) => [roomKey('source', x.id), x.title] as const),
       ...graph.notes.map((n) => [roomKey('note', n.id), n.title] as const),
     ]);
+    const membersOf = new Map<string, string[]>();
+    const memberKeys = (id: string) => {
+      let m = membersOf.get(id);
+      if (!m) {
+        m = this.conceptMembers(id, this.roomRows(id), graph);
+        membersOf.set(id, m);
+      }
+      return m;
+    };
+    // Those its things are in (or made in it), then what they are under, up to the top.
+    const madeHere = new Set(
+      (this.db.sql.prepare('SELECT concept_id FROM concept_shown WHERE room_id = ?').all(roomId) as Row[]).map((r) => r.concept_id as string),
+    );
+    const shown: string[] = [];
+    const isShown = new Set<string>();
+    for (const r of rows) {
+      const id = r.id as string;
+      if (madeHere.has(id) || memberKeys(id).some((k) => inRoom.has(k))) {
+        shown.push(id);
+        isShown.add(id);
+      }
+    }
+    for (let i = 0; i < shown.length; i++) {
+      const up = mainHome.get(shown[i] as string)?.parent_id as string | undefined;
+      if (up && !isShown.has(up)) {
+        shown.push(up);
+        isShown.add(up);
+      }
+    }
     let rooms: Room[] | null = null;
+    const homeOf = (h: Row): Concept['alsoUnder'][number] => ({
+      id: h.parent_id as string,
+      how: h.how as Concept['alsoUnder'][number]['how'],
+      status: h.status === 'kept' ? 'kept' : 'suggested',
+      by: h.made_by === 'ai' ? 'ai' : 'you',
+    });
     const out: Array<Concept & { here: number }> = [];
-    for (const c of rows) {
-      const id = c.id as string;
-      const members = this.conceptMembers(id, this.roomRows(id), graph);
+    for (const id of shown) {
+      const c = byId.get(id) as Row;
+      const members = memberKeys(id);
       const here = members.filter((k) => inRoom.has(k));
-      if (here.length === 0) continue;
       rooms ??= this.listRooms(notebookId);
       const mentions = this.db.sql.prepare('SELECT * FROM concept_mention WHERE concept_id = ? ORDER BY created_at, rowid').all(id) as Row[];
       const by = new Map<string, ConceptPlace[]>();
       for (const m of mentions) {
         const key = roomKey(m.kind as RoomKind, m.item_id as string);
-        if (!members.includes(key)) continue;
+        if (!titles.has(key)) continue;
+        if (m.kept !== 0 && !members.includes(key)) continue;
         const list = by.get(key) ?? [];
         list.push(toPlace(m));
         by.set(key, list);
       }
-      // Where it is said what it is first, then where it is discussed most; the same order every time.
-      const weight = (places: ConceptPlace[]) => (places.some((p) => p.role === 'defines' || p.role === 'explains') ? 1000 : 0) + places.length;
-      const sources = members
+      // Where it is said what it is first, then where it is discussed most; the same order every time. Materials
+      // found for it, not kept yet, come last.
+      const weight = (places: ConceptPlace[]) =>
+        (places.some((p) => p.kept) ? 10_000 : 0) + (places.some((p) => p.kept && (p.role === 'defines' || p.role === 'explains')) ? 1000 : 0) + places.length;
+      const keys = [...new Set([...members, ...[...by.keys()].filter((k) => !members.includes(k))])];
+      const sources = keys
         .map((k) => ({ item: k as Concept['members'][number], title: titles.get(k) ?? '', inRoom: inRoom.has(k), places: by.get(k) ?? [] }))
         .sort((a, b) => weight(b.places) - weight(a.places) || a.title.localeCompare(b.title) || a.item.localeCompare(b.item));
-      const places = sources.reduce((n, x) => n + x.places.length, 0);
+      const kept = mentions.filter((m) => m.kept !== 0);
+      const places = sources.reduce((n, x) => n + x.places.filter((p) => p.kept).length, 0);
       let quote: Concept['quote'] = null;
       if (c.definition_at) {
         const parsed = VaultTarget.safeParse(JSON.parse(c.definition_at as string));
@@ -1442,6 +1513,7 @@ export class Repo {
       const names = (this.db.sql.prepare('SELECT name FROM concept_name WHERE concept_id = ? ORDER BY created_at, rowid').all(id) as Row[])
         .map((r) => r.name as string)
         .filter((n) => conceptKey(n) !== conceptKey(c.title as string));
+      const main = mainHome.get(id);
       out.push({
         id,
         title: c.title as string,
@@ -1455,16 +1527,442 @@ export class Repo {
         materials: members.length,
         places,
         sources,
-        lost: c.status === 'kept' && places === 0 && mentions.length === 0 && c.made_by === 'ai',
+        lost: c.status === 'kept' && places === 0 && kept.length === 0 && c.made_by === 'ai' && !holds.has(id),
+        scope: (c.scope as string | null) ?? null,
+        home: main ? homeOf(main) : null,
+        alsoUnder: (others.get(id) ?? []).map(homeOf),
+        work: {
+          questions: kept.filter((m) => m.role === 'asks' && m.kind === 'thread').length,
+          notes: members.filter((k) => k.startsWith('note:')).length,
+          materials: members.length,
+        },
         here: here.length,
       });
     }
-    out.sort((a, b) => b.here - a.here || (a.status === b.status ? 0 : a.status === 'kept' ? -1 : 1) || b.places - a.places);
-    return out.map(({ here: _, ...c }) => c);
+    const first = out.filter((c) => c.here > 0 || madeHere.has(c.id));
+    first.sort((a, b) => b.here - a.here || (a.status === b.status ? 0 : a.status === 'kept' ? -1 : 1) || b.places - a.places);
+    return [...first, ...out.filter((c) => c.here === 0 && !madeHere.has(c.id))].map(({ here: _, ...c }) => c);
   }
 
-  /** Make a concept by hand: kept, holding what is given. */
-  createConcept(notebookId: string, c: { id: string; title: string; items?: RoomItemRef[] }): Room {
+  /** The tree of a notebook's concepts: every home, dismissed ones too (they are not suggested again). */
+  private conceptHomeRows(notebookId: string): Row[] {
+    return this.db.sql.prepare('SELECT * FROM concept_home WHERE notebook_id = ? ORDER BY created_at, rowid').all(notebookId) as Row[];
+  }
+
+  // The tree of concepts (ADR 0038) ---------------------------------------------------
+  // A concept's main home is where it is on the map: under another concept (a kind or a part of it) or in a topic.
+  // A topic is a concept that holds others. Homes the AI suggests wait to be kept; what the learner kept, or put
+  // somewhere (even at the top), the AI does not move.
+
+  /** The concept a concept is under, then that one's, up to the top. */
+  private conceptAncestors(id: string): string[] {
+    const out: string[] = [];
+    const up = this.db.sql.prepare("SELECT parent_id FROM concept_home WHERE child_id = ? AND main = 1 AND status <> 'dismissed'");
+    for (let at = (up.get(id) as Row | undefined)?.parent_id as string | undefined; at && !out.includes(at) && at !== id; ) {
+      out.push(at);
+      at = (up.get(at) as Row | undefined)?.parent_id as string | undefined;
+    }
+    return out;
+  }
+
+  /** Whether a concept holds others (it is a topic, or a concept with concepts inside). */
+  private conceptHolds(id: string): boolean {
+    return Boolean(this.db.sql.prepare("SELECT 1 FROM concept_home WHERE parent_id = ? AND status <> 'dismissed'").get(id));
+  }
+
+  /**
+   * A concept's main home set: by you (kept, and its place is yours from now on), or suggested by the AI (only
+   * where it has none and its place is not yours, never one dismissed before, never round in a circle).
+   */
+  private setConceptHome(child: string, parent: string, how: ConceptHow, by: 'you' | 'ai'): boolean {
+    if (child === parent) return false;
+    const c = this.conceptRow(child);
+    const p = this.conceptRow(parent);
+    if (!c || !p || c.notebook_id !== p.notebook_id) return false;
+    if (this.conceptAncestors(parent).includes(child)) return false;
+    const t = now();
+    if (by === 'ai') {
+      if (c.placed === 1) return false;
+      if (this.db.sql.prepare("SELECT 1 FROM concept_home WHERE child_id = ? AND main = 1 AND status <> 'dismissed'").get(child)) return false;
+      if (this.db.sql.prepare("SELECT 1 FROM concept_home WHERE child_id = ? AND parent_id = ? AND status = 'dismissed'").get(child, parent)) return false;
+      this.db.sql
+        .prepare(
+          `INSERT INTO concept_home (child_id, parent_id, notebook_id, how, status, made_by, main, created_at) VALUES (?, ?, ?, ?, 'suggested', 'ai', 1, ?)
+           ON CONFLICT (child_id, parent_id) DO UPDATE SET main = 1, how = excluded.how`,
+        )
+        .run(child, parent, c.notebook_id as string, how, t);
+      return true;
+    }
+    this.db.sql.prepare("DELETE FROM concept_home WHERE child_id = ? AND main = 1 AND status <> 'dismissed' AND parent_id <> ?").run(child, parent);
+    this.db.sql
+      .prepare(
+        `INSERT INTO concept_home (child_id, parent_id, notebook_id, how, status, made_by, main, created_at) VALUES (?, ?, ?, ?, 'kept', 'you', 1, ?)
+         ON CONFLICT (child_id, parent_id) DO UPDATE SET main = 1, how = excluded.how, status = 'kept', made_by = 'you'`,
+      )
+      .run(child, parent, c.notebook_id as string, how, t);
+    this.db.sql.prepare('UPDATE room SET placed = 1, updated_at = ? WHERE id = ?').run(t, child);
+    return true;
+  }
+
+  /**
+   * A concept put under another, or in a topic, by you; or taken to the top (`parent` null). Without a how: in, for
+   * a topic (a concept that holds others and no material discusses); a kind of, otherwise.
+   */
+  putConceptUnder(id: string, parent: string | null, how?: ConceptHow): Room | null {
+    return this.db.tx(() => {
+      const c = this.conceptRow(id);
+      if (!c) return null;
+      if (parent === null) {
+        this.db.sql.prepare("UPDATE concept_home SET status = 'dismissed', main = 0 WHERE child_id = ? AND main = 1 AND made_by = 'ai'").run(id);
+        this.db.sql.prepare("DELETE FROM concept_home WHERE child_id = ? AND main = 1 AND made_by = 'you'").run(id);
+        this.db.sql.prepare('UPDATE room SET placed = 1, updated_at = ? WHERE id = ?').run(now(), id);
+        this.logEvent('concept.to_top', id);
+        return this.getRoom(id);
+      }
+      const p = this.conceptRow(parent);
+      if (!p) throw new NotFoundError('concept');
+      if (parent === id || this.conceptAncestors(parent).includes(id)) throw new InvalidError('a concept cannot go inside itself');
+      const topic = this.conceptHolds(parent) && !this.db.sql.prepare('SELECT 1 FROM concept_mention WHERE concept_id = ? AND kept = 1').get(parent);
+      this.setConceptHome(id, parent, how ?? (topic ? 'in' : 'kind-of'), 'you');
+      this.logEvent('concept.put_under', id, { parent });
+      return this.getRoom(id);
+    });
+  }
+
+  /** Keep the place the AI suggested for a concept. */
+  keepConceptHome(id: string): boolean {
+    return (
+      Number(
+        this.db.sql.prepare("UPDATE concept_home SET status = 'kept' WHERE child_id = ? AND main = 1 AND status = 'suggested'").run(id).changes,
+      ) > 0
+    );
+  }
+
+  /** Not this place: the concept is at the top again, and is not suggested there again. */
+  dismissConceptHome(id: string): boolean {
+    return (
+      Number(
+        this.db.sql.prepare("UPDATE concept_home SET status = 'dismissed', main = 0 WHERE child_id = ? AND main = 1 AND status = 'suggested'").run(id).changes,
+      ) > 0
+    );
+  }
+
+  /**
+   * Hints read from the pieces: a concept a piece says is a kind or a part of another the notebook has goes under
+   * it, suggested, when it has no place yet.
+   */
+  applyConceptHints(notebookId: string): number {
+    return this.db.tx(() => {
+      let n = 0;
+      for (const m of this.db.sql
+        .prepare(
+          `SELECT DISTINCT concept_id, under, how FROM concept_mention
+           WHERE notebook_id = ? AND concept_id IS NOT NULL AND kept = 1 AND under IS NOT NULL AND how IS NOT NULL`,
+        )
+        .all(notebookId) as Row[]) {
+        const parent = this.conceptFor(notebookId, [conceptKey(m.under as string)]);
+        if (parent && this.setConceptHome(m.concept_id as string, parent, m.how as ConceptHow, 'ai')) n += 1;
+      }
+      return n;
+    });
+  }
+
+  /** What putting a room in order needs: its concepts (not its topics), and the notebook's topics. */
+  orderInput(roomId: string): { title: string; ids: string[]; concepts: OrderConcept[]; topics: string[] } | null {
+    const view = this.roomView(roomId);
+    if (!view) return null;
+    const titles = new Map(view.concepts.map((c) => [c.id, c.title]));
+    const isTopic = (c: Concept) => c.places === 0 && this.conceptHolds(c.id);
+    const list = view.concepts.filter((c) => !isTopic(c)).slice(0, ORDER_MAX);
+    const parentTitle = (c: Concept) => (c.home ? (titles.get(c.home.id) ?? (this.conceptRow(c.home.id)?.title as string | undefined) ?? null) : null);
+    const placedByYou = new Set(
+      (this.db.sql.prepare("SELECT id FROM room WHERE notebook_id = ? AND kind = 'concept' AND placed = 1").all(view.room.notebookId) as Row[]).map((r) => r.id as string),
+    );
+    const topics = (
+      this.db.sql
+        .prepare(
+          `SELECT r.title FROM room r WHERE r.notebook_id = ? AND r.kind = 'concept'
+             AND EXISTS (SELECT 1 FROM concept_home h WHERE h.parent_id = r.id AND h.status <> 'dismissed')
+             AND NOT EXISTS (SELECT 1 FROM concept_home h WHERE h.child_id = r.id AND h.main = 1 AND h.status <> 'dismissed')
+             AND NOT EXISTS (SELECT 1 FROM concept_mention m WHERE m.concept_id = r.id AND m.kept = 1)
+           ORDER BY r.title`,
+        )
+        .all(view.room.notebookId) as Row[]
+    ).map((r) => r.title as string);
+    return {
+      title: view.room.title,
+      ids: list.map((c) => c.id),
+      concepts: list.map((c) => ({
+        name: c.title,
+        says: [c.definition ?? '', ...c.sources.flatMap((x) => x.places.filter((p) => p.kept).map((p) => p.says ?? ''))].filter((x) => x).slice(0, 2),
+        materials: c.materials,
+        work: workWeight(c.work),
+        home: parentTitle(c) ?? (placedByYou.has(c.id) ? 'its place, chosen by the learner' : null),
+      })),
+      topics,
+    };
+  }
+
+  /** The order the AI suggested: new topics made (suggested), each concept put where it said, if it can go there. */
+  applyOrder(notebookId: string, ids: string[], order: OrderReply): number {
+    return this.db.tx(() => {
+      const topicIds = new Map<string, string>();
+      for (const t of order.topics) {
+        const known = this.conceptFor(notebookId, [conceptKey(t.name)]);
+        if (known) {
+          topicIds.set(conceptKey(t.name), known);
+          continue;
+        }
+        const id = ulid();
+        const at = now();
+        this.db.sql
+          .prepare(
+            `INSERT INTO room (id, notebook_id, title, kind, status, made_by, scope, created_at, updated_at)
+             VALUES (?, ?, ?, 'concept', 'suggested', 'ai', ?, ?, ?)`,
+          )
+          .run(id, notebookId, t.name, t.says || null, at, at);
+        this.nameConcept(id, t.name, 'ai');
+        topicIds.set(conceptKey(t.name), id);
+        this.logEvent('concept.topic_suggested', id);
+      }
+      let n = 0;
+      for (const p of order.places) {
+        const child = ids[p.n - 1];
+        const parent = 'concept' in p.under ? ids[p.under.concept - 1] : topicIds.get(conceptKey(p.under.topic));
+        if (child && parent && this.setConceptHome(child, parent, p.how, 'ai')) n += 1;
+      }
+      // A topic made here that nothing went into after all is not kept.
+      for (const id of topicIds.values()) {
+        const r = this.conceptRow(id);
+        if (r?.made_by === 'ai' && r.status === 'suggested' && !this.conceptHolds(id) && !this.db.sql.prepare('SELECT 1 FROM concept_mention WHERE concept_id = ?').get(id)) {
+          this.db.sql.prepare('DELETE FROM room WHERE id = ?').run(id);
+        }
+      }
+      return n;
+    });
+  }
+
+  setConceptScope(id: string, scope: string): Room | null {
+    if (!this.conceptRow(id)) return null;
+    this.db.sql.prepare('UPDATE room SET scope = ?, updated_at = ? WHERE id = ?').run(scope.trim() || null, now(), id);
+    return this.getRoom(id);
+  }
+
+  /** Where you moved a concept on a room's map. */
+  setConceptXY(roomId: string, id: string, x: number, y: number): void {
+    if (!this.conceptRow(id) || !this.db.sql.prepare('SELECT 1 FROM room WHERE id = ?').get(roomId)) throw new NotFoundError('concept');
+    this.db.sql
+      .prepare('INSERT INTO concept_xy (room_id, concept_id, x, y) VALUES (?, ?, ?, ?) ON CONFLICT (room_id, concept_id) DO UPDATE SET x = excluded.x, y = excluded.y')
+      .run(roomId, id, x, y);
+  }
+
+  /** A place found for a concept, kept: its material is in the concept now. */
+  keepConceptPlace(placeId: string): boolean {
+    return this.db.tx(() => {
+      const m = this.db.sql.prepare('SELECT * FROM concept_mention WHERE id = ?').get(placeId) as Row | undefined;
+      if (!m) return false;
+      this.db.sql.prepare('UPDATE concept_mention SET kept = 1 WHERE id = ?').run(placeId);
+      if (m.concept_id) {
+        this.db.sql.prepare("DELETE FROM room_item WHERE room_id = ? AND kind = ? AND item_id = ? AND state = 'out'").run(m.concept_id as string, m.kind as string, m.item_id as string);
+      }
+      return true;
+    });
+  }
+
+  /** The names a concept is searched by: its own and its other names. */
+  private conceptSearchNames(id: string): string[] {
+    const c = this.conceptRow(id);
+    if (!c) return [];
+    const names = (this.db.sql.prepare('SELECT name FROM concept_name WHERE concept_id = ?').all(id) as Row[]).map((r) => r.name as string);
+    return [...new Set([c.title as string, ...names].map((n) => n.trim()).filter((n) => n))];
+  }
+
+  /**
+   * Where a concept's words appear in the notebook's sources (ADR 0038): plain text search for its names, no model.
+   * The sources with the most first; the first few places of each, with their page.
+   */
+  conceptWords(id: string): ConceptWords {
+    const c = this.conceptRow(id);
+    if (!c) throw new NotFoundError('concept');
+    const names = this.conceptSearchNames(id);
+    const out: ConceptWords['sources'] = [];
+    for (const s of this.db.sql
+      .prepare('SELECT id, title FROM source WHERE notebook_id = ? AND deleted_at IS NULL ORDER BY title COLLATE NOCASE')
+      .all(c.notebook_id as string) as Row[]) {
+      const d = this.sourceDetail(s.id as string);
+      if (!d) continue;
+      const key = `${d.version.id}|${names.join('\u0001')}`;
+      let found = this.wordsCache.get(key);
+      if (!found) {
+        const text = d.version.content;
+        const at = wordsFound(text, names);
+        const pages = at.length ? pageStarts(text) : [];
+        found = {
+          count: at.length,
+          places: at.slice(0, 6).map((r) => {
+            const from = Math.max(0, text.lastIndexOf('\n', r.start) + 1, r.start - 90);
+            const to = Math.min(text.length, r.end + 90);
+            const quote = text.slice(r.start, r.end);
+            return {
+              page: pageAt(pages, r.start),
+              quote: `${from > 0 && text[from - 1] !== '\n' ? '…' : ''}${text.slice(from, to).replace(/\s+/g, ' ').trim()}${to < text.length ? '…' : ''}`,
+              target: { kind: 'source' as const, sourceId: d.source.id, versionId: d.version.id, at: r.start, title: d.source.title, quote },
+            };
+          }),
+        };
+        if (this.wordsCache.size > 2000) this.wordsCache.clear();
+        this.wordsCache.set(key, found);
+      }
+      if (found.count > 0) out.push({ id: d.source.id, title: d.source.title, count: found.count, places: found.places });
+    }
+    out.sort((a, b) => b.count - a.count);
+    return { sources: out.slice(0, 12) };
+  }
+  private wordsCache = new Map<string, { count: number; places: ConceptWords['sources'][number]['places'] }>();
+
+  /**
+   * What filling a concept judges (ADR 0038): the notebook's other concepts that could go inside it (not it, not
+   * what it is under, not what is inside it already), and the materials whose words name it, with those words.
+   */
+  findInput(id: string): {
+    concept: { name: string; also: string[]; scope: string };
+    concepts: Array<{ id: string; name: string; says: string[] }>;
+    materials: Array<FindMaterial & { item: RoomItemRef; text: ItemText; offsets: number[] }>;
+  } | null {
+    const c = this.conceptRow(id);
+    if (!c) return null;
+    const notebookId = c.notebook_id as string;
+    const names = this.conceptSearchNames(id);
+    const ancestors = new Set(this.conceptAncestors(id));
+    const inside = new Set(
+      (this.db.sql.prepare("SELECT child_id FROM concept_home WHERE parent_id = ? AND status <> 'dismissed'").all(id) as Row[]).map((r) => r.child_id as string),
+    );
+    const concepts = (
+      this.db.sql
+        .prepare(
+          `SELECT r.id, r.title, r.definition, (SELECT count(*) FROM concept_mention m WHERE m.concept_id = r.id AND m.kept = 1) AS n
+           FROM room r WHERE r.notebook_id = ? AND r.kind = 'concept' ORDER BY n DESC, r.title`,
+        )
+        .all(notebookId) as Row[]
+    )
+      .filter((r) => r.id !== id && !ancestors.has(r.id as string) && !inside.has(r.id as string))
+      .slice(0, FIND_CONCEPTS_MAX)
+      .map((r) => ({ id: r.id as string, name: r.title as string, says: [(r.definition as string | null) ?? ''].filter((x) => x) }));
+    // Materials already in it are not found again.
+    const graph = this.roomGraph(notebookId);
+    const members = new Set(this.conceptMembers(id, this.roomRows(id), graph));
+    const candidates: Array<FindMaterial & { item: RoomItemRef; text: ItemText; offsets: number[]; hits: number }> = [];
+    const refs: RoomItemRef[] = [
+      ...graph.threads.filter((t) => !t.parentThreadId).map((t) => ({ kind: 'thread' as const, id: t.id })),
+      ...graph.notes.map((n) => ({ kind: 'note' as const, id: n.id })),
+      ...graph.sources.map((x) => ({ kind: 'source' as const, id: x.id })),
+    ];
+    for (const item of refs) {
+      if (members.has(roomKey(item.kind, item.id))) continue;
+      const text = this.itemText(item);
+      if (!text) continue;
+      const hits = wordsFound(text.text, names, 50);
+      const inTitle = wordsFound(text.title, names, 1).length > 0;
+      if (hits.length === 0 && !inTitle) continue;
+      // Up to three stretches around its words, each a paragraph or about 500 characters, not overlapping.
+      const snippets: string[] = [];
+      const offsets: number[] = [];
+      let last = -1;
+      for (const h of hits.length ? hits : [{ start: 0, end: 0 }]) {
+        if (snippets.length >= 3) break;
+        if (h.start < last) continue;
+        const from = Math.max(0, text.text.lastIndexOf('\n\n', h.start) + 2, h.start - 250);
+        const paraEnd = text.text.indexOf('\n\n', h.end);
+        const to = Math.min(text.text.length, paraEnd < 0 ? text.text.length : paraEnd, h.end + 250);
+        snippets.push(text.text.slice(from, to));
+        offsets.push(from);
+        last = to;
+      }
+      candidates.push({ kind: item.kind, title: text.title, snippets, item, text, offsets, hits: hits.length + (inTitle ? 5 : 0) });
+    }
+    candidates.sort((a, b) => b.hits - a.hits || (a.kind === 'source' ? 1 : 0) - (b.kind === 'source' ? 1 : 0));
+    const others = names.filter((n) => conceptKey(n) !== conceptKey(c.title as string));
+    return {
+      concept: { name: c.title as string, also: others, scope: (c.scope as string | null) ?? '' },
+      concepts,
+      materials: candidates.slice(0, FIND_MATERIALS_MAX).map(({ hits: _, ...m }) => m),
+    };
+  }
+
+  /** What was found for a concept, saved for the learner to keep: concepts inside it, and places in materials. */
+  applyFind(id: string, input: NonNullable<ReturnType<Repo['findInput']>>, found: FoundDraft): { inside: number; materials: number } {
+    return this.db.tx(() => {
+      const c = this.conceptRow(id);
+      if (!c) return { inside: 0, materials: 0 };
+      const notebookId = c.notebook_id as string;
+      let inside = 0;
+      for (const f of found.inside) {
+        const child = input.concepts[f.c - 1];
+        if (!child) continue;
+        // Asked by the learner, it is more specific than a place the AI suggested before: it takes that one's place.
+        const before = this.db.sql.prepare("SELECT h.* FROM concept_home h JOIN room r ON r.id = h.child_id WHERE h.child_id = ? AND h.main = 1 AND h.status = 'suggested' AND h.made_by = 'ai' AND r.placed = 0").get(child.id) as Row | undefined;
+        if (before && !this.conceptAncestors(id).includes(child.id)) this.db.sql.prepare('DELETE FROM concept_home WHERE child_id = ? AND parent_id = ?').run(child.id, before.parent_id as string);
+        if (this.setConceptHome(child.id, id, f.how, 'ai')) inside += 1;
+        else if (!this.db.sql.prepare('SELECT 1 FROM concept_home WHERE child_id = ? AND parent_id = ?').get(child.id, id)) {
+          // It has a place already: this is another, waiting to be kept.
+          if (this.conceptAncestors(id).includes(child.id)) continue;
+          this.db.sql
+            .prepare(
+              `INSERT INTO concept_home (child_id, parent_id, notebook_id, how, status, made_by, main, created_at) VALUES (?, ?, ?, ?, 'suggested', 'ai', 0, ?)`,
+            )
+            .run(child.id, id, notebookId, f.how, now());
+          inside += 1;
+        }
+      }
+      let materials = 0;
+      const t = now();
+      const put = this.db.sql.prepare(
+        `INSERT INTO concept_mention (id, notebook_id, concept_id, kind, item_id, hash, piece_at, name, key, also, role, quote, says, target, made_by, kept, created_at)
+         VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, '[]', 'uses', ?, ?, ?, 'ai', 0, ?)`,
+      );
+      for (const f of found.materials) {
+        const m = input.materials[f.m - 1];
+        if (!m) continue;
+        const at = (m.offsets[f.snippet] ?? 0) + f.start;
+        const target = targetAt(m.text, at, f.quote);
+        this.db.sql.prepare('DELETE FROM concept_mention WHERE concept_id = ? AND kind = ? AND item_id = ? AND kept = 0').run(id, m.item.kind, m.item.id);
+        put.run(ulid(), notebookId, id, m.item.kind, m.item.id, c.title as string, conceptKey(c.title as string), f.quote, f.says || null, target ? JSON.stringify(target) : null, t);
+        materials += 1;
+      }
+      this.logEvent('concept.found', id, { inside, materials });
+      return { inside, materials };
+    });
+  }
+
+  /** What the learner's materials say of a concept: its definition, then its places' lines (kept ones). */
+  conceptSays(id: string): string[] {
+    const c = this.conceptRow(id);
+    if (!c) return [];
+    const says = (this.db.sql.prepare('SELECT says FROM concept_mention WHERE concept_id = ? AND kept = 1 AND says IS NOT NULL ORDER BY created_at LIMIT 8').all(id) as Row[]).map(
+      (r) => r.says as string,
+    );
+    return [...new Set([(c.definition as string | null) ?? '', ...says].filter((x) => x))].slice(0, 5);
+  }
+
+  /** The notebook's concepts with what each is under, for the skill to read pieces with (ADR 0038). */
+  conceptKnownTree(notebookId: string): KnownConcept[] {
+    const rows = this.db.sql
+      .prepare(
+        `SELECT r.id, r.title, (SELECT count(*) FROM concept_mention m WHERE m.concept_id = r.id) AS n
+         FROM room r WHERE r.notebook_id = ? AND r.kind = 'concept' ORDER BY r.status = 'suggested', n DESC, r.title`,
+      )
+      .all(notebookId) as Row[];
+    const titles = new Map(rows.map((r) => [r.id as string, r.title as string]));
+    const up = new Map(
+      (this.db.sql.prepare("SELECT child_id, parent_id FROM concept_home WHERE notebook_id = ? AND main = 1 AND status <> 'dismissed'").all(notebookId) as Row[]).map(
+        (h) => [h.child_id as string, h.parent_id as string],
+      ),
+    );
+    return rows.map((r) => ({ name: r.title as string, under: titles.get(up.get(r.id as string) ?? '') ?? null }));
+  }
+
+  /** Make a concept by hand: kept, holding what is given; shown in the room it was made in, even empty. */
+  createConcept(notebookId: string, c: { id: string; title: string; items?: RoomItemRef[]; inRoom?: string }): Room {
     return this.db.tx(() => {
       if (this.db.sql.prepare('SELECT 1 FROM room WHERE id = ?').get(c.id)) throw new ConflictError('room id already used');
       const t = now();
@@ -1476,6 +1974,7 @@ export class Repo {
         .run(c.id, notebookId, c.title.trim(), t, t);
       this.nameConcept(c.id, c.title, 'you');
       if (c.items?.length) this.addRoomItems(c.id, c.items);
+      if (c.inRoom) this.db.sql.prepare('INSERT OR IGNORE INTO concept_shown (room_id, concept_id) VALUES (?, ?)').run(c.inRoom, c.id);
       this.logEvent('concept.created', c.id, { by: 'you', items: c.items?.length ?? 0 });
       return this.getRoom(c.id) as Room;
     });
@@ -1526,6 +2025,8 @@ export class Repo {
       if (!view) return 0;
       const ids = view.concepts.filter((c) => c.status === 'suggested').map((c) => c.id);
       for (const id of ids) this.keepConcept(id);
+      // And the places the AI suggested for them in the tree (ADR 0038).
+      for (const c of view.concepts) if (c.home?.status === 'suggested') this.keepConceptHome(c.id);
       const shown = new Set(view.concepts.map((c) => c.id));
       const t = now();
       for (const l of view.conceptLinks) {
@@ -1577,8 +2078,10 @@ export class Repo {
       this.db.sql.prepare('UPDATE concept_mention SET concept_id = NULL WHERE concept_id = ?').run(id);
       this.db.sql.prepare('DELETE FROM concept_name WHERE concept_id = ?').run(id);
       this.db.sql.prepare('DELETE FROM concept_link WHERE from_id = ? OR to_id = ?').run(id, id);
+      this.db.sql.prepare('DELETE FROM concept_home WHERE child_id = ? OR parent_id = ?').run(id, id);
+      this.db.sql.prepare('DELETE FROM concept_xy WHERE concept_id = ?').run(id);
       this.db.sql
-        .prepare("UPDATE room SET kind = 'room', status = 'kept', definition = NULL, definition_at = NULL, definition_mention = NULL, updated_at = ? WHERE id = ?")
+        .prepare("UPDATE room SET kind = 'room', status = 'kept', definition = NULL, definition_at = NULL, definition_mention = NULL, scope = NULL, placed = 0, updated_at = ? WHERE id = ?")
         .run(now(), id);
       // The room it was opened from now holds it. Nothing here exists in a room that cannot hold rooms.
       if (inside && inside !== id && this.db.sql.prepare("SELECT 1 FROM room WHERE id = ? AND kind = 'room'").get(inside)) {
@@ -1618,6 +2121,17 @@ export class Repo {
         .run(fromId, intoId, intoId, fromId);
       this.db.sql.prepare('UPDATE concept_link SET from_id = ? WHERE from_id = ?').run(intoId, fromId);
       this.db.sql.prepare('UPDATE concept_link SET to_id = ? WHERE to_id = ?').run(intoId, fromId);
+      // In the tree: what was inside the first is inside the second; it takes the first's place if it has none.
+      this.db.sql.prepare('DELETE FROM concept_home WHERE (child_id = ? AND parent_id = ?) OR (child_id = ? AND parent_id = ?)').run(fromId, intoId, intoId, fromId);
+      this.db.sql.prepare('UPDATE OR IGNORE concept_home SET parent_id = ? WHERE parent_id = ?').run(intoId, fromId);
+      if (!this.db.sql.prepare("SELECT 1 FROM concept_home WHERE child_id = ? AND main = 1 AND status <> 'dismissed'").get(intoId)) {
+        const home = this.db.sql.prepare("SELECT * FROM concept_home WHERE child_id = ? AND main = 1 AND status <> 'dismissed'").get(fromId) as Row | undefined;
+        if (home && !this.conceptAncestors(home.parent_id as string).includes(intoId) && home.parent_id !== intoId) {
+          this.db.sql
+            .prepare('INSERT OR IGNORE INTO concept_home (child_id, parent_id, notebook_id, how, status, made_by, main, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)')
+            .run(intoId, home.parent_id as string, home.notebook_id as string, home.how as string, home.status as string, home.made_by as string, t);
+        }
+      }
       if (into.status === 'suggested' && from.status === 'kept') this.keepConcept(intoId);
       this.db.sql.prepare('DELETE FROM room WHERE id = ?').run(fromId);
       this.db.sql.prepare('UPDATE room SET updated_at = ? WHERE id = ?').run(t, intoId);
@@ -1660,6 +2174,9 @@ export class Repo {
       const from = this.conceptRow(fromId);
       if (!from) return null;
       this.createConcept(from.notebook_id as string, { id: c.id, title: c.title });
+      // It goes where the first one is.
+      const home = this.db.sql.prepare("SELECT * FROM concept_home WHERE child_id = ? AND main = 1 AND status <> 'dismissed'").get(fromId) as Row | undefined;
+      if (home) this.setConceptHome(c.id, home.parent_id as string, home.how as ConceptHow, 'you');
       for (const item of c.items) this.moveInConcepts(fromId, item, c.id);
       this.addRoomItems(c.id, c.items);
       return this.getRoom(c.id);
@@ -1711,7 +2228,7 @@ export class Repo {
     const rows = this.db.sql
       .prepare(
         `SELECT m.*, r.title AS concept_title, r.status AS concept_status FROM concept_mention m JOIN room r ON r.id = m.concept_id
-         WHERE m.kind = ? AND m.item_id = ? ORDER BY r.status = 'suggested', m.created_at, m.rowid`,
+         WHERE m.kind = ? AND m.item_id = ? AND m.kept = 1 ORDER BY r.status = 'suggested', m.created_at, m.rowid`,
       )
       .all(item.kind, item.id) as Row[];
     const out = new Map<string, MaterialConcepts['concepts'][number]>();
@@ -1893,13 +2410,31 @@ export class Repo {
         .run(notebookId, item.kind, item.id, piece.hash, model, t);
       this.db.sql.prepare('DELETE FROM concept_mention WHERE kind = ? AND item_id = ? AND hash = ?').run(item.kind, item.id, piece.hash);
       const put = this.db.sql.prepare(
-        `INSERT INTO concept_mention (id, notebook_id, concept_id, kind, item_id, hash, piece_at, name, key, also, role, quote, says, target, made_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai', ?)`,
+        `INSERT INTO concept_mention (id, notebook_id, concept_id, kind, item_id, hash, piece_at, name, key, also, role, quote, says, target, made_by, under, how, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai', ?, ?, ?)`,
       );
       for (const m of mentions) {
         const joined = joins.has(m.key) && joins.get(m.key) && this.conceptRow(joins.get(m.key) as string) ? (joins.get(m.key) as string) : this.conceptFor(notebookId, [m.key, ...m.also.map(conceptKey)]);
         const target = targetAt(text, piece.start + m.offset, m.quote);
-        put.run(ulid(), notebookId, joined, item.kind, item.id, piece.hash, m.offset, m.name, m.key, JSON.stringify(m.also), m.role, m.quote, m.says || null, target ? JSON.stringify(target) : null, t);
+        put.run(
+          ulid(),
+          notebookId,
+          joined,
+          item.kind,
+          item.id,
+          piece.hash,
+          m.offset,
+          m.name,
+          m.key,
+          JSON.stringify(m.also),
+          m.role,
+          m.quote,
+          m.says || null,
+          target ? JSON.stringify(target) : null,
+          m.under,
+          m.how,
+          t,
+        );
         if (joined) for (const a of m.also) this.nameConcept(joined, a, 'ai');
       }
     });
@@ -1971,7 +2506,7 @@ export class Repo {
   ): Map<string, Array<{ id: string; name: string; also: string[]; role: MentionRole; material: string; at: string }>> {
     const dismissed = this.dismissedKeys(notebookId);
     const rows = this.db.sql
-      .prepare('SELECT * FROM concept_mention WHERE notebook_id = ? AND concept_id IS NULL AND made_by = ? ORDER BY created_at, rowid')
+      .prepare('SELECT * FROM concept_mention WHERE notebook_id = ? AND concept_id IS NULL AND made_by = ? AND kept = 1 ORDER BY created_at, rowid')
       .all(notebookId, 'ai') as Row[];
     const wanted = among ? new Set(among.map((x) => roomKey(x.kind, x.id))) : null;
     const keys = new Set(rows.filter((r) => !wanted || wanted.has(roomKey(r.kind as RoomKind, r.item_id as string))).map((r) => r.key as string));
@@ -2035,7 +2570,7 @@ export class Repo {
     this.db.tx(() => {
       for (const c of this.db.sql.prepare("SELECT * FROM room WHERE notebook_id = ? AND kind = 'concept'").all(notebookId) as Row[]) {
         const id = c.id as string;
-        const mentions = (this.db.sql.prepare('SELECT * FROM concept_mention WHERE concept_id = ?').all(id) as Row[]).map((m) => ({
+        const mentions = (this.db.sql.prepare('SELECT * FROM concept_mention WHERE concept_id = ? AND kept = 1').all(id) as Row[]).map((m) => ({
           id: m.id as string,
           role: m.role as MentionRole,
           at: m.created_at as string,
@@ -2043,7 +2578,8 @@ export class Repo {
           target: (m.target as string | null) ?? null,
         }));
         if (mentions.length === 0 && c.status === 'suggested') {
-          const held = this.db.sql.prepare("SELECT 1 FROM room_item WHERE room_id = ? AND state = 'in'").get(id);
+          // A topic holds concepts, not materials: it stays while it holds any.
+          const held = this.db.sql.prepare("SELECT 1 FROM room_item WHERE room_id = ? AND state = 'in'").get(id) || this.conceptHolds(id);
           if (!held) {
             this.db.sql.prepare('DELETE FROM room WHERE id = ?').run(id);
             continue;
@@ -2064,7 +2600,8 @@ export class Repo {
   roomConceptsForLinks(roomId: string): Array<{ id: string; title: string; status: 'suggested' | 'kept'; says: string[] }> {
     const view = this.roomView(roomId);
     if (!view) return [];
-    return view.concepts.slice(0, 20).map((c) => ({
+    // Its concepts, not its topics: a topic holds concepts and is not linked.
+    return view.concepts.filter((c) => c.members.length > 0).slice(0, 20).map((c) => ({
       id: c.id,
       title: c.title,
       status: c.status,
@@ -2230,6 +2767,31 @@ export class Repo {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     let text = '';
     const segments: ItemText['segments'] = [];
+    // The passages of sources it was asked about, or that were pinned into it (ADR 0038): read with it, each
+    // pointing at its place in the source.
+    const ids = [top, ...family].map((t) => t.id);
+    const marks = ids.map(() => '?').join(', ');
+    for (const a of this.db.sql
+      .prepare(
+        `SELECT a.exact, a.start_offset, a.version_id, s.id AS source_id, s.title
+         FROM source_anchor a JOIN source_version v ON v.id = a.version_id JOIN source s ON s.id = v.source_id
+         WHERE s.deleted_at IS NULL AND (a.id IN (SELECT source_anchor_id FROM thread WHERE id IN (${marks}))
+            OR a.id IN (SELECT source_anchor_id FROM pin WHERE thread_id IN (${marks}) AND source_anchor_id IS NOT NULL))
+         ORDER BY a.created_at, a.rowid`,
+      )
+      .all(...ids, ...ids) as Row[]) {
+      const exact = (a.exact as string).trim();
+      if (!exact) continue;
+      const label = `About this passage of “${a.title as string}”: `;
+      if (text) text += '\n\n';
+      text += label;
+      segments.push({
+        start: text.length,
+        end: text.length + exact.length,
+        target: { kind: 'source', sourceId: a.source_id as string, versionId: a.version_id as string, at: Number(a.start_offset), title: a.title as string },
+      });
+      text += exact;
+    }
     for (const t of [top, ...family]) {
       const side = t.id !== top.id;
       for (const m of this.listMessages(t.id)) {

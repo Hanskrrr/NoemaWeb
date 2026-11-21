@@ -49,9 +49,21 @@ Anything outside the fence goes into `ideas.md`, not into code.
 
 ## Workflow
 
-- One milestone per branch, merged when its acceptance tests pass. Write the acceptance tests first.
-- Record engineering decisions in `docs/adr/` (one page: context, decision, consequences, how to reverse).
-- End every working session with a handoff in `docs/handoffs/YYYY-MM-DD-topic.md`: what changed, what was verified and how, what wasn't, what's next.
-- Keep `docs/status.md` current when a milestone moves, and `docs/codebase.md` when files are added or move.
-- Commit in small steps with conventional messages. Push and open pull requests only when the founder asks.
-- Log every push in `docs/push-log.md`: what was pushed, the checks before it, how it was pushed, and the result.
+- **Branches.** Several people and agents work at once ([CONTRIBUTING.md, Branches and merges](CONTRIBUTING.md#branches-and-merges); ADR 0039).
+  - Never commit to `main`.
+  - Work on a branch from an up-to-date `main`, named `area/what-it-does` (for example `rooms/one-review`, `fix/drawer-under-header`), one piece of work per branch.
+  - Write the acceptance tests first.
+  - To catch up with `main`, merge it in. Once a branch is pushed, don't rebase it.
+  - Never force-push a branch someone else has, or `main`.
+- **Merging.** Everything reaches `main` by pull request with green CI. The founder reviews and merges, with a merge commit: no squash or rebase, so cited hashes stay true. The founder's approval is needed for:
+  - the scope fence;
+  - a new ADR;
+  - a migration;
+  - `contract.ts`;
+  - this file.
+- **Numbered files.** ADRs and migrations take the next free number. If `main` takes it first, renumber yours before the merge. Never edit a migration that is on `main`. Try a branch with a migration on a copy of your notebook (`NOEMA_DB_PATH`), never `data/noema.db`.
+- **Decisions.** Record engineering decisions in `docs/adr/`: one page with the context, the decision, the consequences and how to reverse it.
+- **Handoffs.** End every working session with a handoff in `docs/handoffs/YYYY-MM-DD-area-topic.md`: what changed, what was verified and how, what wasn't, what's next.
+- **Docs.** Keep `docs/status.md` current when a milestone moves, and `docs/codebase.md` when files are added or move. Change only the lines about your work.
+- **Commits and pushes.** Commit in small steps with conventional messages. Push your own branch as you like. An AI agent pushes or opens a pull request only when the person running it asks, and never merges.
+- **The push log.** Only the founder logs in `docs/push-log.md`: each merge into `main` and each push of `main`, with what was pushed, the checks before it, how it was pushed, and the result.

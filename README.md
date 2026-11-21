@@ -18,7 +18,7 @@ This is a working prototype, built by a small team.
 - [docs/architecture.md](docs/architecture.md): how it works, and the ideas the code depends on.
 - [docs/codebase.md](docs/codebase.md): what every folder and file is for, and where to make common changes.
 - [docs/status.md](docs/status.md): what is built so far, what is missing, what is next.
-- [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md): how work is done here, and the rules.
+- [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md): how work is done here, and the rules, including [how to branch and merge](CONTRIBUTING.md#branches-and-merges) when several people work at once.
 
 ## Run it
 

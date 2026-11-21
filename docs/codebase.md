@@ -7,7 +7,7 @@ Where things are and what each file does. How they fit together is in [architect
 | Path | What it is |
 | --- | --- |
 | `README.md` | What Noema is, how to run it, where your data lives |
-| `CONTRIBUTING.md` | Setting up, the workflow, and how the docs folders work |
+| `CONTRIBUTING.md` | Setting up, the workflow, branches and merges for several people at once (ADR 0039), and how the docs folders work |
 | `AGENTS.md` | Rules for anyone changing the code, people and AI agents alike: scope fence, architecture rules, tests, workflow. `CLAUDE.md` imports it for Claude |
 | `ideas.md` | Ideas outside the v0.1 scope fence, kept for later instead of built |
 | `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml` | A pnpm workspace: `packages/core`, `apps/server`, `apps/web` |
@@ -15,6 +15,7 @@ Where things are and what each file does. How they fit together is in [architect
 | `biome.json` | Lint and format rules (Biome) |
 | `.env.example` | Optional settings; the app works without a `.env` |
 | `.github/workflows/ci.yml` | CI on pull requests and `main`: typecheck, lint, test, e2e on Node 22 and 24 |
+| `.github/pull_request_template.md` | The checklist every pull request fills in: branch, checks, tests, ADR and migration numbers, handoff, private data, an agent's work reviewed (ADR 0039) |
 | `scripts/dev.ts` | `pnpm dev`: the server (restarting on change) and Vite, together |
 | `scripts/asked-check.ts` | `pnpm asked:check`: replay a notebook's questions through "asked before" and print what would have been flagged |
 | `scripts/pdf-check.ts` | `pnpm pdf:check <file.pdf>`: read PDFs as Noema does and print counts, or why one cannot be read |

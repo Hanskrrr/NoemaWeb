@@ -2,6 +2,8 @@
 
 How each push to GitHub (`Hanskrrr/NoemaWeb`) was made, so the next one can be made the same way. Newest first. Add an entry for every push: what, the checks before it, how, and the result.
 
+Since ADR 0039 (several people at once), only the founder writes here: each merge into `main` and each push of `main`. Pushes of people's own branches are not logged.
+
 ## Next push: `notebook-features`, the concept-reading skill and concepts in levels
 
 - **What.** The commits on top of `ca717e6`:

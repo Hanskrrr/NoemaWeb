@@ -2,10 +2,20 @@
 
 How each push to GitHub (`Hanskrrr/NoemaWeb`) was made, so the next one can be made the same way. Newest first. Add an entry for every push: what, the checks before it, how, and the result.
 
-## Next push: `notebook-features`, the concept-reading skill
+## Next push: `notebook-features`, the concept-reading skill and concepts in levels
 
-- **What.** The commits on top of `ca717e6`: the concept-reading skill (ADR 0037: concepts read from every piece of every material, joined notebook-wide, updated by hash; migration 027), its docs and this entry. No force needed: `origin/notebook-features` (`ca717e6`) is an ancestor.
-- **Checks before pushing.** See the handoff 2026-11-20-concept-reading: `node --test` 385 pass in the sandbox and on the Mac (its Linux shell); tsc clean; Playwright in the sandbox. `pnpm lint` (Biome) not run. No `data/`, `.env`, `*.db`, settings, keys or local paths in the range; made-up text only. The uncommitted `pnpm-lock.yaml` and AOCI setup on the Mac are left out, as before.
+- **What.** The commits on top of `ca717e6`:
+  - the concept-reading skill (ADR 0037: concepts read from every piece of every material, joined notebook-wide, updated by hash; migration 027), with its fix and docs;
+  - concepts in levels on a map that zooms (ADR 0038: threads and notes only, topics and kinds, a concept you make filled, Stop; migration 028), with its docs and this entry.
+
+  No force needed: `origin/notebook-features` (`ca717e6`) is an ancestor.
+- **Checks before pushing.** See the handoffs 2026-11-20-concept-reading and 2026-11-21-concept-levels:
+  - `node --test` 401 pass in the sandbox, and on the Mac (its Linux shell) after the bundle;
+  - tsc clean;
+  - Playwright 92 of 92 in the sandbox;
+  - `pnpm lint` (Biome) not run.
+  - No `data/`, `.env`, `*.db`, settings, keys or local paths in the range; made-up text only.
+  - The uncommitted `pnpm-lock.yaml` and AOCI setup on the Mac are left out, as before.
 - **How.** As below: from the Mac's Terminal, `git push origin notebook-features`.
 - **Result.** Not pushed yet. Record here the commit pushed, when, and by whom.
 

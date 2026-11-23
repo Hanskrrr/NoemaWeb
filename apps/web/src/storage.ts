@@ -67,4 +67,6 @@ export const keys = {
   roomViewLast: 'noema:room-view',
   /** The column the Folders view is sorted by, and which way. */
   foldersSort: 'noema:folders-sort',
+  /** Which Concepts lens is showing: study order, explore the ideas, or audit the gaps. */
+  conceptsLens: 'noema:concepts-lens',
 };

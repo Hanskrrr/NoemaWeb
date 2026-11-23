@@ -161,6 +161,7 @@ export function NoteView({
 
   // Follow the note while the AI writes it, or writes a suggestion.
   const [tick, setTick] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: tick restarts the poll when the learner asks to follow again
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;

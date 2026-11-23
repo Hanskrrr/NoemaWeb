@@ -192,7 +192,7 @@ test('side questions you never came back from: until Back, a later question abov
   const b1 = await branch(threadId, q1.assistant.id, 'offline fake model', 'First side question');
   const b2 = await branch(threadId, q1.assistant.id, 'every question', 'Second side question');
 
-  let list = await open();
+  const list = await open();
   assert.deepEqual(list.map((b) => b.threadId), [b2.thread.id, b1.thread.id], 'newest first');
   assert.deepEqual([list[1]?.quote, list[1]?.parentTitle], ['offline fake model', s.repo.getThread(threadId)?.title]);
 

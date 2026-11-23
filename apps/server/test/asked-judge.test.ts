@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ASKED_PROMPT, askedEntry, askedRequest, readVerdict } from '../src/chat/asked.ts';
+import { ASKED_PROMPT, type askedEntry, askedRequest, readVerdict } from '../src/chat/asked.ts';
 
 const entry = (id: string, question: string, extra: Partial<Parameters<typeof askedEntry>[1]> = {}) => ({
   id,

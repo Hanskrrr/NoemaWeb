@@ -751,7 +751,10 @@ export function Sidebar({
       aria-label="Threads, sources and notes"
       data-section={section}
     >
-      <div className="rail" aria-label="Lists">
+      <section
+        className="rail"
+        aria-label="Lists"
+      >
         {onOpenAssistant && (
           <button
             type="button"
@@ -772,11 +775,16 @@ export function Sidebar({
         {railButton('files')}
         <span className="rail-space" />
         {railButton('trash')}
-      </div>
+      </section>
       {panelShown && (
-        <div className="sidebar-panel" id="sidebar-panel" aria-label={NAMES[section]} data-testid="sidebar-panel">
+        <section
+          className="sidebar-panel"
+          id="sidebar-panel"
+          aria-label={NAMES[section]}
+          data-testid="sidebar-panel"
+        >
           {panel}
-        </div>
+        </section>
       )}
     </nav>
   );

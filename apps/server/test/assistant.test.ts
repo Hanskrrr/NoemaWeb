@@ -76,7 +76,7 @@ test('it looks things up in rounds, says what it is doing, and cites what it fou
   const { id, events } = await ask(me.id, 'What did Week 4 say? [[slow]] [[search:variance]] [[open:1]]');
   const kinds = events.map((e) => e.event);
   // The phase it is in when the watcher connects comes with the snapshot; then each change.
-  const snapshot = (events[0]?.data as { phase?: string }).phase;
+  const snapshot = (events[0]?.data as { phase?: string } | undefined)?.phase;
   const phases = [
     ...(snapshot ? [snapshot] : []),
     ...events.filter((e) => e.event === 'phase').map((e) => (e.data as { phase: string }).phase),

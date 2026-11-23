@@ -225,7 +225,7 @@ export function RoomView({
     if (!busy) return;
     const t = window.setTimeout(() => void load(), 700);
     return () => window.clearTimeout(t);
-  }, [busy, view, load]);
+  }, [busy, load]);
   const startReading = async () => {
     try {
       const r = await api.readRoom(roomId);
@@ -752,7 +752,14 @@ export function RoomView({
           </p>
         </div>
         <div className="room-actions">
-          <div className="room-modes" role="group" aria-label="How to see this room" data-testid="room-modes">
+          {/* biome-ignore lint/a11y/useSemanticElements: a group of buttons, styled as a switch */}
+          <div
+            className="room-modes"
+            // biome-ignore lint/a11y/useSemanticElements: a group of buttons, styled as a switch
+            role="group"
+            aria-label="How to see this room"
+            data-testid="room-modes"
+          >
             {MODES.map((m) => (
               <button
                 key={m.mode}
@@ -1103,10 +1110,12 @@ export function RoomView({
       {/* The map scrolls sideways in its own space: with the Assistant beside it, nothing goes under it. */}
       {mode === 'board' && (
       <div className="room-map" data-testid="room-map">
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: a surface things are dropped on */}
       <div
         ref={canvas}
         className={`room-canvas${dropOver ? ' drop-over' : ''}`}
         style={{ minWidth: maxX + EDGE, minHeight: Math.max(420, maxY + 160) }}
+        // biome-ignore lint/a11y/noStaticElementInteractions: a surface things are dropped on
         onDragOver={(e) => {
           if (!isItemDrag(e) && !isOutsideDrag(e) && !isRoomDrag(e)) return;
           e.preventDefault();

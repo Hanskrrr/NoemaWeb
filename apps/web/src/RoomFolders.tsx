@@ -433,8 +433,10 @@ export function RoomFolders({
               : draggableItem({ kind: r.card?.kind ?? 'thread', id: r.card?.id ?? '', title: r.title });
           return (
             // biome-ignore lint/a11y/useSemanticElements: a row of a tree
+            // biome-ignore lint/a11y/useKeyWithClickEvents: the tree's arrows and Enter are the keyboard path
             <div
               key={r.id}
+              // biome-ignore lint/a11y/useKeyWithClickEvents: the tree's arrows and Enter are the keyboard path
               role="treeitem"
               aria-level={r.depth + 1}
               aria-expanded={r.folder ? isOpen : undefined}

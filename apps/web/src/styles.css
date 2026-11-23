@@ -882,7 +882,6 @@ button.quiet:hover {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem;
-  flex-wrap: wrap;
   font-size: 0.85rem;
   color: var(--ink-faint);
 }

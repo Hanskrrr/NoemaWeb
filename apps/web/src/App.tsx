@@ -633,6 +633,7 @@ function NotebookView({
         return `${title} will be gone for good, with its blocks and its history. ${never}`;
       },
     };
+    // biome-ignore lint/correctness/useExhaustiveDependencies: restore* are re-created every render; this memo only builds the words of a confirmation
   }, [threads, notes, sources, trash, route, beside, go, refresh, say, restoreThread, restoreNote, restoreSource]);
 
 
@@ -1205,6 +1206,7 @@ function FloatingAssistant({
         // biome-ignore lint/a11y/useSemanticElements: a corner to drag has no element of its own
         <div
           className="float-grip"
+          // biome-ignore lint/a11y/useAriaPropsForRole: a pointer grip, with no value to announce
           role="separator"
           aria-label="Size of the Assistant"
           tabIndex={0}

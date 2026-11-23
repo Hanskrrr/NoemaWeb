@@ -217,7 +217,9 @@ export function knownTree(known: readonly KnownConcept[], max = KNOWN_SENT): str
     }
     level = next;
   }
-  order.forEach((n, i) => placed.set(n.name, i));
+  order.forEach((n, i) => {
+    placed.set(n.name, i);
+  });
   const write = (name: string, depth: number) => {
     if (!placed.has(name)) return;
     lines.push(`${'  '.repeat(depth)}- ${clean(name, 80)}`);

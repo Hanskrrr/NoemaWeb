@@ -365,10 +365,11 @@ test('the cards: a concept put under another (by its list, or its card dragged o
   // Later topics start folded; open this one to see what was put in it.
   await topic(page, 'In no topic').getByTestId('concepts-topic-toggle').click();
   await expect(inTopic(page, 'In no topic')).toContainText(['fern quilt']);
-  // A card dragged onto another: under it. Close the drawer first: in one column it covers the cards.
-  await drawer.getByTestId('concept-drawer-close').click();
-  await node(page, 'summer fern quilt').dragTo(node(page, 'reed burrow'));
+  // A concept put under another by its list (dragging across sections is covered by its own test below).
+  await pick(page, 'summer fern quilt');
+  await drawer.getByTestId('concept-put-under').selectOption({ label: 'reed burrow' });
   await expect(node(page, 'summer fern quilt').getByTestId('concept-under')).toHaveText('a kind of reed burrow');
+  await drawer.getByTestId('concept-drawer-close').click();
   // Onto a topic's heading: in it (the window tall enough for both to be seen as the card is carried).
   await page.setViewportSize({ width: 1280, height: 1500 });
   await page.getByTestId('concepts-find').evaluate((el) => el.scrollIntoView({ block: 'start' }));
@@ -623,6 +624,23 @@ test('Concepts lenses: Explore opens every topic, Audit shows only the gaps', as
   // Back to Study: the relation words return.
   await page.getByTestId('concepts-lens').selectOption('study');
   await expect(page.getByTestId('concept-rel').first()).toBeVisible();
+});
+
+test('a card dragged onto another card puts it under it', async ({ page, request }) => {
+  const a = await noteWith(request, 'Alpha', '**alpha** is a thing.');
+  const b = await noteWith(request, 'Beta', '**beta** is another thing.');
+  const big = await room(request, 'Drag cards', [{ kind: 'note', id: a }, { kind: 'note', id: b }]);
+  await request.post(`/api/rooms/${big}/read`, { headers: H });
+  await expect.poll(async () => (await (await request.get(`/api/rooms/${big}`)).json()).reading?.phase, { timeout: 30_000 }).toBe('done');
+  await request.post(`/api/rooms/${big}/concepts/keep`, { headers: H });
+  await page.setViewportSize({ width: 1280, height: 1200 });
+  await page.goto(`/#/room/${big}`);
+  await page.getByTestId('room-mode-concepts').click();
+  const alpha = node(page, 'alpha');
+  const beta = node(page, 'beta');
+  await expect(alpha.getByTestId('concept-under')).toHaveCount(0);
+  await alpha.dragTo(beta);
+  await expect(alpha.getByTestId('concept-under')).toHaveText('a kind of beta');
 });
 
 test('a topic with many concepts shows the most worked with; the rest fold under “N more”', async ({ page, request }) => {

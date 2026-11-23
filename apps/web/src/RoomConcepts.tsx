@@ -310,7 +310,12 @@ export function RoomConcepts({
       const otherId = l.from === c.id ? l.to : l.to === c.id ? l.from : null;
       if (!otherId || seen.has(otherId)) continue;
       const other = byId.get(otherId);
-      if (other) { seen.add(otherId); out.push(`${LINK_WORDS[l.kind]} ${other.title}`); }
+      if (!other) continue;
+      seen.add(otherId);
+      // Two ordered links the other way round would make both cards say they build on each other. Say that instead.
+      const symmetric = l.kind === 'contrasts-with' || l.kind === 'same-question';
+      const back = !symmetric && links.some((r) => r.from === otherId && r.to === c.id);
+      out.push(`${back ? 'linked both ways with' : LINK_WORDS[l.kind]} ${other.title}`);
     }
     return out.slice(0, 2);
   };

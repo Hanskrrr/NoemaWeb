@@ -6976,8 +6976,10 @@ button.room-fold:hover {
   gap: 1.2rem;
   align-items: start;
 }
+/* The chosen concept sits under the cards, not beside them: a narrower column made cards tall enough
+   that dragging one onto another needed a scroll mid-drag, and the drop landed elsewhere. */
 .concepts-body.has-drawer {
-  grid-template-columns: minmax(0, 1fr) minmax(16rem, 21rem);
+  grid-template-columns: minmax(0, 1fr);
 }
 @container (max-width: 50rem) {
   .concepts-body,

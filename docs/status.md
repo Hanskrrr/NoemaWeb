@@ -24,7 +24,7 @@ Also built along the way: **the Assistant** (ADR 0023), one assistant for the wh
 
 ## Known gaps
 
-- `pnpm lint` (Biome) and `pnpm e2e` have not been run on macOS lately; CI runs them on Linux for pull requests.
+- `pnpm lint` (Biome) now passes with 0 errors (116 warnings); it had 37 errors that CI never ran on. `pnpm e2e` has not been run on macOS lately; CI runs it on Linux for pull requests.
 - CI installs without `--frozen-lockfile`; now that `pnpm-lock.yaml` is committed, it should.
 - Images in web pages are not shown (their alt text is). A PDF opens as its pages, and a question about it goes with a picture of the page (ADR 0022); its stored text has formulas as the characters drawn, and a scanned PDF has no text (ADR 0021).
 - A note's citations point at an exchange, not one answer of it: after asking again, a citation shows the answer in use (ADR 0017).

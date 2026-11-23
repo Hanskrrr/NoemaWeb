@@ -179,7 +179,12 @@ function LookupTrail({ steps, live }: { steps: LookupStep[]; live: boolean }) {
   const from = many && live ? steps.length - STEPS_SHOWN : 0;
   const shown = many && !live ? [] : steps.slice(from);
   return (
-    <div className="lookup-trail" data-testid="lookup-trail" aria-label="What the Assistant looked up">
+    // biome-ignore lint/a11y/useAriaPropsSupportedByRole: a labelled group of lookups
+    <div
+      className="lookup-trail"
+      data-testid="lookup-trail"
+      aria-label="What the Assistant looked up"
+    >
       <span>Looked up</span>
       {many && (
         <button type="button" className="lookup-more" onClick={() => setOpen(true)} data-testid="lookup-more">

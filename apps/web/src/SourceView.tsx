@@ -283,6 +283,7 @@ export function SourceView({
       () => {},
     );
   }, [linkedKey, notebookId]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: opening another source closes the editor
   useEffect(() => setEditing(false), [sourceId]);
 
   const noteFromFile = async () => {
@@ -677,7 +678,12 @@ export function SourceView({
           </div>
           <div className="thread-actions">
             {shown.file && (
-              <div className="view-switch" role="group" aria-label="Show the PDF as">
+              // biome-ignore lint/a11y/useSemanticElements: a group of buttons, styled as a switch
+              <div
+                className="view-switch"
+                role="group"
+                aria-label="Show the PDF as"
+              >
                 <button
                   type="button"
                   className={view === 'pages' ? 'active' : 'quiet'}
@@ -875,6 +881,8 @@ export function SourceView({
             }}
           />
         ) : (
+        // biome-ignore lint/a11y/noStaticElementInteractions: a page turned by a click in a PDF
+        // biome-ignore lint/a11y/useKeyWithClickEvents: the PDF pages are turned by their own viewer
         <div
           className={`source-text${titleInText ? ' title-in-text' : ''}${shown.file ? ' source-pdf' : ''}${onPages ? ' source-pages' : ''}`}
           ref={text}

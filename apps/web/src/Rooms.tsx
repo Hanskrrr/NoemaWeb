@@ -201,7 +201,11 @@ function RoomRow({
         <span aria-hidden>⌂ </span>
         {room.title || 'Untitled room'}
         {alsoIn.length > 0 && (
-          <span className="room-also" aria-label={`also in ${alsoIn.join(', ')}`} data-testid="room-also">
+          <span
+            className="room-also"
+            title={`also in ${alsoIn.join(', ')}`}
+            data-testid="room-also"
+          >
             ⧉
           </span>
         )}

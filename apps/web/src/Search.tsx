@@ -159,12 +159,20 @@ export function SearchDialog({
           Nothing found for “{short(q, 40)}”.
         </p>
       ) : (
-        <ul id="search-hits" ref={list} role="listbox" className="search-hits" aria-label="Results">
+        <ul
+          id="search-hits"
+          ref={list}
+          // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: a listbox driven by the search box
+          role="listbox"
+          className="search-hits"
+          aria-label="Results"
+        >
           {hits.map((h, i) => (
             // biome-ignore lint/a11y/useKeyWithClickEvents: the search box's arrows and Enter are the keyboard path
             <li
               key={hitKey(h)}
               id={`search-hit-${i}`}
+              // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: an option in the results listbox
               role="option"
               tabIndex={-1}
               aria-selected={i === active}

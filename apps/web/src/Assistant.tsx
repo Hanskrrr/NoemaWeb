@@ -270,7 +270,7 @@ export function AssistantChat({
   useEffect(() => {
     const el = scroller.current;
     if (el && stick.current && lastLength >= 0) el.scrollTop = el.scrollHeight;
-  }, [lastLength, actions.length]);
+  }, [lastLength]);
 
   const drafted = useRef('');
   const onDraft = useCallback((text: string) => {
@@ -564,7 +564,12 @@ function Mentioned({
   if (groups.length === 0) return null;
   const shown = all ? groups : groups.slice(0, MENTIONS_SHOWN);
   return (
-    <div className="mentioned" data-testid="mentioned" aria-label="From your notebook">
+    // biome-ignore lint/a11y/useAriaPropsSupportedByRole: a labelled group of mentions
+    <div
+      className="mentioned"
+      data-testid="mentioned"
+      aria-label="From your notebook"
+    >
       {shown.map(({ key, labels, targets }) => {
         // The words shown: a quote of it if the answer has one, else the first place cited.
         const t = targets.find((x) => x.quote) ?? (targets[0] as VaultTarget);

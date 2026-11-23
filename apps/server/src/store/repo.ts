@@ -4572,7 +4572,9 @@ export class Repo {
         .run(name, named ? 1 : 0, status, error, t, id);
       if (status === 'done' || !hadBlocks) {
         if (status === 'done') this.db.sql.prepare('DELETE FROM note_block WHERE note_id = ?').run(id);
-        splitBlocks(content).forEach((text, i) => this.insertBlockRow(id, ulid(), i, text, 'ai', t));
+        splitBlocks(content).forEach((text, i) => {
+          this.insertBlockRow(id, ulid(), i, text, 'ai', t);
+        });
       }
       if (status === 'done') this.syncNote(id, 'ai', 'AI wrote the note');
       else this.syncNote(id, null, null);
@@ -4666,7 +4668,9 @@ export class Repo {
 
   private renumber(noteId: string, ids: string[]): void {
     const stmt = this.db.sql.prepare('UPDATE note_block SET pos = ? WHERE id = ? AND note_id = ?');
-    ids.forEach((id, i) => stmt.run(i, id, noteId));
+    ids.forEach((id, i) => {
+      stmt.run(i, id, noteId);
+    });
   }
 
   /**
@@ -4874,7 +4878,9 @@ export class Repo {
         )
         .run(newId, note.notebookId, note.threadId, title, JSON.stringify(note.refs), t, t);
       const move = this.db.sql.prepare('UPDATE note_block SET note_id = ?, pos = ?, updated_at = ? WHERE id = ?');
-      moving.forEach((b, i) => move.run(newId, i, t, b.id));
+      moving.forEach((b, i) => {
+        move.run(newId, i, t, b.id);
+      });
       this.syncNote(newId, 'user', `moved here from “${note.title}”`);
       this.syncNote(noteId, 'user', `moved ${moving.length} ${moving.length === 1 ? 'block' : 'blocks'} to “${title}”`);
       this.logEvent('note.split', noteId, { into: newId, blocks: moving.length });
@@ -5005,9 +5011,9 @@ export class Repo {
     for (const r of old) {
       this.db.tx(() => {
         const t = now();
-        splitBlocks(r.content as string).forEach((text, i) =>
-          this.insertBlockRow(r.id as string, ulid(), i, text, r.author as NoteBlock['author'], t),
-        );
+        splitBlocks(r.content as string).forEach((text, i) => {
+          this.insertBlockRow(r.id as string, ulid(), i, text, r.author as NoteBlock['author'], t);
+        });
         this.syncNote(r.id as string, null, null);
       });
     }

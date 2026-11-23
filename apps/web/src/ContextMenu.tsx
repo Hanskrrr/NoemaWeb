@@ -266,7 +266,7 @@ export function ContextMenuHost() {
             key={i}
             type="button"
             role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
-            aria-checked={item.checked}
+            {...(item.checked === undefined ? {} : { 'aria-checked': item.checked })}
             className="context-item"
             onClick={() => {
               closeMenu();

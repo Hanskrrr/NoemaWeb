@@ -362,11 +362,14 @@ test('the cards: a concept put under another (by its list, or its card dragged o
   await expect(node(page, 'fern quilt').getByTestId('concept-under')).toHaveText('a kind of reed burrow');
   await drawer.getByTestId('concept-put-under').selectOption({ label: 'Nothing: in no topic' });
   await expect(drawer.getByTestId('concept-home')).toHaveText('In no topic, under no concept');
+  // Later topics start folded; open this one to see what was put in it.
+  await topic(page, 'In no topic').getByTestId('concepts-topic-toggle').click();
   await expect(inTopic(page, 'In no topic')).toContainText(['fern quilt']);
-  // A card dragged onto another: under it.
-  await drag(page, node(page, 'summer fern quilt'), node(page, 'reed burrow'));
-  await expect(status).toContainText('“summer fern quilt” is under “reed burrow” now.');
+  // A concept put under another by its list (dragging across sections is covered by its own test below).
+  await pick(page, 'summer fern quilt');
+  await drawer.getByTestId('concept-put-under').selectOption({ label: 'reed burrow' });
   await expect(node(page, 'summer fern quilt').getByTestId('concept-under')).toHaveText('a kind of reed burrow');
+  await drawer.getByTestId('concept-drawer-close').click();
   // Onto a topic's heading: in it (the window tall enough for both to be seen as the card is carried).
   await page.setViewportSize({ width: 1280, height: 1500 });
   await page.getByTestId('concepts-find').evaluate((el) => el.scrollIntoView({ block: 'start' }));
@@ -569,6 +572,75 @@ test('a thread that grows is read again, only what changed; a concept shows from
   await page.getByTestId('concepts-read').click();
   await expect(page.getByTestId('concepts-read')).toHaveText(/Read again/);
   await expect(yours).toHaveCount(1);
+});
+
+test('Concepts: cards sit in one column with relations in words, and later topics start folded', async ({ page, request }) => {
+  const { room: big } = await glowfins(request, { cover: 'cloud cap', kind: 'summer cloud cap', den: 'reed cradle', title: 'Glowfin clouds' });
+  await request.post(`/api/rooms/${big}/read`, { headers: H });
+  await expect.poll(async () => (await (await request.get(`/api/rooms/${big}`)).json()).reading?.phase, { timeout: 30_000 }).toBe('done');
+  await request.post(`/api/rooms/${big}/concepts/keep`, { headers: H });
+  await page.goto(`/#/room/${big}`);
+  await page.getByTestId('room-mode-concepts').click();
+  // A second topic, made by hand: an empty concept that another one is put under.
+  await page.getByTestId('concept-new').click();
+  await page.getByTestId('concept-new-title').fill('Second topic');
+  await page.getByTestId('concept-new-title').press('Enter');
+  await pick(page, 'summer cloud cap');
+  await page.getByTestId('concept-drawer').getByTestId('concept-put-under').selectOption({ label: 'Second topic' });
+  await page.getByTestId('concept-drawer-close').click();
+  // Reopen: only the first topic is open, and its cards are one column.
+  await page.reload();
+  await page.getByTestId('room-mode-concepts').click();
+  await expect(topic(page, 'Second topic').getByTestId('concepts-topic-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByTestId('concepts-lane')).toHaveCount(1);
+  // A relation is in words on the card, not only in the column the card sits in.
+  await expect(page.getByTestId('concept-rel').first()).toBeVisible();
+});
+
+test('Concepts lenses: Explore opens every topic, Audit shows only the gaps', async ({ page, request }) => {
+  const { room: big } = await glowfins(request, { cover: 'silver veil', kind: 'winter silver veil', den: 'reed court', title: 'Glowfin lenses' });
+  await request.post(`/api/rooms/${big}/read`, { headers: H });
+  await expect.poll(async () => (await (await request.get(`/api/rooms/${big}`)).json()).reading?.phase, { timeout: 30_000 }).toBe('done');
+  await page.goto(`/#/room/${big}`);
+  await page.getByTestId('room-mode-concepts').click();
+  // A second topic, so Explore's "open every topic" can be seen.
+  await page.getByTestId('concept-new').click();
+  await page.getByTestId('concept-new-title').fill('Other ideas');
+  await page.getByTestId('concept-new-title').press('Enter');
+  await pick(page, 'winter silver veil');
+  await page.getByTestId('concept-drawer').getByTestId('concept-put-under').selectOption({ label: 'Other ideas' });
+  await page.getByTestId('concept-drawer-close').click();
+  await page.reload();
+  await page.getByTestId('room-mode-concepts').click();
+  // Study: later topics start folded (the default from the previous test).
+  await expect(topic(page, 'Other ideas').getByTestId('concepts-topic-toggle')).toHaveAttribute('aria-expanded', 'false');
+  // Explore: every topic open.
+  await page.getByTestId('concepts-lens').selectOption('explore');
+  await expect(topic(page, 'Other ideas').getByTestId('concepts-topic-toggle')).toHaveAttribute('aria-expanded', 'true');
+  // Audit: only gaps are on the cards; relations are not shown there.
+  await page.getByTestId('concepts-lens').selectOption('audit');
+  await expect(page.getByTestId('concept-rel')).toHaveCount(0);
+  await expect(page.getByTestId('concepts-audit')).toBeVisible();
+  // Back to Study: the relation words return.
+  await page.getByTestId('concepts-lens').selectOption('study');
+  await expect(page.getByTestId('concept-rel').first()).toBeVisible();
+});
+
+test('a card dragged onto another card puts it under it', async ({ page, request }) => {
+  const a = await noteWith(request, 'Alpha', '**alpha** is a thing.');
+  const b = await noteWith(request, 'Beta', '**beta** is another thing.');
+  const big = await room(request, 'Drag cards', [{ kind: 'note', id: a }, { kind: 'note', id: b }]);
+  await request.post(`/api/rooms/${big}/read`, { headers: H });
+  await expect.poll(async () => (await (await request.get(`/api/rooms/${big}`)).json()).reading?.phase, { timeout: 30_000 }).toBe('done');
+  await request.post(`/api/rooms/${big}/concepts/keep`, { headers: H });
+  await page.setViewportSize({ width: 1280, height: 1200 });
+  await page.goto(`/#/room/${big}`);
+  await page.getByTestId('room-mode-concepts').click();
+  const alpha = node(page, 'alpha');
+  const beta = node(page, 'beta');
+  await expect(alpha.getByTestId('concept-under')).toHaveCount(0);
+  await alpha.dragTo(beta);
+  await expect(alpha.getByTestId('concept-under')).toHaveText('a kind of beta');
 });
 
 test('a topic with many concepts shows the most worked with; the rest fold under “N more”', async ({ page, request }) => {

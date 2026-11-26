@@ -5191,6 +5191,76 @@ body.moving * {
   overflow-x: auto;
   overflow-y: hidden;
 }
+.room-overview {
+  display: grid;
+  gap: 0.75rem;
+}
+.room-overview-section {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--sheet);
+}
+.room-overview-section h2,
+.room-board-topic h2 {
+  margin: 0;
+  font: 600 0.84rem var(--sans);
+  color: var(--ink);
+}
+.room-overview-section p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.room-resume {
+  background: color-mix(in srgb, var(--accent) 6%, var(--sheet));
+}
+.room-picker-welcome {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.8rem;
+}
+.room-overview-row,
+.room-overview-topics,
+.room-goal-form,
+.room-board-options {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.6rem;
+}
+.room-resume .room-overview-row {
+  justify-content: space-between;
+}
+.room-goal-form input {
+  flex: 1 1 13rem;
+  min-width: 0;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+}
+.room-board-options button[aria-pressed='true'],
+.room-card-tool[aria-pressed='true'] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--sheet));
+}
+.room-board-topic {
+  position: absolute;
+  top: 21px;
+  padding: 0 0.35rem 0.35rem;
+  border-bottom: 1px solid var(--rule);
+  pointer-events: none;
+}
+.room-board-also {
+  margin: 0;
+  padding-inline: 0.4rem;
+}
 .room-canvas {
   position: relative;
   /* Its clusters, lines and words are layered among themselves, not with the rest of the window. */
@@ -5278,6 +5348,83 @@ body.moving * {
   border-left: 3px solid color-mix(in srgb, var(--accent) calc(var(--heat) * 85%), transparent);
   border-radius: 0;
 }
+.room-card-tools {
+  display: flex;
+  flex: none;
+  gap: 0.2rem;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0.2rem 0.35rem 0;
+}
+.room-card-tool {
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--sheet);
+  color: var(--ink-soft);
+  min-width: 1.4rem;
+  min-height: 1.4rem;
+  padding: 0 0.15rem;
+  line-height: 1;
+  font-family: var(--sans);
+  touch-action: none;
+}
+.room-card-tool:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.room-card.is-focused {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+.room-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.room-move-handle {
+  margin-right: auto;
+  cursor: grab;
+}
+.room-link-port {
+  border-radius: 50%;
+  cursor: crosshair;
+}
+.room-resize-handle {
+  align-self: flex-end;
+  flex: none;
+  margin: 0 0.25rem 0.2rem 0;
+  cursor: nwse-resize;
+}
+.room-parent-card {
+  padding: 0.25rem;
+  border: 1px solid color-mix(in srgb, var(--k, var(--accent)) 45%, var(--rule));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--k, var(--accent)) 7%, var(--sheet));
+}
+.room-card-drag-preview {
+  position: absolute;
+  z-index: 7;
+  max-width: 14rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--sheet);
+  color: var(--ink);
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--ink) 15%, transparent);
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.room-nest-toggle {
+  margin-top: 0.25rem;
+}
+.room-contained {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.25rem 0 0;
+  padding: 0 0 0 0.6rem;
+  border-left: 2px solid var(--rule);
+  list-style: none;
+}
 .room-card:hover,
 .room-card:focus-within {
   background: color-mix(in srgb, var(--accent) 6%, transparent);
@@ -5313,6 +5460,7 @@ body.moving * {
   background: transparent;
   color: var(--ink);
   text-align: left;
+  overflow-wrap: anywhere;
   font: inherit;
 }
 .room-card.is-target .room-card-open {
@@ -5613,11 +5761,6 @@ body.moving * {
 }
 .room-card-open {
   cursor: pointer;
-}
-/* A press on a card: held, a ring fills, then the cluster lifts to be moved. */
-.room-card.is-pressing {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--k, var(--accent)) 55%, transparent);
-  transition: box-shadow 0.7s linear;
 }
 .room-cluster.is-lifted {
   cursor: grabbing;

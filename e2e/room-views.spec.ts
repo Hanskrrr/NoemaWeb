@@ -76,6 +76,7 @@ test('a room opens in Folders: a room inside opens in place, a thing in two room
   await request.post(`/api/rooms/${big}/rooms`, { data: { room: inner }, headers: H });
 
   await page.goto(`/#/room/${big}`);
+  await page.getByTestId('room-mode-folders').click();
   await expect(page.getByTestId('room-mode-folders')).toHaveAttribute('aria-pressed', 'true');
   const rows = page.getByTestId('folder-row');
   // The room inside first, as a folder; then the things by name.

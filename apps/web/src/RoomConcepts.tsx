@@ -30,7 +30,7 @@ import {
 import { type DragEvent, type MouseEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { openMenu } from './ContextMenu.tsx';
-import { draggableItem, draggedFrom, droppedItem, FROM_ROOM_MIME, isItemDrag } from './drag.ts';
+import { draggableItem, draggedFrom, droppedItem, FROM_ROOM_MIME, isItemDrag, ITEM_MIME } from './drag.ts';
 import { EditableTitle } from './EditableTitle.tsx';
 import { deleteItems, useItems } from './itemMenu.ts';
 import { Orb } from './LivingFrame.tsx';
@@ -88,6 +88,84 @@ export function RoomConcepts({
   const [moreOpen, setMoreOpen] = useState<ReadonlySet<string>>(new Set());
   const [boxes, setBoxes] = useState<Map<string, Box>>(new Map());
   const board = useRef<HTMLDivElement>(null);
+  const conceptPage = useRef<HTMLDivElement>(null);
+
+  // Native drag-and-drop may consume wheel events. Keeping the pointer in an edge zone also scrolls the page.
+  useEffect(() => {
+    const root = conceptPage.current;
+    const page = document.scrollingElement;
+    if (!root || !page) return;
+    let scroller: Element | null = null;
+    let pointerY: number | null = null;
+    let frame = 0;
+    const findScroller = () => {
+      for (let el = root.parentElement; el && el !== page; el = el.parentElement) {
+        if (/auto|scroll/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight) return el;
+      }
+      return page;
+    };
+    const stop = () => {
+      cancelAnimationFrame(frame);
+      frame = 0;
+      pointerY = null;
+      scroller = null;
+    };
+    const tick = () => {
+      frame = 0;
+      if (!scroller || pointerY === null) return;
+      const rect = scroller === page ? null : scroller.getBoundingClientRect();
+      const top = Math.max(0, rect?.top ?? 0);
+      const bottom = Math.min(window.innerHeight, rect?.bottom ?? window.innerHeight);
+      const zone = Math.min(108, (bottom - top) / 3);
+      const above = top + zone - pointerY;
+      const below = pointerY - (bottom - zone);
+      const speed = above > 0 ? -Math.ceil(24 * Math.min(1, above / zone))
+        : below > 0 ? Math.ceil(24 * Math.min(1, below / zone)) : 0;
+      if (!speed) return;
+      const previous = scroller.scrollTop;
+      scroller.scrollTop += speed;
+      if (scroller.scrollTop !== previous) frame = requestAnimationFrame(tick);
+    };
+    const over = (event: globalThis.DragEvent) => {
+      const types = event.dataTransfer?.types;
+      if (!types?.includes(ITEM_MIME) && !types?.includes(CONCEPT_MIME)) return;
+      const { left, right } = root.getBoundingClientRect();
+      if (event.clientX < left || event.clientX > right) {
+        stop();
+        return;
+      }
+      scroller ??= findScroller();
+      pointerY = event.clientY;
+      if (!frame) frame = requestAnimationFrame(tick);
+    };
+    const wheel = (event: WheelEvent) => {
+      if (!scroller || pointerY === null || !event.deltaY || event.ctrlKey) return;
+      event.preventDefault();
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? scroller.clientHeight : 1;
+      scroller.scrollTop += event.deltaY * unit;
+    };
+    const leave = (event: globalThis.DragEvent) => {
+      if (event.relatedTarget === null && (event.clientY <= 0 || event.clientY >= window.innerHeight)) stop();
+    };
+    // A stationary drag can reach a new element without delivering another dragover.
+    document.addEventListener('dragenter', over, true);
+    document.addEventListener('dragover', over, true);
+    document.addEventListener('dragleave', leave);
+    document.addEventListener('dragend', stop, true);
+    document.addEventListener('drop', stop, true);
+    window.addEventListener('blur', stop);
+    window.addEventListener('wheel', wheel, { passive: false });
+    return () => {
+      stop();
+      document.removeEventListener('dragenter', over, true);
+      document.removeEventListener('dragover', over, true);
+      document.removeEventListener('dragleave', leave);
+      document.removeEventListener('dragend', stop, true);
+      document.removeEventListener('drop', stop, true);
+      window.removeEventListener('blur', stop);
+      window.removeEventListener('wheel', wheel);
+    };
+  }, []);
 
   const cards = new Map<string, RoomCard>(view.clusters.flatMap((c) => c.cards.map((x) => [`${x.kind}:${x.id}`, x] as const)));
   const all = view.concepts;
@@ -512,7 +590,7 @@ export function RoomConcepts({
   const reading_ = reading?.phase === 'concepts' && reading.total > 0 ? reading : null;
 
   return (
-    <div className="room-concepts" data-testid="room-concepts">
+    <div ref={conceptPage} className="room-concepts" data-testid="room-concepts">
       <div className="concepts-bar">
         <Orb size="small" />
         <p className="concepts-bar-text" data-testid="concepts-bar">

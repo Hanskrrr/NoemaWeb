@@ -110,7 +110,7 @@ test('right-click puts a note in a room, or in a new one; in the room, it is tak
   await expect(page.getByTestId('room-link').filter({ hasText: 'Exam prep' })).toContainText('1');
 });
 
-test('in a room, you choose what is in it; a card held a moment lifts its cluster to move it, kept after a reload', async ({ page, request }) => {
+test('in a room, you choose what is in it; the move handle lifts the cluster, kept after a reload', async ({ page, request }) => {
   await freshThread(request);
   const a = await addSource(request, 'Attention paper');
   const b = await addNote(request, 'Softmax note');
@@ -125,30 +125,34 @@ test('in a room, you choose what is in it; a card held a moment lifts its cluste
   await expect(page.getByTestId('room-cluster')).toHaveCount(2);
 
   const first = page.locator(`[data-testid=room-cluster][data-key="source:${a}"]`);
+  await page.getByTestId('room-board-free').click();
+  const inRoom = async () => {
+    const canvas = await page.getByTestId('room-canvas').boundingBox();
+    const cluster = await first.boundingBox();
+    if (!canvas || !cluster) throw new Error('The card is not on the board.');
+    return { x: Math.round(cluster.x - canvas.x), y: Math.round(cluster.y - canvas.y) };
+  };
+  const startingPosition = await inRoom();
   const before = await first.boundingBox();
   const box = before as { x: number; y: number; width: number; height: number };
-  await page.mouse.move(box.x + 30, box.y + 12);
+  const grip = (await first.getByTestId('room-move-handle').boundingBox()) as typeof box;
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
   await page.mouse.down();
-  // Held still a moment, it lifts; then it moves with the pointer.
+  await page.mouse.move(grip.x + grip.width / 2 + 20, grip.y + grip.height / 2 + 20);
   await expect(first).toHaveClass(/is-lifted/);
-  await page.mouse.move(box.x + 130, box.y + 152, { steps: 6 });
+  await page.mouse.move(grip.x + grip.width / 2 + 100, grip.y + grip.height / 2 + 140, { steps: 6 });
   await page.mouse.up();
   await expect(first).not.toHaveClass(/is-lifted/);
   // Alt+arrow moves it on from the keyboard.
   await first.getByTestId('room-card-open').first().focus();
   await page.keyboard.press('Alt+ArrowRight');
-  const moved = (await first.boundingBox()) as typeof box;
-  expect(Math.round(moved.x - box.x)).toBe(124);
-  expect(Math.round(moved.y - box.y)).toBe(140);
+  const moved = await inRoom();
+  expect(moved.x - startingPosition.x).toBe(124);
+  expect(moved.y - startingPosition.y).toBe(140);
   // Dragging did not open it.
   await expect(page.getByTestId('room')).toBeVisible();
 
   // Where it sits in the room (the picker above moves the whole map down).
-  const inRoom = async () => {
-    const c = (await page.getByTestId('room-canvas').boundingBox()) as typeof box;
-    const x = (await page.locator(`[data-testid=room-cluster][data-key="source:${a}"]`).boundingBox()) as typeof box;
-    return { x: Math.round(x.x - c.x), y: Math.round(x.y - c.y) };
-  };
   const there = await inRoom();
   await page.waitForTimeout(300);
   await page.reload();
@@ -216,6 +220,8 @@ test('read with AI: summaries whose points open the words they quote; suggested 
   await page.goBack();
 
   // The suggested link waits in Review, not on the map; kept, it is drawn in its kind's colour.
+  await page.getByTestId('room-board-free').click();
+  await page.getByTestId('room-board-all-links').click();
   const label = page.getByTestId('link-label');
   await expect(label).toHaveCount(0);
   await page.getByTestId('room-review-open').click();
@@ -278,6 +284,7 @@ test('with the Assistant open on a room, nothing of the room is drawn over it: f
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/#/room/${room}`);
   await expect(page.getByTestId('room-cluster')).toHaveCount(3);
+  await page.getByTestId('room-board-free').click();
   const map = page.getByTestId('room-map');
   const mapWidth = () => map.evaluate((e) => e.clientWidth);
   const wide = await mapWidth();
@@ -334,10 +341,10 @@ test('drag from one card to another to link them: the line glows while the AI ch
   await expect(page.getByTestId('room-cluster')).toHaveCount(2);
   const from = page.locator(`[data-testid=room-card][data-id="${b}"]`);
   const to = page.locator(`[data-testid=room-card][data-id="${a}"]`);
-  const fb = (await from.boundingBox()) as { x: number; y: number; width: number; height: number };
+  const fb = (await from.getByTestId('room-link-port').boundingBox()) as { x: number; y: number; width: number; height: number };
   const tb = (await to.boundingBox()) as typeof fb;
   // Pressed and moved at once: a line follows the pointer; the card under it is the target.
-  await page.mouse.move(fb.x + 40, fb.y + 20);
+  await page.mouse.move(fb.x + fb.width / 2, fb.y + fb.height / 2);
   await page.mouse.down();
   await page.mouse.move(fb.x + 80, fb.y + 40, { steps: 3 });
   await page.mouse.move(tb.x + 60, tb.y + 30, { steps: 8 });
@@ -352,9 +359,12 @@ test('drag from one card to another to link them: the line glows while the AI ch
   await expect(page.getByTestId('room')).toBeVisible();
   // Drawn again between the same two: that link is shown, not a second one.
   await page.keyboard.press('Escape');
-  await page.mouse.move(fb.x + 40, fb.y + 20);
+  await expect(editor).toHaveCount(0);
+  const freshFrom = (await from.getByTestId('room-link-port').boundingBox()) as typeof fb;
+  const freshTo = (await to.boundingBox()) as typeof tb;
+  await page.mouse.move(freshFrom.x + freshFrom.width / 2, freshFrom.y + freshFrom.height / 2);
   await page.mouse.down();
-  await page.mouse.move(tb.x + 60, tb.y + 30, { steps: 8 });
+  await page.mouse.move(freshTo.x + 60, freshTo.y + 30, { steps: 8 });
   await page.mouse.up();
   await expect(page.getByTestId('room-status')).toContainText('Those two are linked already');
   await expect(page.getByTestId('item-line')).toHaveCount(1);
@@ -513,9 +523,9 @@ test('rooms in rooms: a room put in a bigger one is a door there; through it, th
 
   // A card drawn onto the door goes in that room, and stays here until taken out.
   const card = page.locator(`[data-testid=room-card][data-id="${a}"]`);
-  const cb = (await card.boundingBox()) as { x: number; y: number; width: number; height: number };
+  const cb = (await card.getByTestId('room-link-port').boundingBox()) as { x: number; y: number; width: number; height: number };
   const db = (await door.boundingBox()) as typeof cb;
-  await page.mouse.move(cb.x + 40, cb.y + 20);
+  await page.mouse.move(cb.x + cb.width / 2, cb.y + cb.height / 2);
   await page.mouse.down();
   await page.mouse.move(cb.x + 80, cb.y + 40, { steps: 3 });
   await page.mouse.move(db.x + 60, db.y + 30, { steps: 8 });

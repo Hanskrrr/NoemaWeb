@@ -21,7 +21,7 @@ export interface RoomsApi {
   /** What goes in a room for this: a side question goes in as the thread it is part of. */
   unit: (item: { kind: DragItem['kind']; id: string }) => RoomItemRef;
   /** Open a room; through a door, with the rooms passed through to get there (ADR 0032). */
-  openRoom: (roomId: string, path?: string[]) => void;
+  openRoom: (roomId: string, path?: string[], newlyCreated?: boolean) => void;
   refresh: () => Promise<void>;
   /** Rooms in rooms (ADR 0032): put a room in another (false if it could not be), or take it out. */
   putRoom: (parentId: string, childId: string, at?: { x: number; y: number }) => Promise<boolean>;
@@ -311,7 +311,7 @@ export function RoomsPanel({
     const room = await rooms.create(title.trim());
     setTitle('');
     setNaming(false);
-    if (room) rooms.openRoom(room.id);
+    if (room) rooms.openRoom(room.id, undefined, true);
   };
 
   // What is in no room: sources, threads of their own, notes.

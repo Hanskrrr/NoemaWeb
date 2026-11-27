@@ -1834,7 +1834,7 @@ function RoomBrief({
             model: about {unread + 2 + (pieces > 0 ? pieces + 3 : 0)} calls{pieces > 0 && `, ${pieces} of them reading its threads and notes for concepts`}.
           </p>
         )}
-        {status && (
+        {(!compact || reading?.phase === 'failed') && status && (
           <p className={`hint room-status${reading?.phase === 'failed' ? ' is-error' : ''}`} role="status" data-testid="room-reading">
             {status}
           </p>

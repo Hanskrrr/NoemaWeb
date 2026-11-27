@@ -1278,7 +1278,7 @@ export function RoomView({
           onReview={() => setReviewing((r) => !r)}
           onOpen={(item) => (item.kind === 'room' ? rooms.openRoom(item.id, through) : onOpen(item.kind, item.id))}
           titles={cards}
-          compact={mode === 'board' && density === 'compact'}
+          compact={(mode === 'board' && density === 'compact') || (mode !== 'overview' && mode !== 'board')}
         />
       )}
       {linking && (
@@ -1819,7 +1819,9 @@ function RoomBrief({
           </div>
         </div>
         {compact ? (
-          <p className="room-brief-text hint">Titles and links only. Turn Compact off to read the summary.</p>
+          <p className="room-brief-text hint" data-testid="room-brief-compact">
+            {held} · {suggested > 0 ? `${plural(suggested, 'link')} to review` : 'all kept'} · the brief is on Overview
+          </p>
         ) : brief ? (
           <p className={`room-brief-text${brief.fresh ? '' : ' is-stale'}`} data-testid="room-brief-text">
             {brief.text}

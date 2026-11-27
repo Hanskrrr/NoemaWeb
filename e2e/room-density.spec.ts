@@ -33,6 +33,7 @@ test('Board density: Compact keeps titles and links, and hides summaries, counts
   await page.getByTestId('room-mode-board').click();
   // Normal first: the summary is on the card.
   await expect(page.getByTestId('room-gist').first()).toBeVisible();
+  // Normal keeps the room's brief; Compact folds it to one line.
   await expect(page.getByTestId('room-brief-text')).toBeVisible();
   const link = page.locator('[data-testid="room-line"]');
   if ((await link.count()) > 0) await expect(link.first().locator('text')).toHaveCount(1);

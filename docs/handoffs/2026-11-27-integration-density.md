@@ -50,6 +50,31 @@ The feature code is kept. The scenario is `test.fixme` with the reason in the fi
 in PR #4. Fixing it needs a drag that survives a long scroll, which belongs with #3's
 author or a follow-up, not an integration PR.
 
+## Found by looking, and fixed
+
+A visual pass over four states of one room (Overview, Board Normal, Board Compact,
+Concepts) found two things the tests had not:
+
+- **A relation read from the wrong end.** Every ordered link put "builds on X" on
+  both cards, because the reverse check counted the link itself. Cards now read
+  "builds on" from the end that builds, and "is built on by" from the other; a real
+  pair of opposite links still reads "linked both ways with". `room-views.spec.ts`
+  asserts both ends.
+- **The full brief on every view.** On Concepts the brief took about a third of the
+  first screen above cards that already carried their own summaries. It is now full
+  on Overview (where it belongs, ADR 0030) and on the Board, and one line
+  ("3 things · 2 links to review · the brief is on Overview") on Concepts, Path and
+  Folders. The Board keeps it because `rooms.spec.ts` is about the Board and asserts
+  the brief there.
+
+Still visible in the walk-through, not changed here:
+
+- the Board's topic layout puts every cluster in one left-hand column, leaving about
+  half the width as dotted empty canvas at 1440 px;
+- the ask bar at the bottom covers the lower part of the last card;
+- under a reading the status line ("Read. 3 summaries written…") still shows on
+  Concepts in its compact state.
+
 ## Verified
 
 - CI on `bc22dad`: **green on Node 22 and 24** — install, typecheck, lint (0 errors),

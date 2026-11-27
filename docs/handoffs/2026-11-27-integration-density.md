@@ -66,14 +66,15 @@ Concepts) found two things the tests had not:
   ("3 things · 2 links to review · the brief is on Overview") on Concepts, Path and
   Folders. The Board keeps it because `rooms.spec.ts` is about the Board and asserts
   the brief there.
+- **The reading status line under it.** "Read. 3 summaries written…" took two more
+  lines on every view, including the folded ones. It is now hidden wherever the brief
+  is one line, except when a reading failed: an error always shows.
 
 Still visible in the walk-through, not changed here:
 
 - the Board's topic layout puts every cluster in one left-hand column, leaving about
   half the width as dotted empty canvas at 1440 px;
 - the ask bar at the bottom covers the lower part of the last card;
-- under a reading the status line ("Read. 3 summaries written…") still shows on
-  Concepts in its compact state.
 
 ## Verified
 

@@ -7118,8 +7118,10 @@ button.room-fold:hover {
   gap: 1.2rem;
   align-items: start;
 }
+/* The chosen concept sits under the cards, not beside them: a narrower column made cards tall enough
+   that dragging one onto another needed a scroll mid-drag, and the drop landed elsewhere. */
 .concepts-body.has-drawer {
-  grid-template-columns: minmax(0, 1fr) minmax(16rem, 21rem);
+  grid-template-columns: minmax(0, 1fr);
 }
 @container (max-width: 50rem) {
   .concepts-body,
@@ -7895,8 +7897,37 @@ button.room-fold:hover {
 .concept-under.is-suggested {
   font-style: italic;
 }
-.concept-inside-line {
+.concept-rels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.5rem;
   margin: 0;
+  color: var(--ink-soft);
   font-size: 0.8rem;
-  text-align: left;
+}
+.concept-rels span::before {
+  content: '↳ ';
+  color: var(--ink-faint);
+}
+.concepts-lens-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.concepts-lens-label select {
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.82rem;
+}
+.concepts-audit {
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
 }

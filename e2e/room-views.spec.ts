@@ -459,6 +459,12 @@ test('a concept is split, merged back, linked by hand, asked about, and made a r
   await drawer.getByTestId('concept-link-other').selectOption({ label: 'reed raft' });
   await drawer.getByTestId('concept-link-save').click();
   await expect(drawer.getByTestId('concept-link')).toContainText('builds on “reed raft”');
+  // Read from each end: the one that builds on, and the one built on.
+  await expect(node(page, 'Licking spots').getByTestId('concept-rel')).toContainText('builds on reed raft');
+  await expect(node(page, 'reed raft').getByTestId('concept-rel')).toContainText('is built on by Licking spots');
+  // Read from each end: the one that builds on, and the one built on.
+  await expect(node(page, 'Licking spots').getByTestId('concept-rel')).toContainText('builds on reed raft');
+  await expect(node(page, 'reed raft').getByTestId('concept-rel')).toContainText('is built on by Licking spots');
 
   // Merged back: its name stays as another name.
   await drawer.getByTestId('concept-merge').click();

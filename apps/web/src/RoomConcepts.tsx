@@ -46,6 +46,16 @@ const isLens = (x: unknown): x is ConceptsLens => typeof x === 'string' && LENSE
 const QUOTE_FROM: Record<VaultTarget['kind'], string> = { thread: 'your thread', source: 'your source', note: 'your note' };
 const ROLE_WORD: Record<ConceptPlace['role'], string> = { defines: 'defines it', explains: 'explains it', uses: 'uses it', example: 'an example', asks: 'asks about it' };
 const CONCEPT_LINK_CHOICES: LinkKind[] = ['builds-on', 'contrasts-with', 'example-of', 'explains'];
+/** The same link read from its other end: "A builds on B" is "B is built on by A". */
+const LINK_WORDS_BACK: Record<LinkKind, string> = {
+  explains: 'is explained by',
+  'example-of': 'has as an example',
+  'builds-on': 'is built on by',
+  'contrasts-with': 'contrasts with',
+  'same-question': 'asks the same as',
+  'part-of': 'has as a part',
+  related: 'is related to',
+};
 /** Cards shown in a topic before the rest fold away, the most worked with first. */
 const SHOWN_IN_TOPIC = 8;
 /** A concept card being dragged, to put it under another concept or in a topic. */
@@ -385,15 +395,17 @@ export function RoomConcepts({
     const out: string[] = [];
     const seen = new Set<string>();
     for (const l of links) {
-      const otherId = l.from === c.id ? l.to : l.to === c.id ? l.from : null;
+      const fromMe = l.from === c.id;
+      const otherId = fromMe ? l.to : l.to === c.id ? l.from : null;
       if (!otherId || seen.has(otherId)) continue;
       const other = byId.get(otherId);
       if (!other) continue;
       seen.add(otherId);
       // Two ordered links the other way round would make both cards say they build on each other. Say that instead.
       const symmetric = l.kind === 'contrasts-with' || l.kind === 'same-question';
-      const back = !symmetric && links.some((r) => r.from === otherId && r.to === c.id);
-      out.push(`${back ? 'linked both ways with' : LINK_WORDS[l.kind]} ${other.title}`);
+      const back = !symmetric && links.some((r) => r !== l && r.from === otherId && r.to === c.id);
+      const words = back ? 'linked both ways with' : fromMe ? LINK_WORDS[l.kind] : LINK_WORDS_BACK[l.kind];
+      out.push(`${words} ${other.title}`);
     }
     return out.slice(0, 2);
   };

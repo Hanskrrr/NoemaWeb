@@ -5,6 +5,8 @@ export const BOARD_SIZE = { minWidth: 220, maxWidth: 520, minHeight: 84, maxHeig
 export type CardSize = { w: number; h: number };
 export type BoardPreferences = {
   mode?: 'topics' | 'free';
+  /** Compact shows titles and structure only: no summaries, no counts, no words on the lines. */
+  density?: 'compact' | 'normal';
   order?: string[];
   sizes?: Record<string, CardSize>;
   parents?: Record<string, string>;

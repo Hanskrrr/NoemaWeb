@@ -136,6 +136,7 @@ export function RoomView({
   const [spots, setSpots] = useState<Map<string, Spot>>(new Map());
   const [sizes, setSizes] = useState<Map<string, { w: number; h: number }>>(new Map());
   const [board, setBoard] = useState<BoardPreferences>(() => storage.getJson(keys.roomBoard(roomId), {}) ?? {});
+  const density = board.density ?? 'normal';
   const [goal, setGoal] = useState(() => storage.get(keys.roomGoal(roomId)) ?? '');
   const [editingGoal, setEditingGoal] = useState(false);
   const [openBranches, setOpenBranches] = useState<OpenBranch[]>([]);
@@ -836,7 +837,7 @@ export function RoomView({
             {!head && <span aria-hidden>{GLYPH[c.kind]} </span>}
             {c.title || 'Untitled'}
           </span>
-          {(marks || open > 0) && (
+          {density === 'normal' && (marks || open > 0) && (
             <span className="room-card-marks" data-testid="room-card-marks">
               {marks}
               {open > 0 && (
@@ -848,7 +849,7 @@ export function RoomView({
             </span>
           )}
         </button>
-        {gist && !nested && (
+        {density === 'normal' && gist && !nested && (
           <div className={`room-gist${gist.fresh ? '' : ' is-stale'}`} data-testid="room-gist">
             <p title={gist.fresh ? `Written by ${gist.model}` : 'Written before it changed: read the room again'}>
               <span className="room-gist-by">AI{gist.fresh ? '' : ', older'} · </span>
@@ -1277,6 +1278,7 @@ export function RoomView({
           onReview={() => setReviewing((r) => !r)}
           onOpen={(item) => (item.kind === 'room' ? rooms.openRoom(item.id, through) : onOpen(item.kind, item.id))}
           titles={cards}
+          compact={mode === 'board' && density === 'compact'}
         />
       )}
       {linking && (
@@ -1437,6 +1439,9 @@ export function RoomView({
               onClick={() => setBoard((state) => ({ ...state, mode: 'free' }))}>Free layout</button>
             <button type="button" className="quiet" aria-pressed={allLinks} data-testid="room-board-all-links"
               onClick={() => setAllLinks((shown) => !shown)}>Show all links</button>
+            <button type="button" className="quiet" aria-pressed={density === 'compact'} data-testid="board-density"
+              title="Titles and links only: no summaries, no counts, no words on the lines"
+              onClick={() => setBoard((state) => ({ ...state, density: (state.density ?? 'normal') === 'compact' ? 'normal' : 'compact' }))}>Compact</button>
           </div>
           {LINK_KINDS.filter((k) => boardLinks.some((l) => l.kind === k)).map((k) => (
             <span key={k} className={`legend-kind kind-${k}`}>
@@ -1504,9 +1509,11 @@ export function RoomView({
             return (
               <g key={`${l.from}>${l.to}`} className="room-line" data-testid="room-line">
                 <path d={d} />
-                <text x={p1.x + (p2.x - p1.x) * 0.3} y={p1.y + (p2.y - p1.y) * 0.3 - 6} textAnchor="middle">
-                  {words}
-                </text>
+                {density === 'normal' && (
+                  <text x={p1.x + (p2.x - p1.x) * 0.3} y={p1.y + (p2.y - p1.y) * 0.3 - 6} textAnchor="middle">
+                    {words}
+                  </text>
+                )}
               </g>
             );
           })}
@@ -1735,6 +1742,7 @@ function RoomBrief({
   onReview,
   onOpen,
   titles,
+  compact = false,
 }: {
   view: RoomViewData;
   busy: boolean;
@@ -1746,6 +1754,7 @@ function RoomBrief({
   onReview: () => void;
   onOpen: (item: { kind: RoomKind | 'room'; id: string }) => void;
   titles: Map<string, RoomCard>;
+  compact?: boolean;
 }) {
   const { brief, reading, unread } = view;
   const [finding, setFinding] = useState<string | null>(null);
@@ -1809,7 +1818,9 @@ function RoomBrief({
             <h2>{brief ? 'What this room adds up to' : 'Read this room'}</h2>
           </div>
         </div>
-        {brief ? (
+        {compact ? (
+          <p className="room-brief-text hint">Titles and links only. Turn Compact off to read the summary.</p>
+        ) : brief ? (
           <p className={`room-brief-text${brief.fresh ? '' : ' is-stale'}`} data-testid="room-brief-text">
             {brief.text}
           </p>
@@ -1832,7 +1843,7 @@ function RoomBrief({
           </div>
         )}
       </div>
-      {brief && brief.open.length > 0 && (
+      {!compact && brief && brief.open.length > 0 && (
         <div className="room-brief-col" data-testid="room-open">
           <p className="room-brief-label">Still open</p>
           <ul>

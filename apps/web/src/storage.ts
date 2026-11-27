@@ -65,6 +65,10 @@ export const keys = {
   /** How each room was last seen (Folders, Concepts, Path, Board), by room; and the last one chosen, for rooms not yet seen (ADR 0035). */
   roomViews: 'noema:room-views',
   roomViewLast: 'noema:room-view',
+  roomBoard: (roomId: string) => `noema:room-board:${roomId}`,
+  roomGoal: (roomId: string) => `noema:room-goal:${roomId}`,
   /** The column the Folders view is sorted by, and which way. */
   foldersSort: 'noema:folders-sort',
+  /** Which Concepts lens is showing: study order, explore the ideas, or audit the gaps. */
+  conceptsLens: 'noema:concepts-lens',
 };

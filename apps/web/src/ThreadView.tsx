@@ -650,10 +650,11 @@ export function ThreadView({
   };
 
   // Make the revision shown the one in use: it is then searched and sent with new questions.
-  const useShown = async (messageId: string) => {
+  const markShownInUse = async (messageId: string) => {
     const v = viewing.get(messageId);
     if (!v) return;
     try {
+      // biome-ignore lint/correctness/useHookAtTopLevel: api.useRevision is an HTTP call, not a React hook
       const { message } = await api.useRevision(messageId, v.revisionId);
       dispatch({ type: 'upsert', message });
       await showRevision(messageId, null);
@@ -946,7 +947,7 @@ export function ThreadView({
                         of: m.revisions,
                         inUse: inUse.revision,
                         onShow: live ? undefined : (n: number) => void flip(m.id, n),
-                        onUse: viewing.has(m.id) && !live && !thread?.deletedAt ? () => void useShown(m.id) : undefined,
+                        onUse: viewing.has(m.id) && !live && !thread?.deletedAt ? () => void markShownInUse(m.id) : undefined,
                       }
                     : undefined
                 }

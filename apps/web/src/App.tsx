@@ -106,6 +106,8 @@ function NotebookView({
   const [rooms, setRooms] = useState<Room[]>([]);
   const [roomsChanged, setRoomsChanged] = useState(0);
   const [roomNotice, setRoomNotice] = useState<string | null>(null);
+  const [newRoomHint, setNewRoomHint] = useState<string | null>(null);
+  const consumeRoomHint = useCallback(() => setNewRoomHint(null), []);
   /** The way into the room open (ADR 0032): the rooms passed through, by their doors. */
   const [roomVia, setRoomVia] = useState<{ id: string; path: string[] } | null>(null);
   const [trash, setTrash] = useState<Trash>({ threads: [], notes: [], sources: [] });
@@ -282,8 +284,9 @@ function NotebookView({
       changed: roomsChanged,
       refresh: refreshRooms,
       unit: (item) => unitOf(threads ?? [], item),
-      openRoom: (id, path) => {
+      openRoom: (id, path, newlyCreated) => {
         setRoomVia(path && path.length > 0 ? { id, path } : null);
+        setNewRoomHint(newlyCreated ? id : null);
         go({ kind: 'room', id });
       },
       putRoom: async (parentId, childId, at) => {
@@ -633,6 +636,7 @@ function NotebookView({
         return `${title} will be gone for good, with its blocks and its history. ${never}`;
       },
     };
+    // biome-ignore lint/correctness/useExhaustiveDependencies: restore* are re-created every render; this memo only builds the words of a confirmation
   }, [threads, notes, sources, trash, route, beside, go, refresh, say, restoreThread, restoreNote, restoreSource]);
 
 
@@ -719,6 +723,8 @@ function NotebookView({
       <RoomView
         key={route.id}
         roomId={route.id}
+        newlyCreated={newRoomHint === route.id}
+        onNewRoomHintConsumed={consumeRoomHint}
         path={roomVia?.id === route.id ? roomVia.path : []}
         notebookId={notebook.id}
         threads={threads ?? []}
@@ -1205,6 +1211,7 @@ function FloatingAssistant({
         // biome-ignore lint/a11y/useSemanticElements: a corner to drag has no element of its own
         <div
           className="float-grip"
+          // biome-ignore lint/a11y/useAriaPropsForRole: a pointer grip, with no value to announce
           role="separator"
           aria-label="Size of the Assistant"
           tabIndex={0}

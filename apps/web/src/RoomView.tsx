@@ -15,6 +15,7 @@ import {
   LINK_WORDS,
   type LinkKind,
   type NoteSummary,
+  type OpenBranch,
   type Room,
   placeClusters,
   placeLabels,
@@ -54,6 +55,7 @@ import { isTopic, RoomConcepts } from './RoomConcepts.tsx';
 import { RoomFolders } from './RoomFolders.tsx';
 import { type PathNode, RoomPath } from './RoomPath.tsx';
 import { roomMenu, useRooms } from './Rooms.tsx';
+import { boardParents, boardTopicGroups, type BoardPreferences, type CardSize, linkCardKey, resizeCard } from './roomBoard.ts';
 import { CONCEPT_GLYPH, type Door, day, GLYPH, holdsOf, kindName, marksOf, plural, type RoomCard, refOf } from './roomText.ts';
 import { keys, storage } from './storage.ts';
 
@@ -65,8 +67,8 @@ const ROW_GAP = 48;
 const SETTLE_GAP = 24;
 const EDGE = 24;
 const STEP = 24;
-/** Held this long without moving, a card lifts, to be moved (ADR 0029); moved at once, it draws a link. */
-const HOLD_MS = 700;
+const TOPIC_TOP = 62;
+const TOPIC_GAP = 60;
 
 type Spot = { x: number; y: number };
 type Box = { x: number; y: number; w: number; h: number };
@@ -76,8 +78,9 @@ const doorKey = (id: string) => `room:${id}`;
 const isDoorKey = (key: string) => key.startsWith('room:');
 
 /** The ways to see a room (ADR 0035), one question each; each room opens in the way it was last seen. */
-export type RoomMode = 'folders' | 'concepts' | 'path' | 'board';
+export type RoomMode = 'overview' | 'folders' | 'concepts' | 'path' | 'board';
 const MODES: Array<{ mode: RoomMode; label: string; glyph: string; title: string }> = [
+  { mode: 'overview', label: 'Overview', glyph: '◫', title: 'Resume a question and find the room’s topics' },
   { mode: 'folders', label: 'Folders', glyph: '☰', title: 'As a list, like Finder: rooms inside are folders, things are files' },
   { mode: 'concepts', label: 'Concepts', glyph: '◎', title: 'As the key ideas it is about, each holding its things (ADR 0036)' },
   { mode: 'path', label: 'Path', glyph: '→', title: 'As an order to study in, from the links you kept' },
@@ -88,7 +91,7 @@ function modeOf(roomId: string): RoomMode {
   const mine = storage.getJson<Record<string, string>>(keys.roomViews, {})[roomId];
   if (isMode(mine)) return mine;
   const last = storage.get(keys.roomViewLast);
-  return isMode(last) ? last : 'folders';
+  return isMode(last) ? last : 'overview';
 }
 function rememberMode(roomId: string, mode: RoomMode) {
   const all = storage.getJson<Record<string, string>>(keys.roomViews, {});
@@ -98,6 +101,8 @@ function rememberMode(roomId: string, mode: RoomMode) {
 
 export function RoomView({
   roomId,
+  newlyCreated,
+  onNewRoomHintConsumed,
   path,
   notebookId,
   threads,
@@ -109,6 +114,8 @@ export function RoomView({
   onDeleted,
 }: {
   roomId: string;
+  newlyCreated: boolean;
+  onNewRoomHintConsumed: () => void;
   /** The rooms passed through to get here, by their doors (ADR 0032). */
   path: string[];
   /** Add a source, which goes in this room (ADR 0030). */
@@ -128,7 +135,21 @@ export function RoomView({
   const [problem, setProblem] = useState<string | null>(null);
   const [spots, setSpots] = useState<Map<string, Spot>>(new Map());
   const [sizes, setSizes] = useState<Map<string, { w: number; h: number }>>(new Map());
+  const [board, setBoard] = useState<BoardPreferences>(() => storage.getJson(keys.roomBoard(roomId), {}) ?? {});
+  const density = board.density ?? 'normal';
+  const [goal, setGoal] = useState(() => storage.get(keys.roomGoal(roomId)) ?? '');
+  const [editingGoal, setEditingGoal] = useState(false);
+  const [openBranches, setOpenBranches] = useState<OpenBranch[]>([]);
+  const [boardFocus, setBoardFocus] = useState<string | null>(null);
+  const [topicJump, setTopicJump] = useState<string | null>(null);
+  const [allLinks, setAllLinks] = useState(false);
+  const [nesting, setNesting] = useState<string | null>(null);
+  const [nestDrop, setNestDrop] = useState<{ child: string; parent: string } | null>(null);
+  const [nestDrag, setNestDrag] = useState<{ target: string | null; preview: { key: string; x: number; y: number } | null } | null>(null);
+  const [dragSpot, setDragSpot] = useState<{ key: string; at: Spot } | null>(null);
+  const [resizing, setResizing] = useState<{ key: string; size: CardSize } | null>(null);
   const [picking, setPicking] = useState(false);
+  const [offerPicker, setOfferPicker] = useState(newlyCreated);
   const [filter, setFilter] = useState('');
   const [confirming, setConfirming] = useState(false);
   const [dropOver, setDropOver] = useState(false);
@@ -137,6 +158,11 @@ export function RoomView({
   // room no longer makes it flick back), or for a few seconds if the change did not go through.
   const [pending, setPending] = useState<Map<string, boolean>>(new Map());
   const roomMembers = view?.room.members;
+  useEffect(() => {
+    if (!newlyCreated) return;
+    setOfferPicker(true);
+    onNewRoomHintConsumed();
+  }, [newlyCreated, onNewRoomHintConsumed]);
   useEffect(() => {
     const inRoom = new Set<string>(roomMembers ?? []);
     setPending((m) => {
@@ -152,10 +178,7 @@ export function RoomView({
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [roomWidth, setRoomWidth] = useState(0);
   const canvas = useRef<HTMLDivElement>(null);
-  /**
-   * A press on a card (ADR 0029): moved at once, it draws a link to the card it is let go on; held still for a
-   * moment, the card's cluster lifts and moves; let go without moving, it was a click.
-   */
+  /** Each visible control starts one gesture. Coordinates do not depend on later React renders. */
   const gesture = useRef<{
     cardKey: string;
     clusterKey: string;
@@ -163,16 +186,17 @@ export function RoomView({
     sy: number;
     x0: number;
     y0: number;
-    mode: 'press' | 'connect' | 'lift';
-    timer: number;
-    el: HTMLElement;
+    mode: 'connect' | 'lift' | 'resize';
+    started: boolean;
+    moveGroup: boolean;
+    preview: boolean;
     pointerId: number;
+    last: Spot;
+    size: CardSize;
+    nextSize: CardSize;
     over: string | null;
-    /** A door (ADR 0032) moves as soon as it is dragged; a card drawn onto a door goes in that room. */
-    door: boolean;
     overDoor: string | null;
   } | null>(null);
-  const [pressing, setPressing] = useState<string | null>(null);
   const [lifted, setLifted] = useState<string | null>(null);
   const [connecting, setConnecting] = useState<{ from: string; x: number; y: number; over: string | null; overDoor: string | null } | null>(null);
   // Rooms in rooms (ADR 0032): putting a room in this one; a card just put in a room inside.
@@ -182,6 +206,21 @@ export function RoomView({
   const [reviewing, setReviewing] = useState(false);
   const [merging, setMerging] = useState(false);
   const [mode, setMode] = useState<RoomMode>(() => modeOf(roomId));
+  useEffect(() => storage.setJson(keys.roomBoard(roomId), board), [board, roomId]);
+  useLayoutEffect(() => {
+    if (mode !== 'board' || !topicJump || !view) return;
+    const heading = [...(canvas.current?.querySelectorAll<HTMLElement>('[data-board-topic]') ?? [])].find((el) => el.dataset.boardTopic === topicJump);
+    heading?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    setTopicJump(null);
+  }, [mode, topicJump, view]);
+  useEffect(() => {
+    if (mode !== 'overview') return;
+    let active = true;
+    void api.openBranches(notebookId).then(({ branches }) => {
+      if (active) setOpenBranches(branches);
+    }, () => {});
+    return () => { active = false; };
+  }, [mode, notebookId]);
   // The concept chosen in Concepts (ADR 0036); a question started about one, waiting in the bar at the foot.
   const [conceptOn, setConceptOn] = useState<string | null>(null);
   const [askSeed, setAskSeed] = useState<{ text: string; n: number } | null>(null);
@@ -225,7 +264,7 @@ export function RoomView({
     if (!busy) return;
     const t = window.setTimeout(() => void load(), 700);
     return () => window.clearTimeout(t);
-  }, [busy, view, load]);
+  }, [busy, load]);
   const startReading = async () => {
     try {
       const r = await api.readRoom(roomId);
@@ -244,15 +283,19 @@ export function RoomView({
     }
   };
 
-  // Drawing a link: pick the other card; Escape stops.
+  // Escape also closes a link editor opened by dragging, when focus is still on the card.
   useEffect(() => {
-    if (!linking) return;
+    if (!linking && !nesting && !editing) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') setLinking(null);
+      if (e.key === 'Escape') {
+        setLinking(null);
+        setNesting(null);
+        setEditing(null);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [linking]);
+  }, [linking, nesting, editing]);
   const linkTo = async (to: { kind: RoomKind; id: string }) => {
     const from = linking;
     setLinking(null);
@@ -260,9 +303,10 @@ export function RoomView({
   };
   /** A line drawn from one card to another: made at once, then the AI says what it means (ADR 0029). */
   const connect = async (fromKey: string, toKey: string) => {
-    const ends = (l: ItemLink) => [`${l.from.kind}:${l.from.id}`, `${l.to.kind}:${l.to.id}`];
+    setBoardFocus(fromKey);
     const same = view?.itemLinks.find((l) => {
-      const [a, b] = ends(l);
+      const a = linkCardKey(l.from);
+      const b = linkCardKey(l.to);
       return (a === fromKey && b === toKey) || (a === toKey && b === fromKey);
     });
     if (same) {
@@ -309,8 +353,61 @@ export function RoomView({
     if (items.length) void api.placeInRoom(roomId, items).catch(() => {});
     if (doors.length) void api.placeDoors(roomId, doors).catch(() => {});
   };
-  /** What is placed on the map: the rooms in it first (ADR 0032), then the clusters. */
-  const blocks = (v: RoomViewData) => [...v.doors.map((d) => doorKey(d.id)), ...v.clusters.map((c) => c.key as string)];
+  const concepts = view?.concepts ?? [];
+  const conceptById = new Map(concepts.map((c) => [c.id, c]));
+  const topicOf = (c: Concept): Concept | null => {
+    let at: Concept | undefined = c;
+    for (let i = 0; at?.home && i < 20; i++) at = conceptById.get(at.home.id);
+    return at && at.id !== c.id && isTopic(at, concepts) ? at : null;
+  };
+  const topicsByCard = new Map<string, Array<{ id: string; title: string }>>();
+  for (const concept of concepts) {
+    if (concept.status !== 'kept') continue;
+    const topic = topicOf(concept);
+    if (topic?.status !== 'kept') continue;
+    for (const key of concept.members) {
+      const topics = topicsByCard.get(key) ?? [];
+      if (!topics.some((t) => t.id === topic.id)) topicsByCard.set(key, [...topics, topic]);
+    }
+  }
+  const parents = boardParents(view?.clusters ?? [], board);
+  const containing = new Set(parents.values());
+  const canNestCard = (child: string, parent: string) =>
+    child !== parent && !parents.has(parent) && parents.get(child) !== parent && !containing.has(child);
+  const clusters = (view?.clusters ?? []).flatMap((cluster) => {
+    const cards = cluster.cards.filter((card) => !parents.has(linkCardKey(card)));
+    return cards.length ? [{ ...cluster, key: linkCardKey(cards[0] as RoomCard) as Cluster['key'], cards }] : [];
+  });
+  const doors = (view?.doors ?? []).map((d) => doorKey(d.id));
+  const blocks = [...doors, ...clusters.map((c) => c.key)];
+  const topicLayout = board.mode !== 'free';
+  const boardSize = (key: string) => (resizing?.key === key ? resizing.size : board.sizes?.[key]);
+  const topicGroups = boardTopicGroups(clusters, doors, topicsByCard, board.order ?? []);
+  const topicSpots = new Map<string, Spot>();
+  let topicX = EDGE;
+  const topicColumns = topicGroups.map((group) => {
+    const width = Math.max(WIDTH, ...group.keys.map((key) => boardSize(key)?.w ?? sizes.get(key)?.w ?? WIDTH));
+    let y = TOPIC_TOP;
+    for (const key of group.keys) {
+      topicSpots.set(key, { x: topicX, y });
+      y += (sizes.get(key)?.h ?? 120) + ROW_GAP / 2;
+    }
+    const column = { ...group, x: topicX, width };
+    topicX += width + TOPIC_GAP;
+    return column;
+  });
+  const boardSpot = (key: string) => dragSpot?.key === key ? dragSpot.at : (topicLayout ? topicSpots : spots).get(key);
+  const reorder = (key: string, y: number) => {
+    const group = topicGroups.find((g) => g.keys.includes(key));
+    if (!group) return;
+    const next = group.keys.filter((k) => k !== key);
+    const before = next.findIndex((k) => y < (topicSpots.get(k)?.y ?? 0) + (sizes.get(k)?.h ?? 120) / 2);
+    next.splice(before < 0 ? next.length : before, 0, key);
+    setBoard((state) => ({
+      ...state,
+      order: [...topicGroups.filter((g) => g !== group).flatMap((g) => g.keys), ...next],
+    }));
+  };
 
   // Measure the clusters; place the new ones, and keep them there.
   useLayoutEffect(() => {
@@ -343,7 +440,8 @@ export function RoomView({
     if (moved) setCardBoxes(boxes);
     const width = canvas.current.clientWidth;
     if (width !== roomWidth) setRoomWidth(width);
-    const all = blocks(view);
+    if (topicLayout) return;
+    const all = blocks;
     const unplaced = all.filter((k) => !spots.has(k));
     if (unplaced.length > 0) {
       const columns = Math.max(1, Math.floor((width - 2 * EDGE + GAP) / (WIDTH + GAP)));
@@ -364,7 +462,7 @@ export function RoomView({
       return;
     }
     // Clusters that grew into each other (a summary came in) or were dropped on each other: set apart.
-    if (gesture.current?.mode === 'lift') return;
+    if (gesture.current?.started) return;
     const settled = settleClusters(
       all.flatMap((k) => {
         const at = spots.get(k);
@@ -380,52 +478,59 @@ export function RoomView({
     save([...settled].map(([key, at]) => ({ key, at })));
   });
 
-  // A press on a card: draw a link (move at once), or lift its cluster to move it (hold still a moment). Alt+arrows move too.
-  // A door (ADR 0032) moves as soon as it is dragged.
+  // The grip, port and resize corner are distinct targets. A door still moves by its surface.
   const down = (e: PointerEvent<HTMLDivElement>, key: string) => {
-    if (e.button !== 0 || linking) return;
+    if (e.button !== 0 || linking || nesting || gesture.current) return;
     const target = e.target as HTMLElement;
-    if (target.closest('.room-point, input, select, textarea, a')) return;
-    const at = spots.get(key);
+    const control = target.closest<HTMLElement>('[data-board-gesture]');
+    const kind = control?.dataset.boardGesture;
+    const mode = kind === 'connect' || kind === 'lift' || kind === 'resize' ? kind : isDoorKey(key) ? 'lift' : null;
+    if (!mode) return;
+    const at = boardSpot(key);
     if (!at) return;
-    const door = isDoorKey(key);
-    const cardKey = door ? key : (target.closest<HTMLElement>('[data-card-key]')?.dataset.cardKey ?? key);
-    const el = e.currentTarget;
-    const pointerId = e.pointerId;
-    const timer = window.setTimeout(() => {
-      const g = gesture.current;
-      if (!g || g.mode !== 'press') return;
-      g.mode = 'lift';
-      try {
-        el.setPointerCapture(pointerId);
-      } catch {
-        // the pointer is already gone
-      }
-      setPressing(null);
-      setLifted(key);
-    }, HOLD_MS);
-    gesture.current = { cardKey, clusterKey: key, sx: e.clientX, sy: e.clientY, x0: at.x, y0: at.y, mode: 'press', timer, el, pointerId, over: null, door, overDoor: null };
-    setPressing(cardKey);
+    const cardKey = target.closest<HTMLElement>('[data-card-key]')?.dataset.cardKey ?? key;
+    const moveGroup = cardKey === key;
+    // A preview lets us target another member of the same source/conversation group.
+    const preview = !isDoorKey(key) && (!moveGroup || (clusters.find((c) => c.key === key)?.cards.length ?? 0) > 1);
+    const size = boardSize(key) ?? { w: sizes.get(key)?.w ?? WIDTH, h: cardBoxes.get(key)?.h ?? 120 };
+    gesture.current = {
+      cardKey, clusterKey: key, sx: e.clientX, sy: e.clientY, x0: at.x, y0: at.y,
+      mode, started: false, moveGroup, preview, pointerId: e.pointerId, last: at, size, nextSize: size, over: null, overDoor: null,
+    };
+    (control ?? target).setPointerCapture(e.pointerId);
   };
   const move = (e: PointerEvent<HTMLDivElement>) => {
     const g = gesture.current;
-    if (!g) return;
+    if (!g || e.pointerId !== g.pointerId) return;
     const dx = e.clientX - g.sx;
     const dy = e.clientY - g.sy;
-    if (g.mode === 'press') {
-      if (Math.hypot(dx, dy) < 6) return;
-      window.clearTimeout(g.timer);
-      g.mode = g.door ? 'lift' : 'connect';
-      setPressing(null);
-      if (g.door) setLifted(g.clusterKey);
-      try {
-        g.el.setPointerCapture(e.pointerId);
-      } catch {
-        // the pointer is already gone
-      }
+    if (!g.started) {
+      if (Math.hypot(dx, dy) < 4) return;
+      g.started = true;
+      if (g.mode === 'lift' && g.moveGroup) setLifted(g.clusterKey);
     }
     if (g.mode === 'lift') {
-      setSpots((m) => new Map(m).set(g.clusterKey, { x: Math.max(0, g.x0 + dx), y: Math.max(0, g.y0 + dy) }));
+      g.last = { x: topicLayout ? g.x0 : Math.max(0, g.x0 + dx), y: Math.max(topicLayout ? TOPIC_TOP : 0, g.y0 + dy) };
+      if (g.moveGroup && !g.preview) setDragSpot({ key: g.clusterKey, at: g.last });
+      if (!isDoorKey(g.cardKey)) {
+        const hits = document.elementsFromPoint(e.clientX, e.clientY);
+        const under = hits.flatMap((el) => {
+          const card = el.closest<HTMLElement>('[data-card-key]')?.dataset.cardKey;
+          const group = el.closest<HTMLElement>('[data-nest-parent]')?.dataset.nestParent;
+          return [card, group].filter((key): key is string => !!key);
+        }).find((key) => canNestCard(g.cardKey, key));
+        g.over = under ?? null;
+        const origin = canvas.current?.getBoundingClientRect();
+        setNestDrag({
+          target: g.over,
+          preview: g.preview && origin ? { key: g.cardKey, x: e.clientX - origin.left + 12, y: e.clientY - origin.top + 12 } : null,
+        });
+      }
+      return;
+    }
+    if (g.mode === 'resize') {
+      g.nextSize = resizeCard(g.size.w + dx, g.size.h + dy);
+      setResizing({ key: g.clusterKey, size: g.nextSize });
       return;
     }
     const origin = canvas.current?.getBoundingClientRect();
@@ -437,24 +542,34 @@ export function RoomView({
     g.overDoor = g.over ? null : (under?.closest<HTMLElement>('[data-door-id]')?.dataset.doorId ?? null);
     setConnecting({ from: g.cardKey, x: e.clientX - origin.left, y: e.clientY - origin.top, over: g.over, overDoor: g.overDoor });
   };
-  const up = () => {
+  const up = (event: PointerEvent<HTMLDivElement>) => {
     const g = gesture.current;
+    if (!g || event.pointerId !== g.pointerId) return;
     gesture.current = null;
-    if (!g) return;
-    window.clearTimeout(g.timer);
-    setPressing(null);
-    // Let go without moving: a click, which the card's button takes.
-    if (g.mode === 'press') return;
+    if (!g.started) return;
     swallow.current = true;
     setTimeout(() => {
       swallow.current = false;
     }, 0);
     if (g.mode === 'lift') {
       setLifted(null);
-      const at = spots.get(g.clusterKey);
-      if (at && (at.x !== g.x0 || at.y !== g.y0)) save([{ key: g.clusterKey, at }]);
-      // Drawn again, so a cluster dropped onto another is set apart.
-      setSpots((m) => new Map(m));
+      setDragSpot(null);
+      setNestDrag(null);
+      if (g.over) {
+        setNestDrop({ child: g.cardKey, parent: g.over });
+        return;
+      }
+      if (!g.moveGroup) return;
+      if (topicLayout) reorder(g.clusterKey, g.last.y + (sizes.get(g.clusterKey)?.h ?? 120) / 2);
+      else {
+        setSpots((m) => new Map(m).set(g.clusterKey, g.last));
+        save([{ key: g.clusterKey, at: g.last }]);
+      }
+      return;
+    }
+    if (g.mode === 'resize') {
+      setBoard((state) => ({ ...state, sizes: { ...state.sizes, [g.clusterKey]: g.nextSize } }));
+      setResizing(null);
       return;
     }
     setConnecting(null);
@@ -470,19 +585,29 @@ export function RoomView({
     setPutInto({ ref, title: card?.title ?? '', door: door?.title ?? '' });
   };
   const cancel = () => {
-    const g = gesture.current;
     gesture.current = null;
-    if (g) window.clearTimeout(g.timer);
-    setPressing(null);
     setLifted(null);
     setConnecting(null);
+    setDragSpot(null);
+    setNestDrag(null);
+    setResizing(null);
   };
   const nudge = (e: KeyboardEvent, key: string) => {
     if (!e.altKey) return;
     const delta = { ArrowLeft: [-STEP, 0], ArrowRight: [STEP, 0], ArrowUp: [0, -STEP], ArrowDown: [0, STEP] }[e.key];
-    const at = spots.get(key);
+    const at = boardSpot(key);
     if (!delta || !at) return;
     e.preventDefault();
+    if (topicLayout) {
+      if (delta[1] === 0) return;
+      const group = topicGroups.find(({ keys }) => keys.includes(key));
+      const other = group?.keys[(group.keys.indexOf(key)) + Math.sign(delta[1] ?? 0)];
+      if (other) {
+        const y = topicSpots.get(other)?.y ?? 0;
+        reorder(key, y + ((delta[1] ?? 0) > 0 ? (sizes.get(other)?.h ?? 120) : 0));
+      }
+      return;
+    }
     const next = { x: Math.max(0, at.x + (delta[0] ?? 0)), y: Math.max(0, at.y + (delta[1] ?? 0)) };
     setSpots((m) => new Map(m).set(key, next));
     save([{ key, at: next }]);
@@ -493,7 +618,7 @@ export function RoomView({
     if (!view || !canvas.current) return;
     const width = canvas.current.clientWidth;
     const columns = Math.max(1, Math.floor((width - 2 * EDGE + GAP) / (WIDTH + GAP)));
-    const all = blocks(view);
+    const all = blocks;
     const placed = placeClusters(
       all.map((k) => ({ key: k, w: sizes.get(k)?.w ?? WIDTH, h: sizes.get(k)?.h ?? 120, x: null, y: null })),
       { columns, columnWidth: WIDTH, gap: GAP, rowGap: ROW_GAP, left: EDGE, top: EDGE },
@@ -510,7 +635,7 @@ export function RoomView({
   // In Folders there is no map: Noema places what is dropped when the Board is next seen.
   const onDrop = (e: DragEvent) => {
     setDropOver(false);
-    const at = canvas.current ? dropAt(e) : undefined;
+    const at = canvas.current && !topicLayout ? dropAt(e) : undefined;
     const item = droppedItem(e);
     if (item) {
       e.preventDefault();
@@ -556,15 +681,44 @@ export function RoomView({
   if (!view) return <p className="hint room-loading">Opening the room…</p>;
 
   const room = view.room;
-  const clusterOf = new Map(view.clusters.map((c) => [c.key, c]));
+  const clusterOf = new Map(clusters.map((c) => [c.key, c]));
+  const cards = new Map<string, RoomCard>(view.clusters.flatMap((c) => c.cards.map((x) => [linkCardKey(x), x] as const)));
+  const titleOf = (key: string | null) => (key ? (cards.get(key)?.title ?? '') : '');
+  const children = new Map<string, RoomCard[]>();
+  for (const [child, parent] of parents) {
+    const card = cards.get(child);
+    if (card) children.set(parent, [...(children.get(parent) ?? []), card]);
+  }
+  const nestIn = (child: string, parent: string) => {
+    if (!cards.has(child) || !cards.has(parent)) return;
+    if (!canNestCard(child, parent)) {
+      setStatus('Keep one level of cards. Choose a parent card on the Board.');
+      return;
+    }
+    setNesting(null);
+    setBoard((state) => ({
+      ...state,
+      parents: { ...state.parents, [child]: parent },
+      collapsed: { ...state.collapsed, [parent]: false },
+    }));
+    setStatus(`“${titleOf(child)}” is inside “${titleOf(parent)}”.`);
+  };
+  const unnest = (child: string) => {
+    setBoard((state) => {
+      const next = { ...state.parents };
+      delete next[child];
+      return { ...state, parents: next };
+    });
+    setStatus(`“${titleOf(child)}” is back on the Board.`);
+  };
   const box = (key: string) => {
-    const at = spots.get(key);
+    const at = boardSpot(key);
     const size = sizes.get(key);
     return at && size ? { ...at, ...size } : null;
   };
-  let maxX = 0;
+  let maxX = topicLayout ? Math.max(0, topicX - TOPIC_GAP) : 0;
   let maxY = 0;
-  for (const k of blocks(view)) {
+  for (const k of blocks) {
     const b = box(k);
     if (b) {
       maxX = Math.max(maxX, b.x + b.w);
@@ -585,9 +739,21 @@ export function RoomView({
           ? [
               {
                 label: 'Link to…',
-                hint: 'Then pick the card it links to (or drag from this card to it)',
+                hint: 'Then pick the card it links to',
                 onSelect: () => setLinking({ key: `${c.kind}:${c.id}`, title: c.title }),
                 testId: 'menu-link-to',
+              },
+              {
+                label: parents.has(linkCardKey(c)) ? 'Take out of parent card' : 'Place inside another card…',
+                onSelect: () => {
+                  const key = linkCardKey(c);
+                  if (parents.has(key)) unnest(key);
+                  else {
+                    setLinking(null);
+                    setNesting(key);
+                  }
+                },
+                testId: parents.has(linkCardKey(c)) ? 'room-nest-remove' : 'room-nest-start',
               },
             ]
           : []),
@@ -601,32 +767,60 @@ export function RoomView({
       c.title || 'Untitled',
     );
 
-  const cardButton = (c: RoomCard, head: boolean) => {
+  const cardButton = (c: RoomCard, head: boolean, nested = false) => {
     const open = c.kind !== 'note' ? c.marks.open : 0;
     const marks = marksOf(c);
     const key = `${c.kind}:${c.id}`;
     const gist = view.gists[key];
     const pickable = linking !== null && linking.key !== key;
+    const canContain = nesting !== null && canNestCard(nesting, key);
+    const cardSize = head ? boardSize(key) : undefined;
     return (
       // biome-ignore lint/a11y/noStaticElementInteractions: right-click is a shortcut; its button opens the thing, the menu key works on it
       <div
-        className={`room-card${head ? ' is-head' : ''} kind-${c.kind}${pickable || connecting?.over === key ? ' is-target' : ''}${linking?.key === key || connecting?.from === key ? ' is-linking' : ''}${pressing === key ? ' is-pressing' : ''}${reading?.current.includes(key) ? ' is-reading' : ''}`}
-        style={{ '--heat': Math.min(1, c.marks.questions / 12) } as CSSProperties}
+        className={`room-card${head ? ' is-head' : ''} kind-${c.kind}${pickable || canContain || connecting?.over === key || nestDrag?.target === key ? ' is-target' : ''}${linking?.key === key || connecting?.from === key ? ' is-linking' : ''}${reading?.current.includes(key) ? ' is-reading' : ''}${boardFocus === key ? ' is-focused' : ''}`}
+        style={{ '--heat': Math.min(1, c.marks.questions / 12), height: cardSize?.h } as CSSProperties}
         onMouseEnter={() => setFocusKey(key)}
         onMouseLeave={() => setFocusKey((k) => (k === key ? null : k))}
         onFocus={() => setFocusKey(key)}
-        onContextMenu={cardMenu(c)}
+        onContextMenu={(e) => {
+          e.stopPropagation();
+          cardMenu(c)(e);
+        }}
         data-card-key={key}
         data-testid="room-card"
         data-kind={c.kind}
         data-id={c.id}
       >
+        <div className="room-card-tools">
+          <button type="button" className="room-card-tool room-move-handle" data-board-gesture="lift" data-testid="room-move-handle"
+            aria-label="Move card" title={head ? 'Drag to move, or drop onto a card to place inside it' : 'Drag onto another card to place inside it'}>
+            <span aria-hidden>⠿</span>
+          </button>
+          <button type="button" className="room-card-tool" data-testid="room-focus-card" aria-label={`Show links for ${c.title || 'this card'}`}
+            title="Focus this card’s links" aria-pressed={boardFocus === key}
+            onClick={() => { setBoardFocus((current) => current === key ? null : key); setEditing(null); }}>
+            <span aria-hidden>◎</span>
+          </button>
+          <button type="button" className="room-card-tool room-link-port" data-board-gesture="connect" data-testid="room-link-port"
+            aria-label="Connect card" title="Drag to connect, or click and choose a card"
+            onClick={() => {
+              if (swallow.current || nesting) return;
+              if (pickable) void linkTo(c);
+              else setLinking(linking ? null : { key, title: c.title });
+            }}>
+            <span aria-hidden>○</span>
+          </button>
+        </div>
+        <div className="room-card-body">
         <button
           type="button"
           className="room-card-open"
           onClick={() => {
             if (swallow.current) return;
-            if (pickable) void linkTo({ kind: c.kind, id: c.id });
+            if (nesting) {
+              if (canContain) nestIn(nesting, key);
+            } else if (pickable) void linkTo({ kind: c.kind, id: c.id });
             else if (!linking) onOpen(c.kind, c.id);
           }}
           title={pickable ? `Link “${linking?.title}” to this` : c.quote ? `Asked about “${c.quote}”` : undefined}
@@ -643,7 +837,7 @@ export function RoomView({
             {!head && <span aria-hidden>{GLYPH[c.kind]} </span>}
             {c.title || 'Untitled'}
           </span>
-          {(marks || open > 0) && (
+          {density === 'normal' && (marks || open > 0) && (
             <span className="room-card-marks" data-testid="room-card-marks">
               {marks}
               {open > 0 && (
@@ -655,7 +849,7 @@ export function RoomView({
             </span>
           )}
         </button>
-        {gist && (
+        {density === 'normal' && gist && !nested && (
           <div className={`room-gist${gist.fresh ? '' : ' is-stale'}`} data-testid="room-gist">
             <p title={gist.fresh ? `Written by ${gist.model}` : 'Written before it changed: read the room again'}>
               <span className="room-gist-by">AI{gist.fresh ? '' : ', older'} · </span>
@@ -688,26 +882,61 @@ export function RoomView({
             )}
           </div>
         )}
+        </div>
+        {head && (
+          <button type="button" className="room-card-tool room-resize-handle" data-board-gesture="resize" data-testid="room-resize-handle"
+            aria-label="Resize card" title="Drag to resize, or use the arrow keys"
+            onKeyDown={(e) => {
+              const delta = { ArrowLeft: [-16, 0], ArrowRight: [16, 0], ArrowUp: [0, -16], ArrowDown: [0, 16] }[e.key];
+              if (!delta || e.altKey) return;
+              e.preventDefault();
+              const w = cardSize?.w ?? sizes.get(key)?.w ?? WIDTH;
+              const h = cardSize?.h ?? cardBoxes.get(key)?.h ?? 120;
+              const size = resizeCard(w + (delta[0] ?? 0), h + (delta[1] ?? 0));
+              setBoard((state) => ({ ...state, sizes: { ...state.sizes, [key]: size } }));
+            }}>
+            <span aria-hidden>◢</span>
+          </button>
+        )}
+      </div>
+    );
+  };
+  const renderBoardCard = (card: RoomCard, head: boolean) => {
+    const key = linkCardKey(card);
+    const contained = children.get(key);
+    if (!contained?.length) return cardButton(card, head);
+    const collapsed = board.collapsed?.[key] === true;
+    const childKeys = new Set(contained.map(linkCardKey));
+    const external = view.itemLinks.filter((link) => {
+      if (link.status !== 'accepted') return false;
+      const from = linkCardKey(link.from);
+      const to = linkCardKey(link.to);
+      return from !== key && to !== key && childKeys.has(from) !== childKeys.has(to);
+    }).length;
+    return (
+      <div className="room-parent-card" data-nest-parent={key} style={{ '--k': `var(--k-${card.kind})` } as CSSProperties}>
+        {cardButton(card, head)}
+        <button type="button" className="quiet room-nest-toggle" aria-expanded={!collapsed} data-testid="room-nest-toggle"
+          onClick={() => setBoard((state) => ({ ...state, collapsed: { ...state.collapsed, [key]: !collapsed } }))}>
+          {collapsed ? '▸' : '▾'} {plural(contained.length, 'nested card')}{collapsed && external > 0 ? ` · ${plural(external, 'outside link')}` : ''}
+        </button>
+        {!collapsed && (
+          <ul className="room-contained" data-testid="room-contained">
+            {contained.map((child) => <li key={child.id}>{cardButton(child, false, true)}</li>)}
+          </ul>
+        )}
       </div>
     );
   };
 
   // The picker: everything in the notebook, ticked if in this room.
   const members = new Set(room.members as string[]);
-  const cards = new Map<string, RoomCard>(view.clusters.flatMap((c) => c.cards.map((x) => [`${x.kind}:${x.id}`, x] as const)));
-  const titleOf = (key: string | null) => (key ? (cards.get(key)?.title ?? '') : '');
   // Suggested links wait in Review; only kept ones are drawn (ADR 0029).
   const suggested = view.itemLinks.filter((l) => l.status === 'suggested');
   const kept = view.itemLinks.filter((l) => l.status === 'accepted');
   // With concepts kept (ADR 0036), Path goes concept by concept.
   // The path, with concepts (ADR 0038): the kept concepts, topic by topic; a topic holds them, it is not a step.
   const keptConcepts = view.concepts.filter((c) => c.status === 'kept' && !isTopic(c, view.concepts));
-  const conceptById = new Map(view.concepts.map((c) => [c.id, c]));
-  const topicOf = (c: Concept): Concept | null => {
-    let at: Concept | undefined = c;
-    for (let i = 0; at?.home && i < 20; i++) at = conceptById.get(at.home.id);
-    return at && at.id !== c.id && isTopic(at, view.concepts) ? at : null;
-  };
   const pathGroups: Array<{ topic: Concept | null; concepts: Concept[] }> = [];
   for (const c of keptConcepts) {
     const t = topicOf(c);
@@ -719,6 +948,19 @@ export function RoomView({
   const underConcept = new Set(keptConcepts.flatMap((c) => c.members as string[]));
   const looseOfConcepts = [...cards.values()].filter((c) => !underConcept.has(`${c.kind}:${c.id}`));
   const byId = new Map(threads.map((t) => [t.id, t]));
+  const openBranch = openBranches.find((branch) => members.has(`thread:${threadOf(branch.threadId, byId)}`));
+  const recentThread = threads
+    .filter((thread) => members.has(`thread:${thread.id}`))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  const overviewTopics = concepts.filter((concept) => concept.status === 'kept' && isTopic(concept, concepts));
+  const focused = boardFocus && (parents.get(boardFocus) && board.collapsed?.[parents.get(boardFocus) as string] ? parents.get(boardFocus) : boardFocus);
+  const focusCluster = clusters.find((group) => group.cards.some((card) => linkCardKey(card) === (parents.get(focused ?? '') ?? focused)));
+  const boardLinks = kept.filter((link) => {
+    const from = linkCardKey(link.from);
+    const to = linkCardKey(link.to);
+    if (parents.get(from) === to && link.kind === 'part-of') return false;
+    return allLinks || from === focused || to === focused || link.id === editing || link.id === choosing;
+  });
   const q = filter.trim().toLowerCase();
   const match = (title: string) => !q || title.toLowerCase().includes(q);
   const groups: Array<{ name: string; items: Array<{ kind: RoomKind; id: string; title: string }> }> = [
@@ -729,6 +971,17 @@ export function RoomView({
     },
     { name: 'Notes', items: notes.map((n) => ({ kind: 'note' as const, id: n.id, title: n.title })) },
   ];
+  const welcomePicker = offerPicker && room.members.length === 0;
+  const pickerButton = (
+    <button type="button" className={welcomePicker ? 'primary' : picking ? 'active' : 'quiet'}
+      onClick={() => {
+        setOfferPicker(false);
+        setPicking((open) => !open);
+      }}
+      aria-expanded={picking} data-testid="room-pick">
+      Choose what is in it
+    </button>
+  );
 
   return (
     <section className="room" aria-label={`Room: ${room.title}`} data-testid="room">
@@ -752,7 +1005,14 @@ export function RoomView({
           </p>
         </div>
         <div className="room-actions">
-          <div className="room-modes" role="group" aria-label="How to see this room" data-testid="room-modes">
+          {/* biome-ignore lint/a11y/useSemanticElements: a group of buttons, styled as a switch */}
+          <div
+            className="room-modes"
+            // biome-ignore lint/a11y/useSemanticElements: a group of buttons, styled as a switch
+            role="group"
+            aria-label="How to see this room"
+            data-testid="room-modes"
+          >
             {MODES.map((m) => (
               <button
                 key={m.mode}
@@ -768,16 +1028,8 @@ export function RoomView({
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            className={picking ? 'active' : 'quiet'}
-            onClick={() => setPicking((p) => !p)}
-            aria-expanded={picking}
-            data-testid="room-pick"
-          >
-            Choose what is in it
-          </button>
-          {mode === 'board' && blocks(view).length > 1 && (
+          {!welcomePicker && pickerButton}
+          {mode === 'board' && !topicLayout && blocks.length > 1 && (
             <button type="button" className="quiet" onClick={arrange} title="Place every cluster again, in the order they came in" data-testid="room-arrange">
               Arrange
             </button>
@@ -846,6 +1098,18 @@ export function RoomView({
           </button>
         </div>
       )}
+      {welcomePicker && (
+        <section className="room-picker-welcome room-overview-section room-resume" data-testid="room-picker-welcome">
+          <div>
+            <h2>Add materials to this room</h2>
+            <p className="hint">Choose existing sources, conversations or notes to study together.</p>
+          </div>
+          <div className="room-overview-row">
+            {pickerButton}
+            <button type="button" className="quiet" onClick={() => setOfferPicker(false)}>Skip for now</button>
+          </div>
+        </section>
+      )}
       {picking && (
         <section className="room-picker" aria-label="Choose what is in this room" data-testid="room-picker">
           <input
@@ -909,6 +1173,75 @@ export function RoomView({
           {status}
         </p>
       )}
+      {mode === 'overview' && (
+        <div className="room-overview" data-testid="room-overview">
+          <section className="room-overview-section">
+            <h2>Learning goal</h2>
+            {editingGoal ? (
+              <form className="room-goal-form" onSubmit={(event) => {
+                event.preventDefault();
+                const text = String(new FormData(event.currentTarget).get('goal') ?? '').trim();
+                setGoal(text);
+                if (text) storage.set(keys.roomGoal(roomId), text);
+                else storage.remove(keys.roomGoal(roomId));
+                setEditingGoal(false);
+              }}>
+                <input aria-label="Learning goal" name="goal" defaultValue={goal} maxLength={200} />
+                <button type="submit" className="quiet">Save</button>
+                <button type="button" className="quiet" onClick={() => setEditingGoal(false)}>Cancel</button>
+              </form>
+            ) : (
+              <div className="room-overview-row">
+                {goal && <p data-testid="room-learning-goal">{goal}</p>}
+                <button type="button" className="quiet" onClick={() => setEditingGoal(true)}>{goal ? 'Edit goal' : 'Set a goal'}</button>
+              </div>
+            )}
+          </section>
+          <section className="room-overview-section room-resume">
+            <h2>Pick up where you left off</h2>
+            {openBranch || recentThread ? (
+              <div className="room-overview-row">
+                <div>
+                  <p>{openBranch?.title || recentThread?.title || 'Untitled thread'}</p>
+                  {openBranch?.quote && <p className="hint">“{openBranch.quote.slice(0, 180)}”</p>}
+                </div>
+                <button type="button" className="primary" data-testid="room-resume"
+                  onClick={() => {
+                    const id = openBranch?.threadId ?? recentThread?.id;
+                    if (id) onOpen('thread', id);
+                  }}>
+                  {openBranch ? 'Continue side question' : 'Continue conversation'}
+                </button>
+              </div>
+            ) : <p className="hint">Start with a question below.</p>}
+          </section>
+          {overviewTopics.length > 0 && (
+            <section className="room-overview-section">
+              <h2>Topics</h2>
+              <div className="room-overview-topics">
+                {overviewTopics.map((topic) => (
+                  <button key={topic.id} type="button" className="quiet" onClick={() => {
+                    if (topicGroups.some((group) => group.id === topic.id)) {
+                      setBoard((state) => ({ ...state, mode: 'topics' }));
+                      setTopicJump(topic.id);
+                      show('board');
+                    } else {
+                      setConceptOn(topic.id);
+                      show('concepts');
+                    }
+                  }}>{topic.title} <span aria-hidden>↗</span></button>
+                ))}
+              </div>
+            </section>
+          )}
+          <div className="room-overview-row">
+            <button type="button" className="quiet" onClick={() => show('board')}>Open Board</button>
+            {concepts.some((concept) => concept.status === 'suggested' || concept.home?.status === 'suggested') && (
+              <button type="button" className="quiet" onClick={() => { setConceptOn(null); show('concepts'); }}>Review concepts</button>
+            )}
+          </div>
+        </div>
+      )}
       {putInto && (
         <p className="hint room-status room-put-into" role="status" data-testid="room-put-into">
           “{putInto.title || 'Untitled'}” is in “{putInto.door}” now, and still here.
@@ -945,6 +1278,7 @@ export function RoomView({
           onReview={() => setReviewing((r) => !r)}
           onOpen={(item) => (item.kind === 'room' ? rooms.openRoom(item.id, through) : onOpen(item.kind, item.id))}
           titles={cards}
+          compact={(mode === 'board' && density === 'compact') || (mode !== 'overview' && mode !== 'board')}
         />
       )}
       {linking && (
@@ -953,6 +1287,12 @@ export function RoomView({
           <button type="button" className="quiet inline" onClick={() => setLinking(null)}>
             Stop
           </button>
+        </p>
+      )}
+      {nesting && (
+        <p className="room-linking" role="status" data-testid="room-nesting">
+          Choose the card that should contain “{titleOf(nesting)}”.
+          <button type="button" className="quiet inline" onClick={() => setNesting(null)}>Cancel</button>
         </p>
       )}
       {reviewing && suggested.length > 0 && (
@@ -1090,23 +1430,35 @@ export function RoomView({
           }
         />
       )}
-      {mode === 'board' && view.clusters.length > 0 && (
+      {mode === 'board' && blocks.length > 0 && (
         <div className="room-legend" data-testid="room-legend">
-          {LINK_KINDS.filter((k) => kept.some((l) => l.kind === k)).map((k) => (
+          <div className="room-board-options">
+            <button type="button" className="quiet" aria-pressed={topicLayout} data-testid="room-board-topics"
+              onClick={() => setBoard((state) => ({ ...state, mode: 'topics' }))}>By topic</button>
+            <button type="button" className="quiet" aria-pressed={!topicLayout} data-testid="room-board-free"
+              onClick={() => setBoard((state) => ({ ...state, mode: 'free' }))}>Free layout</button>
+            <button type="button" className="quiet" aria-pressed={allLinks} data-testid="room-board-all-links"
+              onClick={() => setAllLinks((shown) => !shown)}>Show all links</button>
+            <button type="button" className="quiet" aria-pressed={density === 'compact'} data-testid="board-density"
+              title="Titles and links only: no summaries, no counts, no words on the lines"
+              onClick={() => setBoard((state) => ({ ...state, density: (state.density ?? 'normal') === 'compact' ? 'normal' : 'compact' }))}>Compact</button>
+          </div>
+          {LINK_KINDS.filter((k) => boardLinks.some((l) => l.kind === k)).map((k) => (
             <span key={k} className={`legend-kind kind-${k}`}>
               {LINK_WORDS[k]}
             </span>
           ))}
-          <span className="hint room-gesture-hint">Drag from a card to another to link them; hold a card a moment to move it.</span>
         </div>
       )}
       {/* The map scrolls sideways in its own space: with the Assistant beside it, nothing goes under it. */}
       {mode === 'board' && (
       <div className="room-map" data-testid="room-map">
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: a surface things are dropped on */}
       <div
         ref={canvas}
         className={`room-canvas${dropOver ? ' drop-over' : ''}`}
         style={{ minWidth: maxX + EDGE, minHeight: Math.max(420, maxY + 160) }}
+        // biome-ignore lint/a11y/noStaticElementInteractions: a surface things are dropped on
         onDragOver={(e) => {
           if (!isItemDrag(e) && !isOutsideDrag(e) && !isRoomDrag(e)) return;
           e.preventDefault();
@@ -1119,8 +1471,15 @@ export function RoomView({
         onDrop={onDrop}
         data-testid="room-canvas"
       >
+        {topicLayout && topicColumns.map(({ id, title, x, width }) => (
+          <div key={id} className="room-board-topic" data-testid="room-board-topic" data-board-topic={id}
+            style={{ left: x, width }}>
+            <h2>{title}</h2>
+          </div>
+        ))}
         <svg className="room-lines" aria-hidden width={maxX + EDGE} height={Math.max(420, maxY + 160)}>
           {view.links.map((l) => {
+            if (!allLinks && l.from !== focusCluster?.key && l.to !== focusCluster?.key) return null;
             const a = box(l.from);
             const b = box(l.to);
             if (!a || !b) return null;
@@ -1150,9 +1509,11 @@ export function RoomView({
             return (
               <g key={`${l.from}>${l.to}`} className="room-line" data-testid="room-line">
                 <path d={d} />
-                <text x={p1.x + (p2.x - p1.x) * 0.3} y={p1.y + (p2.y - p1.y) * 0.3 - 6} textAnchor="middle">
-                  {words}
-                </text>
+                {density === 'normal' && (
+                  <text x={p1.x + (p2.x - p1.x) * 0.3} y={p1.y + (p2.y - p1.y) * 0.3 - 6} textAnchor="middle">
+                    {words}
+                  </text>
+                )}
               </g>
             );
           })}
@@ -1172,11 +1533,11 @@ export function RoomView({
           </svg>
         )}
         <ItemLinks
-          links={kept}
+          links={boardLinks}
           choosing={choosing}
           boxes={cardBoxes}
           titles={cards}
-          focus={focusKey}
+          focus={allLinks ? focusKey : focused ?? null}
           editing={editing}
           onEdit={setEditing}
           onChange={(id, patch) => void changeLink(id, patch)}
@@ -1185,9 +1546,15 @@ export function RoomView({
           room={roomWidth}
           others={doorBoxes}
         />
+        {nestDrag?.preview && (
+          <div className="room-card-drag-preview" aria-hidden
+            style={{ left: nestDrag.preview.x, top: nestDrag.preview.y }}>
+            {titleOf(nestDrag.preview.key)}
+          </div>
+        )}
         {view.doors.map((d) => {
           const k = doorKey(d.id);
-          const at = spots.get(k);
+          const at = boardSpot(k);
           const also = (rooms.rooms.find((r) => r.id === d.id)?.parents ?? []).filter((p) => p !== roomId).map(titleOfRoom);
           return (
             // biome-ignore lint/a11y/noStaticElementInteractions: moved by pointer; Alt+arrows on its button do the same
@@ -1238,8 +1605,9 @@ export function RoomView({
             </p>
           </div>
         )}
-        {view.clusters.map((c) => {
-          const at = spots.get(c.key);
+        {clusters.map((c) => {
+          const at = boardSpot(c.key);
+          const size = boardSize(c.key);
           const [head, ...rest] = c.cards;
           if (!head) return null;
           const lines = view.links.filter((l) => l.from === c.key || l.to === c.key);
@@ -1249,7 +1617,7 @@ export function RoomView({
               key={c.key}
               className={`room-cluster${lifted === c.key ? ' is-lifted' : ''}`}
               data-cluster={c.key}
-              style={at ? { left: at.x, top: at.y } : { left: 0, top: 0, visibility: 'hidden' }}
+              style={at ? { left: at.x, top: at.y, width: size?.w } : { left: 0, top: 0, visibility: 'hidden', width: size?.w }}
               onPointerDown={(e) => down(e, c.key)}
               onPointerMove={move}
               onPointerUp={up}
@@ -1258,11 +1626,16 @@ export function RoomView({
               data-testid="room-cluster"
               data-key={c.key}
             >
-              {cardButton(head, true)}
+              {renderBoardCard(head, true)}
+              {(topicsByCard.get(linkCardKey(head))?.length ?? 0) > 1 && (
+                <p className="hint room-board-also">
+                  Also in {topicsByCard.get(linkCardKey(head))?.slice(1).map((topic) => topic.title).join(', ')}
+                </p>
+              )}
               {rest.length > 0 && (
                 <ul className="room-members">
                   {rest.map((x) => (
-                    <li key={`${x.kind}:${x.id}`}>{cardButton(x, false)}</li>
+                    <li key={`${x.kind}:${x.id}`}>{renderBoardCard(x, false)}</li>
                   ))}
                 </ul>
               )}
@@ -1281,6 +1654,13 @@ export function RoomView({
         })}
       </div>
       </div>
+      )}
+      {nestDrop && (
+        <NestCardDialog child={titleOf(nestDrop.child)} parent={titleOf(nestDrop.parent)}
+          onDone={(confirmed) => {
+            if (confirmed) nestIn(nestDrop.child, nestDrop.parent);
+            setNestDrop(null);
+          }} />
       )}
       <CreateHere
         title={room.title}
@@ -1329,9 +1709,27 @@ export function RoomView({
   );
 }
 
+function NestCardDialog({ child, parent, onDone }: { child: string; parent: string; onDone: (confirmed: boolean) => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (ref.current && !ref.current.open) ref.current.showModal();
+  }, []);
+  return (
+    <dialog ref={ref} className="model-dialog" aria-labelledby="room-nest-title" data-testid="room-nest-dialog"
+      onClose={(event) => onDone(event.currentTarget.returnValue === 'place')}>
+      <h2 id="room-nest-title">Place card inside</h2>
+      <p className="form-note">Put “{child || 'Untitled'}” inside “{parent || 'Untitled'}” on this Board?</p>
+      <form method="dialog" className="room-overview-row">
+        <button type="submit" className="quiet" value="cancel">Cancel</button>
+        <button type="submit" className="primary" value="place">Place inside</button>
+      </form>
+    </dialog>
+  );
+}
+
 /**
- * The room's brief (ADR 0030), the first thing in a room: what the AI made of it (what it adds up to, what is
- * still open, what waits for review), or an invitation to read it; while it reads, how far it is.
+ * The room's brief (ADR 0030): what it adds up to, what is still open and what waits for review.
+ * If it has not been read yet, it shows the reading action and its progress.
  */
 function RoomBrief({
   view,
@@ -1344,6 +1742,7 @@ function RoomBrief({
   onReview,
   onOpen,
   titles,
+  compact = false,
 }: {
   view: RoomViewData;
   busy: boolean;
@@ -1355,6 +1754,7 @@ function RoomBrief({
   onReview: () => void;
   onOpen: (item: { kind: RoomKind | 'room'; id: string }) => void;
   titles: Map<string, RoomCard>;
+  compact?: boolean;
 }) {
   const { brief, reading, unread } = view;
   const [finding, setFinding] = useState<string | null>(null);
@@ -1418,7 +1818,11 @@ function RoomBrief({
             <h2>{brief ? 'What this room adds up to' : 'Read this room'}</h2>
           </div>
         </div>
-        {brief ? (
+        {compact ? (
+          <p className="room-brief-text hint" data-testid="room-brief-compact">
+            {held} · {suggested > 0 ? `${plural(suggested, 'link')} to review` : 'all kept'} · the brief is on Overview
+          </p>
+        ) : brief ? (
           <p className={`room-brief-text${brief.fresh ? '' : ' is-stale'}`} data-testid="room-brief-text">
             {brief.text}
           </p>
@@ -1430,7 +1834,7 @@ function RoomBrief({
             model: about {unread + 2 + (pieces > 0 ? pieces + 3 : 0)} calls{pieces > 0 && `, ${pieces} of them reading its threads and notes for concepts`}.
           </p>
         )}
-        {status && (
+        {(!compact || reading?.phase === 'failed') && status && (
           <p className={`hint room-status${reading?.phase === 'failed' ? ' is-error' : ''}`} role="status" data-testid="room-reading">
             {status}
           </p>
@@ -1441,7 +1845,7 @@ function RoomBrief({
           </div>
         )}
       </div>
-      {brief && brief.open.length > 0 && (
+      {!compact && brief && brief.open.length > 0 && (
         <div className="room-brief-col" data-testid="room-open">
           <p className="room-brief-label">Still open</p>
           <ul>
@@ -1983,9 +2387,6 @@ function LinkEditor({
       className="link-editor"
       style={{ left: at.x, top: at.y + 18 }}
       aria-label="This link"
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') onClose();
-      }}
       data-testid="link-editor"
     >
       <p className="link-editor-says">

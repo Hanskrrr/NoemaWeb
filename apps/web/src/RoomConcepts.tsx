@@ -27,26 +27,40 @@ import {
   pathOrder,
   workWeight,
 } from '@noema/core';
-import { type DragEvent, type MouseEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type DragEvent, type MouseEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { ApiFailure, api } from './api.ts';
 import { openMenu } from './ContextMenu.tsx';
-import { draggableItem, draggedFrom, droppedItem, FROM_ROOM_MIME, isItemDrag } from './drag.ts';
+import { draggableItem, draggedFrom, droppedItem, FROM_ROOM_MIME, isItemDrag, ITEM_MIME } from './drag.ts';
 import { EditableTitle } from './EditableTitle.tsx';
 import { deleteItems, useItems } from './itemMenu.ts';
 import { Orb } from './LivingFrame.tsx';
 import { roomMenu, useRooms } from './Rooms.tsx';
 import { asRead, CONCEPT_GLYPH, GLYPH, plural, type RoomCard, refOf } from './roomText.ts';
+import { keys, storage } from './storage.ts';
+
+/** Display lenses. No new data: each one chooses what a card says and whether topics start open. */
+export type ConceptsLens = 'study' | 'explore' | 'audit';
+const LENSES: ReadonlySet<string> = new Set(['study', 'explore', 'audit']);
+const isLens = (x: unknown): x is ConceptsLens => typeof x === 'string' && LENSES.has(x);
 
 const QUOTE_FROM: Record<VaultTarget['kind'], string> = { thread: 'your thread', source: 'your source', note: 'your note' };
 const ROLE_WORD: Record<ConceptPlace['role'], string> = { defines: 'defines it', explains: 'explains it', uses: 'uses it', example: 'an example', asks: 'asks about it' };
 const CONCEPT_LINK_CHOICES: LinkKind[] = ['builds-on', 'contrasts-with', 'example-of', 'explains'];
-const LANES = ['Start here', 'Builds on it', 'Goes further'];
+/** The same link read from its other end: "A builds on B" is "B is built on by A". */
+const LINK_WORDS_BACK: Record<LinkKind, string> = {
+  explains: 'is explained by',
+  'example-of': 'has as an example',
+  'builds-on': 'is built on by',
+  'contrasts-with': 'contrasts with',
+  'same-question': 'asks the same as',
+  'part-of': 'has as a part',
+  related: 'is related to',
+};
 /** Cards shown in a topic before the rest fold away, the most worked with first. */
 const SHOWN_IN_TOPIC = 8;
 /** A concept card being dragged, to put it under another concept or in a topic. */
 const CONCEPT_MIME = 'application/x-noema-concept';
 const isConceptDrag = (e: DragEvent) => e.dataTransfer.types.includes(CONCEPT_MIME);
-type Box = { x: number; y: number; w: number; h: number };
 
 /** A topic: a concept that holds others and no thing of its own (ADR 0038). */
 export const isTopic = (c: Concept, all: readonly Concept[]) => c.members.length === 0 && all.some((o) => o.home?.id === c.id);
@@ -83,11 +97,98 @@ export function RoomConcepts({
   const [status, setStatus] = useState<string | null>(null);
   const [naming, setNaming] = useState(false);
   const [finding, setFinding] = useState('');
-  /** Topics folded shut, and topics showing all their cards. */
-  const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
+  /** Topics folded shut, and topics showing all their cards. Null means the room has not been touched: only its first topic is open. */
+  const [closed, setClosed] = useState<ReadonlySet<string> | null>(null);
   const [moreOpen, setMoreOpen] = useState<ReadonlySet<string>>(new Set());
-  const [boxes, setBoxes] = useState<Map<string, Box>>(new Map());
+  const [lens, setLens] = useState<ConceptsLens>(() => {
+    const saved = storage.get(keys.conceptsLens);
+    return isLens(saved) ? saved : 'study';
+  });
+  const chooseLens = (next: string) => {
+    if (!isLens(next)) return;
+    setLens(next);
+    storage.set(keys.conceptsLens, next);
+    if (next !== 'study') setClosed(null);
+  };
   const board = useRef<HTMLDivElement>(null);
+  const conceptPage = useRef<HTMLDivElement>(null);
+
+  // Native drag-and-drop may consume wheel events. Keeping the pointer in an edge zone also scrolls the page.
+  useEffect(() => {
+    const root = conceptPage.current;
+    const page = document.scrollingElement;
+    if (!root || !page) return;
+    let scroller: Element | null = null;
+    let pointerY: number | null = null;
+    let frame = 0;
+    const findScroller = () => {
+      for (let el = root.parentElement; el && el !== page; el = el.parentElement) {
+        if (/auto|scroll/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight) return el;
+      }
+      return page;
+    };
+    const stop = () => {
+      cancelAnimationFrame(frame);
+      frame = 0;
+      pointerY = null;
+      scroller = null;
+    };
+    const tick = () => {
+      frame = 0;
+      if (!scroller || pointerY === null) return;
+      const rect = scroller === page ? null : scroller.getBoundingClientRect();
+      const top = Math.max(0, rect?.top ?? 0);
+      const bottom = Math.min(window.innerHeight, rect?.bottom ?? window.innerHeight);
+      const zone = Math.min(108, (bottom - top) / 3);
+      const above = top + zone - pointerY;
+      const below = pointerY - (bottom - zone);
+      const speed = above > 0 ? -Math.ceil(24 * Math.min(1, above / zone))
+        : below > 0 ? Math.ceil(24 * Math.min(1, below / zone)) : 0;
+      if (!speed) return;
+      const previous = scroller.scrollTop;
+      scroller.scrollTop += speed;
+      if (scroller.scrollTop !== previous) frame = requestAnimationFrame(tick);
+    };
+    const over = (event: globalThis.DragEvent) => {
+      const types = event.dataTransfer?.types;
+      if (!types?.includes(ITEM_MIME) && !types?.includes(CONCEPT_MIME)) return;
+      const { left, right } = root.getBoundingClientRect();
+      if (event.clientX < left || event.clientX > right) {
+        stop();
+        return;
+      }
+      scroller ??= findScroller();
+      pointerY = event.clientY;
+      if (!frame) frame = requestAnimationFrame(tick);
+    };
+    const wheel = (event: WheelEvent) => {
+      if (!scroller || pointerY === null || !event.deltaY || event.ctrlKey) return;
+      event.preventDefault();
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? scroller.clientHeight : 1;
+      scroller.scrollTop += event.deltaY * unit;
+    };
+    const leave = (event: globalThis.DragEvent) => {
+      if (event.relatedTarget === null && (event.clientY <= 0 || event.clientY >= window.innerHeight)) stop();
+    };
+    // A stationary drag can reach a new element without delivering another dragover.
+    document.addEventListener('dragenter', over, true);
+    document.addEventListener('dragover', over, true);
+    document.addEventListener('dragleave', leave);
+    document.addEventListener('dragend', stop, true);
+    document.addEventListener('drop', stop, true);
+    window.addEventListener('blur', stop);
+    window.addEventListener('wheel', wheel, { passive: false });
+    return () => {
+      stop();
+      document.removeEventListener('dragenter', over, true);
+      document.removeEventListener('dragover', over, true);
+      document.removeEventListener('dragleave', leave);
+      document.removeEventListener('dragend', stop, true);
+      document.removeEventListener('drop', stop, true);
+      window.removeEventListener('blur', stop);
+      window.removeEventListener('wheel', wheel);
+    };
+  }, []);
 
   const cards = new Map<string, RoomCard>(view.clusters.flatMap((c) => c.cards.map((x) => [`${x.kind}:${x.id}`, x] as const)));
   const all = view.concepts;
@@ -172,14 +273,10 @@ export function RoomConcepts({
         ...visible.flatMap((c) => (c.home && c.home.how !== 'in' && ids.has(c.home.id) ? [{ from: c.id, to: c.home.id, kind: 'builds-on' as LinkKind }] : [])),
       ],
     );
-    const lanes: string[][] = [[], [], []];
-    for (const st of order.steps) for (const id of [st.key, ...st.beside]) lanes[Math.min(2, st.level)]?.push(id);
-    for (const id of order.loose) lanes[0]?.push(id);
-    const laneCount = lanes[2]?.length ? 3 : lanes[1]?.length ? 2 : 1;
-    return [{ ...sec, visible, ids, lanes: lanes.slice(0, laneCount), hidden: sec.concepts.length - visible.length }];
+    // One column: the order is kept, but nothing is folded into a third bucket by depth.
+    const column = [...order.steps.flatMap((st) => [st.key, ...st.beside]), ...order.loose];
+    return [{ ...sec, visible, ids, column, hidden: sec.concepts.length - visible.length }];
   });
-  const open = new Set(laid.filter((sec) => !closed.has(sec.key) || find).flatMap((sec) => [...sec.ids]));
-  const sectionOf = new Map(laid.flatMap((sec) => [...sec.ids].map((id) => [id, sec.key] as const)));
   /** How many things the concept chosen shares with each other one. */
   const sharing = new Map<string, number>();
   if (current && current.members.length > 0) {
@@ -190,54 +287,11 @@ export function RoomConcepts({
     }
   }
 
-  // Where each card is, for the lines between them.
-  useLayoutEffect(() => {
-    if (!board.current) return;
-    const origin = board.current.getBoundingClientRect();
-    const next = new Map<string, Box>();
-    for (const el of board.current.querySelectorAll<HTMLElement>('[data-concept-id]')) {
-      const r = el.getBoundingClientRect();
-      next.set(el.dataset.conceptId as string, { x: r.left - origin.left, y: r.top - origin.top, w: r.width, h: r.height });
-    }
-    const same =
-      next.size === boxes.size &&
-      [...next].every(([k, b]) => {
-        const o = boxes.get(k);
-        return o && Math.abs(o.x - b.x) < 1 && Math.abs(o.y - b.y) < 1 && Math.abs(o.w - b.w) < 1 && Math.abs(o.h - b.h) < 1;
-      });
-    if (!same) setBoxes(next);
-  });
   // The concept chosen (from Review, the drawer or Find) is brought into view.
   useEffect(() => {
     if (!selected || !board.current) return;
     board.current.querySelector(`[data-concept-id="${selected}"], [data-topic-id="${selected}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [selected]);
-
-  // The lines: in a topic, from what comes first to what follows; side by side, dashed. Suggested ones fainter.
-  const lines = links.flatMap((l) => {
-    if (!open.has(l.from) || !open.has(l.to) || sectionOf.get(l.from) !== sectionOf.get(l.to)) return [];
-    const a = boxes.get(l.to);
-    const b = boxes.get(l.from);
-    if (!a || !b) return [];
-    const across = Math.abs(a.x - b.x) > 20;
-    let d: string;
-    let mid: { x: number; y: number };
-    if (across) {
-      const right = b.x > a.x;
-      const p1 = { x: right ? a.x + a.w : a.x, y: a.y + Math.min(a.h / 2, 34) };
-      const p2 = { x: right ? b.x : b.x + b.w, y: b.y + Math.min(b.h / 2, 34) };
-      const bend = Math.max(30, Math.abs(p2.x - p1.x) / 2) * (right ? 1 : -1);
-      d = `M${p1.x},${p1.y} C${p1.x + bend},${p1.y} ${p2.x - bend},${p2.y} ${p2.x},${p2.y}`;
-      mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-    } else {
-      const down = b.y > a.y;
-      const p1 = { x: a.x + a.w * 0.62, y: down ? a.y + a.h : a.y };
-      const p2 = { x: b.x + b.w * 0.62, y: down ? b.y : b.y + b.h };
-      d = `M${p1.x},${p1.y} L${p2.x},${p2.y}`;
-      mid = { x: p1.x, y: (p1.y + p2.y) / 2 };
-    }
-    return [{ l, d, mid }];
-  });
 
   const run = async (what: () => Promise<unknown>, problem: string) => {
     // What the last change said goes as the next one starts; what this one says (set inside it) stays.
@@ -336,13 +390,32 @@ export function RoomConcepts({
         </span>
       ));
   };
-  /** A concept's card: its name, where it is under another, its words, where it is discussed, what is open. */
+  /** Links worth saying on a card, in words, rather than only as a line on a map. */
+  const relsOf = (c: Concept) => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const l of links) {
+      const fromMe = l.from === c.id;
+      const otherId = fromMe ? l.to : l.to === c.id ? l.from : null;
+      if (!otherId || seen.has(otherId)) continue;
+      const other = byId.get(otherId);
+      if (!other) continue;
+      seen.add(otherId);
+      // Two ordered links the other way round would make both cards say they build on each other. Say that instead.
+      const symmetric = l.kind === 'contrasts-with' || l.kind === 'same-question';
+      const back = !symmetric && links.some((r) => r !== l && r.from === otherId && r.to === c.id);
+      const words = back ? 'linked both ways with' : fromMe ? LINK_WORDS[l.kind] : LINK_WORDS_BACK[l.kind];
+      out.push(`${words} ${other.title}`);
+    }
+    return out.slice(0, 2);
+  };
+  /** A concept's card: its name, its relations, its words, where it is discussed, what is open. */
   const node = (c: Concept) => {
     const isOn = current?.id === c.id;
     const shares = sharing.get(c.id);
     const firstOpen = openOf(c)[0];
     const parent = c.home && c.home.how !== 'in' ? byId.get(c.home.id) : undefined;
-    const inside = all.filter((o) => o.home?.id === c.id);
+    const rels = lens === 'audit' ? [] : relsOf(c);
     return (
       // biome-ignore lint/a11y/useSemanticElements: a card that takes things dropped on it, with buttons in it
       <div
@@ -359,7 +432,8 @@ export function RoomConcepts({
           }
         }}
         onDragStart={(e) => {
-          if (e.target !== e.currentTarget) return;
+          // Text inside the card is part of it; only the buttons in it must not start a drag.
+          if ((e.target as HTMLElement).closest('button, input, select, textarea, a')) return;
           e.dataTransfer.setData(CONCEPT_MIME, c.id);
           e.dataTransfer.setData('text/plain', c.title);
           e.dataTransfer.effectAllowed = 'move';
@@ -406,6 +480,13 @@ export function RoomConcepts({
             {c.home.status === 'suggested' && <span className="hint"> · suggested</span>}
           </p>
         )}
+        {rels.length > 0 && (
+          <p className="concept-rels" data-testid="concept-rel">
+            {rels.map((s) => (
+              <span key={s}>{s}</span>
+            ))}
+          </p>
+        )}
         {c.definition && <p className="concept-def">{c.definition}</p>}
         <p className="concept-counts">
           {c.members.length ? counts(c) : <span className="hint">Nothing under it yet</span>}
@@ -413,12 +494,6 @@ export function RoomConcepts({
             {c.lost ? 'no longer found in your materials' : `in ${plural(c.materials, 'material')} · ${plural(c.places, 'place')}`}
           </span>
         </p>
-        {inside.length > 0 && (
-          <p className="concept-inside-line hint" data-testid="concept-inside-line">
-            inside: {inside.slice(0, 3).map((o) => o.title).join(', ')}
-            {inside.length > 3 && `, +${inside.length - 3}`}
-          </p>
-        )}
         {firstOpen && <p className="concept-open">? {firstOpen}</p>}
         {c.status === 'suggested' && (
           <p className="concept-suggest">
@@ -452,12 +527,13 @@ export function RoomConcepts({
     );
   };
   /** A topic's heading: its name (chosen, it shows in the drawer), how many concepts, and Keep / Not this when suggested. */
-  const topicHead = (sec: (typeof laid)[number]) => {
+  const topicHead = (sec: (typeof laid)[number], i: number) => {
     const t = sec.topic;
-    const isClosed = closed.has(sec.key) && !find;
+    const isClosed = (lens !== 'study' ? false : closed === null ? i > 0 : closed.has(sec.key)) && !find;
     const toggle = () =>
       setClosed((was) => {
-        const next = new Set(was);
+        const base = was ?? new Set(laid.slice(1).map((s) => s.key));
+        const next = new Set(base);
         if (next.has(sec.key)) next.delete(sec.key);
         else next.add(sec.key);
         return next;
@@ -512,7 +588,7 @@ export function RoomConcepts({
   const reading_ = reading?.phase === 'concepts' && reading.total > 0 ? reading : null;
 
   return (
-    <div className="room-concepts" data-testid="room-concepts">
+    <div ref={conceptPage} className="room-concepts" data-testid="room-concepts">
       <div className="concepts-bar">
         <Orb size="small" />
         <p className="concepts-bar-text" data-testid="concepts-bar">
@@ -530,6 +606,14 @@ export function RoomConcepts({
             'No concepts yet'
           )}
         </p>
+        <label className="concepts-lens-label">
+          <span className="hint">See</span>
+          <select value={lens} onChange={(e) => chooseLens(e.target.value)} aria-label="Concepts lens" data-testid="concepts-lens">
+            <option value="study">Study order</option>
+            <option value="explore">Explore</option>
+            <option value="audit">Audit gaps</option>
+          </select>
+        </label>
         {busy && (
           <button type="button" className="quiet" onClick={onStop} data-testid="concepts-stop">
             Stop
@@ -631,49 +715,26 @@ export function RoomConcepts({
                 </span>
               )}
             </div>
+            {lens === 'audit' && (
+              <p className="concepts-audit" data-testid="concepts-audit">
+                To review: {plural(reviewCount, 'idea')} · not under a concept: {plural(tray.length, 'thing')} · open questions:{' '}
+                {plural(all.reduce((n, c) => n + openOf(c).length, 0), 'question')}
+              </p>
+            )}
             <div className="concepts-map" ref={board}>
-              <svg className="concepts-lines" aria-hidden>
-                <defs>
-                  <marker id="concept-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-                    <path d="M0,0 L10,5 L0,10 z" />
-                  </marker>
-                </defs>
-                {lines.map(({ l, d }) => (
-                  <path
-                    key={l.id}
-                    d={d}
-                    className={`concept-line kind-${l.kind}${l.status === 'suggested' ? ' is-suggested' : ''}`}
-                    markerEnd={l.kind === 'contrasts-with' ? undefined : 'url(#concept-arrow)'}
-                  />
-                ))}
-              </svg>
-              {lines.map(({ l, mid }) => (
-                <span
-                  key={l.id}
-                  className={`concept-line-label kind-${l.kind}${l.status === 'suggested' ? ' is-suggested' : ''}`}
-                  style={{ left: mid.x, top: mid.y }}
-                  title={l.why ?? undefined}
-                  data-testid="concept-line-label"
-                >
-                  {l.kind === 'contrasts-with' ? 'contrasts' : LINK_WORDS[l.kind]}
-                </span>
-              ))}
-              {laid.map((sec) => {
-                const isClosed = closed.has(sec.key) && !find;
+              {laid.map((sec, i) => {
+                const isClosed = (lens !== 'study' ? false : closed === null ? i > 0 : closed.has(sec.key)) && !find;
                 return (
                   <section key={sec.key || 'none'} className={`concepts-topic${sec.topic ? '' : ' is-loose'}`} data-testid="concepts-section">
-                    {(sec.topic || laid.length > 1) && topicHead(sec)}
+                    {(sec.topic || laid.length > 1) && topicHead(sec, i)}
                     {!isClosed && sec.visible.length > 0 && (
-                      <div className="concepts-lanes" style={{ gridTemplateColumns: `repeat(${sec.lanes.length}, minmax(0, 1fr))` }}>
-                        {sec.lanes.map((lane, i) => (
-                          <div key={LANES[i]} className="concepts-lane" data-testid="concepts-lane">
-                            {sec.lanes.length > 1 && <p className="concepts-lanehead">{LANES[i]}</p>}
-                            {lane.map((id) => {
-                              const c = byId.get(id);
-                              return c ? node(c) : null;
-                            })}
-                          </div>
-                        ))}
+                      <div className="concepts-lanes">
+                        <div className="concepts-lane" data-testid="concepts-lane">
+                          {sec.column.map((id) => {
+                            const c = byId.get(id);
+                            return c ? node(c) : null;
+                          })}
+                        </div>
                       </div>
                     )}
                     {!isClosed && sec.hidden > 0 && !find && (

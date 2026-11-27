@@ -152,9 +152,21 @@ test('an import that does not fit is refused whole', async () => {
     });
     assert.equal(older.status, 400);
     assert.match(older.json.error.message, /schema version/);
-    assert.equal((await bad((x) => void (x.tables.secrets = []))).status, 400, 'an unknown table');
     assert.equal(
-      (await bad((x) => void (x.tables.thread?.[0] && (x.tables.thread[0].evil = 'x')))).status,
+      (
+        await bad((x) => {
+          x.tables.secrets = [];
+        })
+      ).status,
+      400,
+      'an unknown table',
+    );
+    assert.equal(
+      (
+        await bad((x) => {
+          if (x.tables.thread?.[0]) x.tables.thread[0].evil = 'x';
+        })
+      ).status,
       400,
       'an unknown column',
     );
